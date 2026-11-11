@@ -73,6 +73,13 @@ cargo test --offline
 
 Region pack (P1.5) nằm trong `DATA_DIR/regions` (đổi bằng `REGIONS_DIR`). Lần chạy đầu, nếu thư mục chưa có `region.toml`, ứng dụng ghi bộ pack mặc định gồm `global`, `eu`, `eu/fr`, `us`, `vn`; các file đã có **không bị ghi đè**. Nguồn mẫu trỏ `example.invalid` và đều ở trạng thái tắt — hãy thay bằng nguồn đã kiểm chứng rồi mới bật vùng và nguồn trong **Cài đặt → Vùng và region pack**.
 
+## Deploy (LAN, Saigon NAS)
+
+Repo-build stack `lnc-newsman` (Portainer `10.20.2.1:19943`, endpoint 2) chạy `http://10.20.2.1:8462/login.html`.
+Dữ liệu ở `/share/Docker/lnc-newsman`; image build trên NAS từ repo; container chạy uid 10001.
+Env mẫu ở [stack.env.example](stack.env.example); khóa lưu ngoài repo.
+Bước domain/DNS đã chuẩn bị nhưng **chưa áp dụng**: [.docs/domain-steps.md](.docs/domain-steps.md).
+
 ## Ranh giới triển khai
 
 Đích dự kiến là Portainer `10.20.2.1`, bind root `/share/Docker`; cổng `8462` mới là **đề xuất**, chưa giữ chỗ hoặc kiểm tra trên host. Cấu hình [stack-image.yml](docker/stack-image.yml) chỉ là mẫu: chưa có image, chưa kiểm tra CPU NAS, chưa thử container hoặc cấu hình Caddy/DNS/Hub. Không dùng cho production trước khi hoàn tất các bước xác thực và được duyệt. Cookie HTTPS chỉ hoạt động nếu reverse proxy cung cấp HTTPS và `COOKIE_SECURE=true`.

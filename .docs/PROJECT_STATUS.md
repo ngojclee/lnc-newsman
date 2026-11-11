@@ -63,6 +63,19 @@ Plan clarification made before coding P1.5: **`global` is a virtual root**, not 
 - **UI**: a Regions page showing news, official documents (with search and topic filter) and the tax calendar for the effective region set, in Paper/Sepia/Night at 375 px.
 - **Deadlines in the pack are sample data** (`verified = false`) that only exercises the engine; they are not the real filing dates of any jurisdiction. No reminder is delivered: Telegram/email belong to P7.
 
+## Deployment — Saigon NAS (2026-11-11, LAN only, no domain yet)
+
+- **Repo**: `git init -b main`, one commit `c940cd4` (114 files, no `.local-data`, DB, `target/`, `node_modules`, `.env` or secrets), pushed to Gitea `apps/lnc-newsman` (public) with push-mirror to GitHub `ngojclee/lnc-newsman` (interval 8h, `sync_on_commit`, no mirror errors).
+- **Port**: `8462` reserved for `lnc-newsman` on `10.20.2.1` in `lnc-internal-apps` (`registry.json` + `PORTS.md`); `python scripts/check_ports.py` → OK, no duplicate ports.
+- **Image**: built **on the NAS from the repo** (`build: .`, repo-build stack 108, GitOps workflow 5 healthy). Chosen over image-pull because the NAS cannot pull from the Gitea registry and there is no verified path to the `docker-build` runner in this change; the stack is a repository stack like `wol-vn1`, so a later push redeploys automatically. Runtime image 90.5 MB, runs as **uid/gid 10001**, `cap_drop: ALL`, `no-new-privileges`, healthcheck on `/health`.
+- **Data**: bind mount `/share/Docker/lnc-newsman` (NAS root, not `/home/Docker`); an idempotent `init-data` service creates it and chowns it to 10001 before the app starts, so the app never runs as root.
+- **Stack env**: `DATA_DIR=/share/Docker`, `PORT=8462`, `TZ=Asia/Ho_Chi_Minh`, `REGIONS_DIR=/data/regions`, generated `MANAGEMENT_KEY`, `LNC_API_KEYS`, `LNC_MASTER_KEY`, `COOKIE_SECURE=false` (LAN HTTP). Keys live only in `F:\_agentsync\.secrets
+ewsman\keys.txt` (outside the repo) and are not reproduced here.
+- **Login**: `http://10.20.2.1:8462/login.html`.
+- **Verified**: container healthy; `/health` 200; login with the generated key 200 and session cookie set; `/api/v1/regions` 200 (root `global`; `eu`, `fr`, `us`, `vn` present and **disabled**); 5 sample sources and 7 connectors all **disabled**; `collector_enabled=false`; restart keeps data and stays non-root; GitOps source/artifact/target all healthy.
+- **Remaining risks**: login throttling counts the TCP peer, so behind a reverse proxy one person's failed attempts can lock the whole group for five minutes (no trusted-proxy handling yet); `ALLOWED_HOSTS` is empty; the plan-quality gate is still below 8.0. Domain/DNS steps are prepared in `.docs/domain-steps.md` and **not applied**.
+- **Rollback**: `DELETE /api/stacks/108?endpointId=2` removes the stack and containers; data stays in `/share/Docker/lnc-newsman` (delete manually if intended); the Portainer image `lnc-newsman-lnc-newsman:latest` can be removed afterwards. Nothing else on the NAS was modified.
+
 ## Plan-quality gate (cortex_plan_quality)
 
 **2026-11-11, filings + Hub work**: three runs scored **6.9 → 7.4 → 7.0 / 10** (threshold 8.0) — not passed. Consistently lowest: **Impact Clarity 5–6**, **Testability 6**. Even a run that listed the before/after screen changes, exact file list, five named tests and the command exit codes scored Impact Clarity 5. The plan for this work is fully implemented and 159 tests pass; the score reflects the gate's judgement of the write-up, not missing code. No score was invented.
