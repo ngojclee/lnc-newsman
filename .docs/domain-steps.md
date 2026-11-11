@@ -1,10 +1,17 @@
-# Domain cho Newsman — nội dung chuẩn bị, **CHƯA ÁP DỤNG**
+# Domain cho Newsman — **ĐÃ ÁP DỤNG** (2026-11-11)
 
-Trạng thái: **đề xuất, chờ chủ dự án duyệt.** Chưa tạo DNS, chưa sửa Caddy, chưa mở
-Cloudflare. Stack đang chạy LAN-only tại `http://10.20.2.1:8462/login.html`.
+Trạng thái: **đã làm bởi phiên khác trong ngày 2026-11-11**, không phải phiên này.
+`newsman.lengoc.me` → `10.20.0.3` (edge Caddy VN) → `10.20.2.1:8462`, HTTPS trả 303 về
+`/login.html`, `ssl_verify_result=0`. Bản ghi DNS và site block Caddy **không do phiên này
+sửa**; phiên này chỉ đổi env của stack và sửa lỗi giới hạn đăng nhập, rồi kiểm lại.
 
-Nguồn chuẩn: skill `lnc-internal-domain-config` (records.yaml + dnsctl) và `lnc-caddy-fleet`
-(Caddy + Coraza trên CT104). Đọc lại hai skill đó ngay trước khi làm vì quy trình có thể đổi.
+Những gì đã kiểm trong phiên này (qua `https://newsman.lengoc.me`):
+`/health` 200 · `/login.html` 200 · đăng nhập bằng `MANAGEMENT_KEY` 200, cookie `Secure; HttpOnly`
+· `/api/v1/regions` 200 · `/api/admin/regions` trả đủ 5 mã (`global`, `eu`, `fr`, `us`, `vn`),
+chỉ `global` bật, effective `['global']`, pack issues `[]`.
+
+Các mục 2–4 dưới đây giữ lại làm bản ghi cách làm gốc và cách hoàn tác. Mục 1 (câu hỏi cần
+chủ dự án xác nhận) coi như đã được quyết: phạm vi LAN + `netbird`, HTTPS, không bản ghi công khai.
 
 ## 1. Việc cần chủ dự án xác nhận trước (skill yêu cầu hỏi, không tự đoán)
 
@@ -122,7 +129,19 @@ Sau redeploy, đăng nhập lại qua `https://newsman.lengoc.me/login.html`.
    `automations/edge-fleet`; `tools/edge_drift.sh` exit 0.
 4. Stack vẫn chạy LAN-only tại `http://10.20.2.1:8462` như hiện tại — không cần xoá.
 
-## 5. Rủi ro riêng của bước domain
+## 5. Trạng thái sau khi áp dụng (2026-11-11)
+
+- Env stack 108 đã đổi qua `PUT /api/stacks/108/git/redeploy` (không dùng `stackFileContent`):
+  `COOKIE_SECURE=true`, `ALLOWED_HOSTS=newsman.lengoc.me,10.20.2.1`, `TRUSTED_PROXIES=10.20.0.3`.
+  GitOps vẫn là workflow 5, hash deploy `c81f9df0…`, source/artifact/target đều healthy.
+- **Hệ quả cần biết:** cookie giờ là `Secure`, nên đăng nhập qua `http://10.20.2.1:8462` **không
+  giữ phiên** trong trình duyệt. Địa chỉ LAN vẫn trả `/health` và API có key, nhưng đường đăng
+  nhập dùng được là `https://newsman.lengoc.me/login.html`.
+- **Giới hạn đăng nhập** đã sửa (commit `c81f9df`): chỉ tin `X-Forwarded-For` khi peer là
+  `10.20.0.3`, và chỉ lấy mục **cuối** hợp lệ trong chuỗi; mục do client tự thêm bị bỏ qua.
+- **`ALLOWED_HOSTS` đã bật**: Host lạ bị 400. Thêm tên miền mới phải sửa env rồi redeploy.
+
+## 6. Rủi ro riêng của bước domain
 
 - **Đăng nhập sau proxy**: giới hạn đăng nhập đang đếm theo địa chỉ TCP peer. Sau Caddy, mọi
   người dùng sẽ cùng một IP peer → một người thử sai có thể khoá cả nhóm trong 5 phút. Đây là
