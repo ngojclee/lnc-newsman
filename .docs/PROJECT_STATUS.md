@@ -78,6 +78,15 @@ Plan clarification made before coding P1.5: **`global` is a virtual root**, not 
 - **Remaining risks**: `ALLOWED_HOSTS` now lists the domain and `10.20.2.1`, so any other Host header is rejected (400) — a new name needs an env change; the plan-quality gate is still below 8.0; live provider acceptance has not started.
 - **Rollback**: `DELETE /api/stacks/108?endpointId=2` removes the stack and containers; data stays in `/share/Docker/lnc-newsman` (delete manually if intended); the Portainer image `lnc-newsman-lnc-newsman:latest` can be removed afterwards. Domain rollback is in `.docs/domain-steps.md` §4.
 
+## UI fix — sidebar and header pinned (2026-11-11, v0.1.1)
+
+- **Symptom**: on a long page the sidebar grew with the content column, so the footer block (version, theme, sign out) sat at the bottom of the document instead of the window; the page header also scrolled away despite `position: sticky`.
+- **Cause**: `.sidebar` had `min-height: 100vh` inside the grid, which stretched it to the row height; `.page-shell` had `overflow: auto`, which made that element the scroll container and broke the sticky header.
+- **Fix**: desktop sidebar is `position: sticky; top: 0; align-self: start; height: 100vh/100dvh; overflow-y: auto`; `.page-shell` no longer clips or scrolls. Mobile rules (`height: auto`, sticky top bar) are unchanged.
+- **Checked in a real browser against the deployed build** (`https://newsman.lengoc.me`, served through a temporary read-only local bridge so the management key never entered the page): desktop 1400x900 at scroll 0/1200/3000 and 375x812 at scroll 2000 — header top stays 0, sidebar top 0, footer bottom stays at the viewport bottom in paper, sepia and night; no horizontal scroll at 375 px.
+- **Deployed**: version 0.1.1, commit `b1b5366`, GitOps redeploy; `/health` 200 and `/api/app-info` reports `0.1.1` on the domain; login through `https://newsman.lengoc.me` works and the session cookie is Secure.
+- **Not fixed (pre-existing, unrelated)**: at <=900 px the app shows both the horizontal nav and the compact footer row; that is the existing mobile layout and was left as instructed.
+
 ## Plan-quality gate (cortex_plan_quality)
 
 **2026-11-11, filings + Hub work**: three runs scored **6.9 → 7.4 → 7.0 / 10** (threshold 8.0) — not passed. Consistently lowest: **Impact Clarity 5–6**, **Testability 6**. Even a run that listed the before/after screen changes, exact file list, five named tests and the command exit codes scored Impact Clarity 5. The plan for this work is fully implemented and 159 tests pass; the score reflects the gate's judgement of the write-up, not missing code. No score was invented.
