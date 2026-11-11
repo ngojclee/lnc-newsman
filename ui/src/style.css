@@ -248,3 +248,22 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .tax-days { color: var(--muted); font-size: 12px; font-weight: 700; }
 .tax-days.due { color: var(--accent-warm); }
 @media (max-width: 700px) { .doc-filters { grid-template-columns: 1fr; } .tax-row { flex-direction: column; } .tax-side { justify-items: start; text-align: left; } }
+
+/* P7 alerts: the in-app inbox and the rule list reuse the region-tree layout. */
+.alerts-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
+.alerts-actions .btn { white-space: nowrap; }
+.alert-list { display: grid; gap: 10px; }
+.alert-row { display: flex; align-items: start; justify-content: space-between; gap: 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper-card); }
+.alert-row.read { opacity: .62; }
+.alert-main { display: grid; gap: 6px; min-width: 0; }
+.alert-main a { color: var(--ink); font-family: var(--serif); font-size: 18px; line-height: 1.35; text-decoration: none; overflow-wrap: anywhere; }
+.alert-main a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.alert-level { justify-self: start; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; background: var(--accent-soft); color: var(--accent); }
+.alert-level.important { background: rgba(186,112,68,.16); color: var(--accent-warm); }
+.alert-level.urgent { background: rgba(179,79,67,.16); color: #b34f43; }
+.alert-row .btn { flex: none; padding: 7px 10px; font-size: 11px; }
+/* P5 labels on a reader row: quiet chips, never louder than the title. */
+.label-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.label-chip { padding: 1px 7px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--paper-soft); font-size: 11px; }
+.label-chip.entity { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+@media (max-width: 560px) { .alert-row { flex-direction: column; align-items: stretch; } .alerts-actions .btn { width: 100%; } }

@@ -1,3 +1,4 @@
+mod alerts;
 mod auth;
 mod catalog;
 #[cfg(test)]
@@ -33,7 +34,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -62,6 +66,8 @@ struct AppState {
     /// Admin switch for the LLM layer. Off means "rules only", which always works.
     llm_enabled: bool,
     pack: Mutex<regions::PackStatus>,
+    /// True once the alert sweeper has been started; set exactly once, by login.
+    alerts_running: AtomicBool,
 }
 impl AppState {
     fn new(cfg: config::Config, db: db::Database, fetcher: fetch::Fetcher) -> Self {
@@ -83,6 +89,7 @@ impl AppState {
             hub: hub::ProviderConfig::default(),
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
+            alerts_running: AtomicBool::new(false),
         }
     }
 }
@@ -192,6 +199,12 @@ fn router(state: SharedState) -> Router {
             axum::routing::put(secrets::put).delete(secrets::remove),
         )
         .route("/api/admin/tax-rules", get(tax::declared_rules))
+        .route("/api/admin/alerts/rules", get(alerts::list_rules).post(alerts::put_rule))
+        .route(
+            "/api/admin/alerts/rules/{slug}",
+            axum::routing::put(alerts::toggle_rule),
+        )
+        .route("/api/admin/alerts/sweep", post(alerts::run_sweep))
         .route("/api/admin/llm", get(llm::status).patch(llm::set_enabled))
         .route("/api/admin/provider", get(hub::status))
         .route("/api/admin/provider/check", post(hub::check))
@@ -215,6 +228,9 @@ fn router(state: SharedState) -> Router {
             "/api/admin/regions/{code}",
             axum::routing::put(regions::set_enabled),
         )
+        .route("/api/alerts", get(alerts::list_inbox))
+        .route("/api/alerts/read-all", post(alerts::read_all))
+        .route("/api/alerts/{id}/read", post(alerts::read_one))
         .route("/api/articles", get(collector::articles))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -260,14 +276,14 @@ fn router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-fn failure(status: StatusCode, code: &'static str) -> Response {
+pub(crate) fn failure(status: StatusCode, code: &'static str) -> Response {
     (
         status,
         Json(serde_json::json!({"ok": false, "error": code})),
     )
         .into_response()
 }
-fn internal_error(err: impl std::fmt::Display) -> Response {
+pub(crate) fn internal_error(err: impl std::fmt::Display) -> Response {
     tracing::error!(%err, "request failed");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
 }
@@ -457,17 +473,20 @@ async fn login(
         Err(err) => return internal_error(err),
     };
     let timestamp = now();
-    if let Err(err) = state
-        .db
-        .lock()
-        .expect("database lock poisoned")
-        .create_session(
+    {
+        let db = state.db.lock().expect("database lock poisoned");
+        if let Err(err) = db.create_session(
             &auth::token_hash(&token),
             timestamp + auth::SESSION_SECONDS,
             timestamp,
-        )
-    {
-        return internal_error(err);
+        ) {
+            return internal_error(err);
+        }
+        // Turn the alert engine's background sweep on at the same moment the first
+        // admin logs in — until then nothing is enabled, so it has nothing to send.
+        if !state.alerts_running.swap(true, Ordering::SeqCst) {
+            alerts::spawn_sweeper(state.clone());
+        }
     }
     state
         .login_limiter
@@ -659,6 +678,7 @@ mod tests {
             hub: hub::ProviderConfig::default(),
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
+            alerts_running: AtomicBool::new(false),
         })
     }
     fn req(

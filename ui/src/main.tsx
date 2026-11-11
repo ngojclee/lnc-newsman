@@ -11,7 +11,10 @@ type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: st
 type Stats = { collector_enabled: boolean; articles_total: number; articles_24h: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
 type Dashboard = { topics: Topic[]; stats: Stats }
 type Settings = { version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean }
-type Article = { id: number; title: string; url: string; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string }
+type Labels = { topics: string[]; entities: string[] }
+type Article = { id: number; title: string; url: string; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string; labels?: Labels }
+type AlertRule = { id: number; slug: string; label_vi: string; label_en: string; enabled: boolean; match_kind: string; match_value: string; level: string; cooldown_seconds: number; quiet_from: string; quiet_to: string; timezone: string; channels: string; last_fired_at: number | null }
+type AlertDelivery = { id: number; rule_slug: string; rule_label_vi: string; rule_label_en: string; article_id: number; article_title: string; article_url: string; level: string; channel: string; title: string; body: string; read: boolean; created_at: number }
 type Region = { code: string; parent_code: string | null; label_vi: string; label_en: string; currency: string; timezone: string; language: string; enabled: boolean; builtin: boolean; managed: boolean; source_count: number }
 type PackIssue = { path: string; code: string; detail: string | null }
 type PackStatus = { last_loaded_at: number | null; issues: PackIssue[]; regions_registered: number; sources_registered: number }
@@ -35,6 +38,7 @@ const copy = {
     briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật, xếp theo thời gian. Mỗi tin dẫn về bài gốc; Newsman chỉ lưu tiêu đề và đường dẫn.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập tin tự động',
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
+    alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật. Không gửi Telegram/email ở giai đoạn này.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Chỉ kênh trong ứng dụng đã hoạt động; Telegram/email/webhook thuộc bước sau.', entities: 'Thực thể',
     paper: 'Giấy', sepia: 'Sepia', night: 'Đêm', changeTheme: 'Đổi chế độ đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
     settingsTitle: 'Cài đặt hiển thị', settingsSub: 'Đặt mặc định cho lần đầu mở ứng dụng. Thiết lập trên trình duyệt hiện tại sẽ được ưu tiên.', language: 'Ngôn ngữ mặc định', readerMode: 'Chế độ đọc mặc định', save: 'Lưu mặc định', saving: 'Đang lưu…', savedToast: 'Đã lưu cài đặt', admin: 'Quản trị', signOut: 'Đăng xuất',
     emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
@@ -55,6 +59,7 @@ const copy = {
     briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources, newest first. Every item links to the original; Newsman stores only titles and links.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Automatic collection',
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
+    alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule. No Telegram/email in this phase.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'Only the in-app channel works; Telegram/email/webhook come later.', entities: 'Entities',
     paper: 'Paper', sepia: 'Sepia', night: 'Night', changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
     settingsTitle: 'Display settings', settingsSub: 'Set defaults for first-time visitors. This browser’s own preferences take precedence.', language: 'Default language', readerMode: 'Default reading mode', save: 'Save defaults', saving: 'Saving…', savedToast: 'Settings saved', admin: 'Admin', signOut: 'Sign out',
     emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
@@ -172,11 +177,11 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
   return <div className={`app-shell mode-${mode}`}>
     <aside className="sidebar"><div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
       <nav className="nav" aria-label="Primary navigation">{pages.map((id) => <button key={id} aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
-      <div className="side-divider" /><div className="sidebar-footer"><div className="version">v0.1.1 <span>· P1 collector</span></div><button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${t[mode]}`}><span aria-hidden="true">{mode === 'night' ? '☾' : '☼'}</span>{t[mode]}</button><button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button></div>
+      <div className="side-divider" /><div className="sidebar-footer"><div className="version">v0.2.0 <span>· P7 alerts</span></div><button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${t[mode]}`}><span aria-hidden="true">{mode === 'night' ? '☾' : '☼'}</span>{t[mode]}</button><button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button></div>
     </aside>
     <main className="page-shell"><header className="page-header"><div><div className="breadcrumb">LNC / NEWSMAN</div><h1>{t[page]}</h1></div><div className="header-actions"><div className="region-picker">{regions && <Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} />}</div><button className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button><button className="icon-button" aria-label={t.refresh} onClick={() => location.reload()}>↻</button></div></header>
       {error && <div className="alert error" role="alert"><strong>{error === 'logout' ? t.failedLogout : t.loadError}</strong><button onClick={() => setError('')}>{t.dismiss}</button></div>}
-      <div className="page-content">{page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} />}{page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} />}{page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}{page === 'market' && <Market t={t} lang={lang} region={region} />}{page === 'settings' && <SettingsPage t={t} lang={lang} setLang={setLang} setMode={setMode} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}{!['today', 'topics', 'regions', 'market', 'settings'].includes(page) && <EmptyPage t={t} />}</div>
+      <div className="page-content">{page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} />}{page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} />}{page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}{page === 'market' && <Market t={t} lang={lang} region={region} />}{page === 'alerts' && <AlertsPage t={t} lang={lang} />}{page === 'settings' && <SettingsPage t={t} lang={lang} setLang={setLang} setMode={setMode} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}{!['today', 'topics', 'regions', 'market', 'alerts', 'settings'].includes(page) && <EmptyPage t={t} />}</div>
     </main>
   </div>
 }
@@ -215,9 +220,11 @@ function ArticleList({ t, lang, topic, topics, region }: { t: Copy; lang: Lang; 
   return <div><div className="article-list">{items.map((item) => {
     const published = formatDate(lang, item.published_at)
     const label = topicLabel(lang, topics, item.topic_slug)
+    const extraTopics = (item.labels?.topics ?? []).filter((slug) => slug !== item.topic_slug)
+    const entities = item.labels?.entities ?? []
     return <article className="article-row" key={item.id}>
       <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>
-      <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{label && <span>· {label}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
+      <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
     </article>
   })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}{more && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : t.loadMore}</button>}</div>
 }
@@ -254,6 +261,81 @@ function Topics({ t, lang, dashboard, region }: { t: Copy; lang: Lang; dashboard
     <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{selected ? topicLabel(lang, topics, selected) : t.latest}</h2></div><div className="topic-chip-row"><button type="button" className="topic-chip" aria-pressed={selected === null} onClick={() => setSelected(null)}>{t.allTopics}</button></div></section>
     <ArticleList t={t} lang={lang} topic={selected} topics={topics} region={region} /></div>
 }
+function AlertsPage({ t, lang }: { t: Copy; lang: Lang }) {
+  const [items, setItems] = useState<AlertDelivery[] | null>(null)
+  const [unread, setUnread] = useState(0)
+  const [error, setError] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const load = async () => {
+    try {
+      const payload = await api<{ data: AlertDelivery[]; unread: number }>('/api/alerts?limit=100')
+      setItems(payload.data); setUnread(payload.unread); setError(false)
+    } catch { setError(true) }
+  }
+  useEffect(() => { void load() }, [])
+  const markRead = async (id: number) => {
+    try { await api(`/api/alerts/${id}/read`, { method: 'POST' }); await load() } catch { setError(true) }
+  }
+  const markAll = async () => {
+    setBusy(true)
+    try { await api('/api/alerts/read-all', { method: 'POST' }); await load() } catch { setError(true) } finally { setBusy(false) }
+  }
+  const sweep = async () => {
+    setBusy(true); setNotice('')
+    try {
+      const result = await api<{ created: number }>('/api/admin/alerts/sweep', { method: 'POST' })
+      setNotice(t.alertsSwept(result.created)); await load()
+    } catch { setError(true) } finally { setBusy(false) }
+  }
+  if (error && !items) return <p className="form-error" role="alert">{t.loadError}</p>
+  if (!items) return <p className="muted" role="status">{t.loading}</p>
+  return <div className="content-stack">
+    <section className="section-heading"><div><span className="eyebrow">{t.alertsTitle}</span><h2>{unread > 0 ? `${unread} ${t.alertsUnread}` : t.alertsTitle}</h2><p>{t.alertsSub}</p></div>
+      <div className="alerts-actions"><button type="button" className="btn secondary" disabled={busy} onClick={() => void sweep()}>{busy ? t.loading : t.alertsSweep}</button>
+        <button type="button" className="btn secondary" disabled={busy || unread === 0} onClick={() => void markAll()}>{t.markAllRead}</button></div></section>
+    {notice && <p className="muted" role="status">{notice}</p>}
+    {error && <p className="form-error" role="alert">{t.loadError}</p>}
+    {items.length === 0
+      ? <div className="empty-card"><div className="empty-art">◈</div><h3>{t.alertsEmpty}</h3><p>{t.alertsEmptySub}</p></div>
+      : <div className="alert-list">{items.map((item) => <article className={item.read ? 'alert-row read' : 'alert-row'} key={item.id}>
+          <div className="alert-main">
+            <span className={`alert-level ${item.level}`}>{item.level}</span>
+            <a href={item.article_url} target="_blank" rel="noopener noreferrer">{item.article_title}</a>
+            <div className="article-meta"><span>{lang === 'vi' ? item.rule_label_vi : item.rule_label_en}</span><span>· {formatDate(lang, new Date(item.created_at * 1000).toISOString())}</span><span>· {item.channel}</span></div>
+          </div>
+          {!item.read && <button type="button" className="btn secondary" onClick={() => void markRead(item.id)}>{t.markRead}</button>}
+        </article>)}</div>}
+  </div>
+}
+function AlertRulesManager({ t, lang }: { t: Copy; lang: Lang }) {
+  const [rules, setRules] = useState<AlertRule[] | null>(null)
+  const [error, setError] = useState(false)
+  const [busy, setBusy] = useState('')
+  const load = async () => {
+    try { const payload = await api<{ data: AlertRule[] }>('/api/admin/alerts/rules'); setRules(payload.data); setError(false) }
+    catch { setError(true) }
+  }
+  useEffect(() => { void load() }, [])
+  const toggle = async (rule: AlertRule) => {
+    setBusy(rule.slug)
+    try { await api(`/api/admin/alerts/rules/${encodeURIComponent(rule.slug)}`, { method: 'PUT', body: JSON.stringify({ enabled: !rule.enabled }) }); await load() }
+    catch { setError(true) } finally { setBusy('') }
+  }
+  const quiet = (rule: AlertRule) => rule.quiet_from && rule.quiet_to ? `${rule.quiet_from}–${rule.quiet_to} ${rule.timezone}` : '—'
+  return <section className="regions-admin" aria-labelledby="alert-rules-title">
+    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="alert-rules-title">{t.alertsRules}</h2><p>{t.alertsRulesSub}</p></div></div>
+    {error && <div className="form-error" role="alert">{t.loadError}</div>}
+    {!rules ? <p className="muted" role="status">{t.loading}</p> : rules.length === 0
+      ? <p className="muted">{t.alertsEmptySub}</p>
+      : <div className="regions-tree">{rules.map((rule) => <div className="region-row" key={rule.slug}>
+          <div className="region-main"><strong>{lang === 'vi' ? rule.label_vi : rule.label_en}</strong>
+            <span>{rule.slug} · {t.alertMatch}: {rule.match_kind}={rule.match_value} · {t.alertCooldown}: {rule.cooldown_seconds} · {t.alertQuiet}: {quiet(rule)} · {rule.enabled ? rule.channels : t.alertOff}</span></div>
+          <button type="button" role="switch" className="switch" aria-checked={rule.enabled} aria-label={`${rule.slug}: ${rule.enabled ? t.alertOff : t.alertsTitle}`} disabled={busy !== ''} onClick={() => void toggle(rule)} />
+        </div>)}</div>}
+    <p className="muted">{t.alertChannelGap}</p>
+  </section>
+}
 function EmptyPage({ t }: { t: Copy }) { return <div className="content-stack"><div className="empty-card"><div className="empty-art">✦</div><h3>{t.emptyTitle}</h3><p>{t.emptySub}</p></div></div> }
 function SettingsPage({ t, lang, setLang, setMode, onCatalogChanged, onRegionsChanged, regions, dashboard }: { t: Copy; lang: Lang; setLang: (v: Lang) => void; setMode: (v: ReaderMode) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -288,7 +370,7 @@ function SettingsPage({ t, lang, setLang, setMode, onCatalogChanged, onRegionsCh
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P1.5 regions</span><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {

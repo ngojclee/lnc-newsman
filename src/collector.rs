@@ -488,6 +488,19 @@ pub struct Article {
     pub region_code: Option<String>,
     source_name: String,
     source_tier: String,
+    /// Human-first labels from `article_matches` (P5). Two readers of the same article
+    /// see the same labels because they are read here, not recomputed per request.
+    pub labels: Labels,
+}
+
+/// `topic` is the article's own topic plus anything a human classified it as; `entities`
+/// are the tickers/assets/institutions the rules recognised. A human answer always wins
+/// over a rule answer for the same kind, which is what [`crate::classify::save_in`]
+/// enforces on write, so this struct does not have to resolve conflicts.
+#[derive(Serialize, Default, Clone, Debug, PartialEq)]
+pub struct Labels {
+    pub topics: Vec<String>,
+    pub entities: Vec<String>,
 }
 
 /// Newest first. A topic filter includes its descendants and a region filter
@@ -530,9 +543,55 @@ pub fn list_articles(
             region_code: r.get(8)?,
             source_name: r.get(6)?,
             source_tier: r.get(7)?,
+            labels: Labels::default(),
         })
     })?;
-    rows.collect()
+    let mut items: Vec<Article> = rows.collect::<rusqlite::Result<_>>()?;
+    let mut labels = labels_for(db, &items)?;
+    for item in &mut items {
+        item.labels = labels.remove(&item.id).unwrap_or_default();
+    }
+    Ok(items)
+}
+
+/// Labels for a page of articles in one query, so listing 50 items costs one statement
+/// rather than 50. Topics fall back to the article's own `topic_slug` when the
+/// classifier stored no row for it.
+fn labels_for(
+    db: &crate::db::Database,
+    items: &[Article],
+) -> rusqlite::Result<std::collections::HashMap<i64, Labels>> {
+    let ids: Vec<i64> = items.iter().map(|a| a.id).collect();
+    let mut out: std::collections::HashMap<i64, Labels> = std::collections::HashMap::new();
+    for item in items {
+        let mut set = Labels::default();
+        if let Some(slug) = &item.topic_slug {
+            set.topics.push(slug.clone());
+        }
+        out.insert(item.id, set);
+    }
+    if ids.is_empty() {
+        return Ok(out);
+    }
+    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+    let mut stmt = db.conn.prepare(
+        "SELECT article_id, kind, value FROM article_matches
+          WHERE article_id IN (SELECT value FROM json_each(?1))
+            AND kind IN ('topic','entity')
+          ORDER BY CASE origin WHEN 'human' THEN 0 WHEN 'llm' THEN 1 ELSE 2 END, value",
+    )?;
+    let rows = stmt.query_map([json], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    })?;
+    for row in rows {
+        let (id, kind, value) = row?;
+        let Some(labels) = out.get_mut(&id) else { continue };
+        let bucket = if kind == "topic" { &mut labels.topics } else { &mut labels.entities };
+        if !bucket.contains(&value) {
+            bucket.push(value);
+        }
+    }
+    Ok(out)
 }
 
 pub async fn articles(
