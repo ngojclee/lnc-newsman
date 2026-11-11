@@ -158,7 +158,11 @@ Configuration is environment-only: `HUB_BASE_URL`, `HUB_ALLOWED_HOSTS` (comma-se
 
 ## Security and deployment limitations
 
-`MANAGEMENT_KEY` is currently **environment-managed**, not a bootstrap-to-runtime store. Changing it requires restart and invalidates old cookie signatures. The server stores only hashes of signed random session tokens, with expiry and logout revocation in SQLite. `COOKIE_SECURE` defaults to `true`; set it to `false` only for isolated HTTP testing. Login throttling is process-local and keyed by the TCP peer; reverse proxies may cause users to share one limit. Multi-replica coordination, management key rotation UI, encrypted provider secrets, audit chain and independent reader accounts remain unimplemented. The application is not production-ready.
+`MANAGEMENT_KEY` is currently **environment-managed**, not a bootstrap-to-runtime store. Changing it requires restart and invalidates old cookie signatures. The server stores only hashes of signed random session tokens, with expiry and logout revocation in SQLite. `COOKIE_SECURE` defaults to `true`; set it to `false` only for isolated HTTP testing. Login throttling is process-local and keyed by the TCP peer by default. When the request arrives from a socket peer listed in
+`TRUSTED_PROXIES` (comma-separated IPs, e.g. the Caddy edge `10.20.0.3`), the key becomes the right-most valid address in
+`X-Forwarded-For` — the one that proxy appended. Earlier entries are caller-supplied and are ignored, and a malformed value
+falls back to the proxy's own address. Empty `TRUSTED_PROXIES` trusts nobody, which means a shared reverse proxy makes every
+user share one limit. Multi-replica coordination, management key rotation UI, encrypted provider secrets, audit chain and independent reader accounts remain unimplemented. The application is not production-ready.
 
 ## Planned only
 

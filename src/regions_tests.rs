@@ -79,6 +79,7 @@ fn state_with(dir: &FsPath) -> SharedState {
             management_key: Some("test-management-key".into()),
             api_keys: vec!["test-api-key".into()],
             allowed_hosts: vec!["newsman.test".into()],
+            trusted_proxies: Vec::new(),
             secure_cookie: true,
             version: "test",
         },

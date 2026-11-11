@@ -71,8 +71,28 @@ pub fn has_api_key(headers: &HeaderMap, configured: &[String]) -> bool {
     })
 }
 
-/// Per socket peer, deliberately ignoring spoofable X-Forwarded-For headers.
-/// The reverse-proxy IP is shared unless a trusted proxy integration is added later.
+/// Where a login attempt is counted from: the socket peer, or the client IP a
+/// trusted proxy reported. `X-Forwarded-For` is only consulted when the socket
+/// peer is in `TRUSTED_PROXIES`, and then only its right-most entry, which is the
+/// address the trusted proxy appended itself. Anything further left was supplied
+/// by the caller and is not believed.
+pub fn client_key(peer: &str, forwarded_for: Option<&str>, trusted: &[String]) -> String {
+    if trusted.is_empty() || !trusted.iter().any(|t| t.eq_ignore_ascii_case(peer)) {
+        return peer.to_string();
+    }
+    let Some(chain) = forwarded_for else {
+        return peer.to_string();
+    };
+    match chain.rsplit(',').map(str::trim).find(|v| !v.is_empty()) {
+        Some(last) if last.parse::<std::net::IpAddr>().is_ok() => last.to_string(),
+        // A present but unparsable chain is a caller trying to influence the key;
+        // count it against the proxy itself rather than trusting the text.
+        Some(_) | None => peer.to_string(),
+    }
+}
+
+/// Per client key. The key is the socket peer unless a trusted proxy is
+/// configured, which is what makes a single shared proxy address safe to front.
 #[derive(Default)]
 pub struct LoginLimiter {
     attempts: HashMap<String, Vec<u64>>,
@@ -118,5 +138,57 @@ mod tests {
         }
         assert!(!limiter.allow_and_record("peer", 101));
         assert!(limiter.allow_and_record("peer", 400));
+    }
+    fn trusted(list: &[&str]) -> Vec<String> {
+        list.iter().map(|v| v.to_string()).collect()
+    }
+    #[test]
+    fn forwarded_for_is_ignored_without_a_trusted_proxy() {
+        assert_eq!(
+            client_key("10.20.0.50", Some("203.0.113.9"), &[]),
+            "10.20.0.50"
+        );
+        // A proxy we did not name is just a peer: its header does not move the key.
+        assert_eq!(
+            client_key("10.20.0.50", Some("203.0.113.9"), &trusted(&["10.20.0.3"])),
+            "10.20.0.50"
+        );
+    }
+    #[test]
+    fn a_trusted_proxy_moves_the_key_to_the_client_it_reported() {
+        let t = trusted(&["10.20.0.3"]);
+        assert_eq!(
+            client_key("10.20.0.3", Some("10.20.1.44"), &t),
+            "10.20.1.44"
+        );
+        // Only the right-most entry is the proxy's own observation; a caller that
+        // prepends its own X-Forwarded-For must not be able to choose the key.
+        assert_eq!(
+            client_key("10.20.0.3", Some("1.2.3.4, 10.20.1.44"), &t),
+            "10.20.1.44"
+        );
+        assert_eq!(
+            client_key("10.20.0.3", Some("1.2.3.4, 10.20.0.3"), &t),
+            "10.20.0.3"
+        );
+    }
+    #[test]
+    fn a_trusted_proxy_with_junk_still_counts_against_itself() {
+        let t = trusted(&["10.20.0.3"]);
+        assert_eq!(client_key("10.20.0.3", Some("not-an-ip"), &t), "10.20.0.3");
+        assert_eq!(client_key("10.20.0.3", Some("  ,  "), &t), "10.20.0.3");
+        assert_eq!(client_key("10.20.0.3", None, &t), "10.20.0.3");
+    }
+    #[test]
+    fn separate_clients_behind_one_proxy_do_not_share_a_bucket() {
+        let t = trusted(&["10.20.0.3"]);
+        let mut limiter = LoginLimiter::default();
+        let a = client_key("10.20.0.3", Some("10.20.1.44"), &t);
+        let b = client_key("10.20.0.3", Some("10.20.1.45"), &t);
+        for _ in 0..MAX_ATTEMPTS {
+            assert!(limiter.allow_and_record(&a, 100));
+        }
+        assert!(!limiter.allow_and_record(&a, 101));
+        assert!(limiter.allow_and_record(&b, 101));
     }
 }

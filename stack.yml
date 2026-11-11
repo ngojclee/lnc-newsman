@@ -9,7 +9,9 @@
 #   MANAGEMENT_KEY=<generated>    admin login key
 #   LNC_API_KEYS=<generated>      read-only API key(s), comma separated
 #   LNC_MASTER_KEY=<generated>    provider secret store key (64 hex)
-#   COOKIE_SECURE=false           LAN HTTP. Set true only behind an HTTPS proxy.
+#   COOKIE_SECURE=true            served over HTTPS by the Caddy edge (newsman.lengoc.me)
+#   ALLOWED_HOSTS=...             Host header allowlist; empty accepts any Host
+#   TRUSTED_PROXIES=10.20.0.3     edge peer whose X-Forwarded-For login throttle trusts
 #   REGIONS_DIR=/data/regions
 #
 # Collector stays off: no source is enabled by the image, and the scheduler only runs
@@ -46,6 +48,7 @@ services:
       - LNC_MASTER_KEY=${LNC_MASTER_KEY:-}
       - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       - RUST_LOG=${RUST_LOG:-lnc_newsman=info,tower_http=warn}
     volumes:
       - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data

@@ -420,6 +420,7 @@ async fn app_info(State(state): State<SharedState>) -> Json<serde_json::Value> {
 async fn login(
     State(state): State<SharedState>,
     peer: Option<axum::Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
     Json(input): Json<LoginRequest>,
 ) -> Response {
     let Some(key) = state.cfg.management_key.as_deref() else {
@@ -431,11 +432,15 @@ async fn login(
     let peer = peer
         .map(|axum::Extension(ConnectInfo(addr))| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".into());
+    let forwarded_for = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+    let client = auth::client_key(&peer, forwarded_for, &state.cfg.trusted_proxies);
     if !state
         .login_limiter
         .lock()
         .expect("limiter lock poisoned")
-        .allow_and_record(&peer, now())
+        .allow_and_record(&client, now())
     {
         return failure(StatusCode::TOO_MANY_REQUESTS, "login_rate_limited");
     }
@@ -468,7 +473,7 @@ async fn login(
         .login_limiter
         .lock()
         .expect("limiter lock poisoned")
-        .clear(&peer);
+        .clear(&client);
     let cookie = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
         auth::COOKIE_NAME,
@@ -634,6 +639,7 @@ mod tests {
                 management_key: Some("test-management-key".into()),
                 api_keys: vec!["test-api-key".into()],
                 allowed_hosts: vec!["newsman.test".into()],
+                trusted_proxies: Vec::new(),
                 secure_cookie: true,
                 version: "test",
             },
@@ -676,6 +682,25 @@ mod tests {
         }
         if csrf {
             builder = builder.header("x-requested-with", "XMLHttpRequest");
+        }
+        builder.body(Body::from(body.to_owned())).unwrap()
+    }
+    /// A request carrying a socket peer (what a real server always has) and an
+    /// optional X-Forwarded-For, for the login-throttle tests.
+    fn req_from(
+        peer: &str,
+        forwarded_for: Option<&str>,
+        body: &str,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::HOST, "newsman.test")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-requested-with", "XMLHttpRequest")
+            .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        if let Some(v) = forwarded_for {
+            builder = builder.header("x-forwarded-for", v);
         }
         builder.body(Body::from(body.to_owned())).unwrap()
     }
@@ -736,6 +761,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    #[tokio::test]
+    async fn a_shared_proxy_peer_does_not_lock_everyone_out_behind_it() {
+        // Two people behind the Caddy edge arrive from 10.20.0.3. Without a
+        // trusted-proxy list the ninth bad attempt from one blocks the other.
+        let shared = |trusted: bool| {
+            let mut s = Arc::try_unwrap(state()).unwrap_or_else(|_| unreachable!());
+            if trusted {
+                s.cfg.trusted_proxies = vec!["10.20.0.3".into()];
+            }
+            router(Arc::new(s))
+        };
+        let bad = r#"{"key":"wrong"}"#;
+        let good = r#"{"key":"test-management-key"}"#;
+        for trusted in [false, true] {
+            let app = shared(trusted);
+            for _ in 0..8 {
+                let r = app
+                    .clone()
+                    .oneshot(req_from("10.20.0.3:52000", Some("10.20.1.44"), bad))
+                    .await
+                    .unwrap();
+                assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+            }
+            let other = app
+                .clone()
+                .oneshot(req_from("10.20.0.3:52000", Some("10.20.1.45"), good))
+                .await
+                .unwrap();
+            // Untrusted: the header is ignored, both share the proxy's bucket.
+            // Trusted: the second client has its own bucket and gets in.
+            assert_eq!(
+                other.status(),
+                if trusted {
+                    StatusCode::OK
+                } else {
+                    StatusCode::TOO_MANY_REQUESTS
+                },
+                "trusted={trusted}"
+            );
+        }
     }
     #[tokio::test]
     async fn logout_revokes_copied_cookie() {

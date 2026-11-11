@@ -10,6 +10,9 @@ pub struct Config {
     pub management_key: Option<String>,
     pub api_keys: Vec<String>,
     pub allowed_hosts: Vec<String>,
+    /// Socket peer addresses whose `X-Forwarded-For` is believed (the edge proxy).
+    /// Empty means "trust nobody": login attempts are counted per socket peer.
+    pub trusted_proxies: Vec<String>,
     pub secure_cookie: bool,
     pub version: &'static str,
 }
@@ -48,6 +51,13 @@ impl Config {
             .filter(|v| !v.is_empty())
             .map(ToOwned::to_owned)
             .collect();
+        let trusted_proxies = env::var("TRUSTED_PROXIES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
         let secure_cookie = match env::var("COOKIE_SECURE")
             .unwrap_or_else(|_| "true".into())
             .to_ascii_lowercase()
@@ -65,6 +75,7 @@ impl Config {
             management_key,
             api_keys,
             allowed_hosts,
+            trusted_proxies,
             secure_cookie,
             version: env!("CARGO_PKG_VERSION"),
         })
