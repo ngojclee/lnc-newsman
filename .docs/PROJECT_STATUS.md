@@ -87,6 +87,18 @@ Plan clarification made before coding P1.5: **`global` is a virtual root**, not 
 - **Deployed**: version 0.1.1, commit `b1b5366`, GitOps redeploy; `/health` 200 and `/api/app-info` reports `0.1.1` on the domain; login through `https://newsman.lengoc.me` works and the session cookie is Secure.
 - **Not fixed (pre-existing, unrelated)**: at <=900 px the app shows both the horizontal nav and the compact footer row; that is the existing mobile layout and was left as instructed.
 
+## P7 foundation — alert rules and the in-app inbox (2026-11-11, v0.2.0)
+
+- **Chosen because** it is the next phase that could be finished entirely offline: it reads only what is already in the database (articles, P5 labels, regions/topics) and needs no provider, key or network. It also closed the last open item of P5 — labels reaching the reader.
+- **Schema** (migration 15): `alert_rules`, `alert_deliveries` with **UNIQUE(rule_id, article_id)**, `alert_skip_log`. The UNIQUE row is what makes "fires exactly once" a property of the database rather than something the sweep has to remember.
+- **Behaviour**: cooldown per rule; quiet hours honour a window that wraps midnight and are evaluated in the rule's own timezone; a quiet-hour skip does **not** mark the article delivered, so the event fires after the window instead of being lost; matching uses the same enabled-region and enabled-topic predicates as the reader, so a rule can never notify about an item the reader hides; an unknown `match_kind` matches nothing rather than everything.
+- **Channels**: only `in-app`. `telegram`, `email`, `webhook`, `imap`, `slack` are listed in one constant and a rule naming one is refused with `channel_not_implemented` — a stored channel nothing delivers to would look like a working notification while sending nothing.
+- **Sweeper**: every 2 minutes, started at the first admin login. Until then all rules are off, and a new install has no rules at all.
+- **P5 remainder**: `/api/articles` now returns `labels {topics, entities}` computed in one query per page, and the reader shows a topic chip plus entity chips.
+- **Tests**: 182 pass (16 new alert tests + 2 router-level). Covered: second sweep creates nothing; cooldown blocks then expires; 22:00–07:00 quiet window across midnight holds the event and releases it after; an article in a disabled topic never notifies; unknown match kind matches nothing; API refuses an undeliverable channel; mark-read and mark-all-read; labels appear on the article payload.
+- **Checked by hand on the live domain** (v0.2.0): `/health` 200; login 200; `/api/admin/alerts/rules` 200 (empty, channels `["in-app"]`); `POST sweep` twice → `created 1` then `created 0` with `already_delivered`; `GET /api/alerts` returns the item; `POST` a rule with `channels: telegram` → 400 `channel_not_implemented`. In a local browser: Alerts page renders, sweep from the UI shows "Đã tạo 1 thông báo", mark-read clears the unread header, reader row shows the topic chip and the `EUR` entity chip, 375 px has no horizontal scroll.
+- **Not done**: real Telegram/email/webhook delivery (needs the owner to choose a channel and provide keys), numeric-threshold rules (need real P2 data), story grouping, a nav-bar bell.
+
 ## Plan-quality gate (cortex_plan_quality)
 
 **2026-11-11, filings + Hub work**: three runs scored **6.9 → 7.4 → 7.0 / 10** (threshold 8.0) — not passed. Consistently lowest: **Impact Clarity 5–6**, **Testability 6**. Even a run that listed the before/after screen changes, exact file list, five named tests and the command exit codes scored Impact Clarity 5. The plan for this work is fully implemented and 159 tests pass; the score reflects the gate's judgement of the write-up, not missing code. No score was invented.

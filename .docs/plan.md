@@ -251,17 +251,17 @@ log. Chỉ cột "đã nghiệm thu" mới được coi là xong.
 
 | GĐ | Việc | Phụ thuộc (phải xong trước) | Nghiệm thu đo được | Trạng thái |
 |---|---|---|---|---|
-| P0 | Khung Rust + UI + auth + 3 chế độ đọc + Docker | — | `cargo test` xanh; `/health` trả 200; container chạy chỉ bằng biến môi trường | đã làm local; **container chưa kiểm** |
+| P0 | Khung Rust + UI + auth + 3 chế độ đọc + Docker | — | `cargo test` xanh; `/health` trả 200; container chạy chỉ bằng biến môi trường | **đã nghiệm thu**: stack 108 healthy trên NAS, `/health` 200 qua domain |
 | P1 | Sổ nguồn, fetch RSS an toàn, scheduler, kho bài | P0 | ≥ 20 nguồn thật, 0 bài trùng theo canonical URL, 1 nguồn lỗi 5 lần tự dừng; log chứng minh | đã làm; **chưa nghiệm thu** |
 | P1.5 | Cây vùng + region pack | P1 (danh mục nguồn) | Thêm thư mục vùng mới → xuất hiện ở trạng thái tắt sau khi nạp; chọn FR trả cả EU; 39 test | đã làm + chủ dự án duyệt; **nguồn thật chưa nghiệm thu** |
 | P2 | Kho secret, khung connector, chuỗi thời gian, connector đầu | P1.5 (vùng) | Xem 5.3 | đã làm + duyệt; **nhà cung cấp thật chưa nghiệm thu** |
 | P3 | Văn bản chính thức & thuế, lịch thuế | P1.5 | Xem 5.4 | nền tảng đã làm + duyệt; **hạn nộp chưa xác minh** |
 | P4 | Chứng khoán: chỉ số, watchlist, công bố | P2 (series) + P3 (documents) | Xem 5.5 | **đề xuất**, chưa làm |
-| P5 | Phân loại + tóm tắt bằng LLM, gom story | P1 (bài) + P2 (secret cho khóa LLM) | Xem 5.6 | **đề xuất**, nền tảng offline đang làm |
+| P5 | Phân loại + tóm tắt bằng LLM, gom story | P1 (bài) + P2 (secret cho khóa LLM) | Xem 5.6 | nền tảng offline **đã làm** (nhãn luật + API + UI, đo 96%/84%); **chưa có LLM thật, chưa tóm tắt/gom story** |
 | P6 | Phân tích/nhận định + báo cáo + scorecard | P5 (phân loại) + P2 (số liệu) | Xem 5.7 | **đề xuất** |
-| P7 | Cảnh báo: chuông, Telegram, email, webhook | P5 + P6 (nội dung để cảnh báo) | Xem 5.8 | **đề xuất** |
+| P7 | Cảnh báo: chuông, Telegram, email, webhook | P5 + P6 (nội dung để cảnh báo) | Xem 5.8 | nền tảng offline **đã làm** (luật + hộp thư trong app); **Telegram/email/webhook chưa làm** |
 | P8 | REST v1 đầy đủ + `/mcp` + đăng ký Hub | P4–P7 (các endpoint nguồn) | Xem 5.9 | **đề xuất** |
-| P9 | Phát hành lên `10.20.2.1` | P0–P8 theo phạm vi phát hành | Xem 5.10 | **đề xuất** |
+| P9 | Phát hành lên `10.20.2.1` | P0–P8 theo phạm vi phát hành | Xem 5.10 | **một phần đã làm**: stack repo-build + HTTPS nội bộ đang chạy; sao lưu/khôi phục chưa thử |
 
 Thứ tự bắt buộc: `P0 → P1 → P1.5 → (P2 ━ P3) → P4` và `P1 → P5 → (P6 → P7) → P8 → P9`.
 P2 và P3 độc lập với nhau (chỉ cùng phụ thuộc P1.5), nên đổi thứ tự được. P5 chỉ cần P1 và một
@@ -365,6 +365,7 @@ Thiếu (2) thì trạng thái là "đã làm + test giả lập", không phải
   dừng và báo; chế độ không LLM cho ra nhãn luật. **Kết quả đo 11/11/2026: dev 24/25 = 96%,
   holdout 21/25 = 84%** (ngưỡng 80%). Danh sách mục sai được in khi chạy `cargo test -- --nocapture
   classify::tests::the_rule_classifier_is_measured_on_dev_and_holdout`.
+- **Đã bổ sung 11/11/2026**: `/api/articles` trả `labels {topics, entities}` (một truy vấn mỗi trang) và người đọc thấy chip chủ đề + thực thể; việc "đưa nhãn thực thể lên UI" vì thế đã xong. Phần còn lại của P5 (tóm tắt bằng LLM, gom story) vẫn chưa làm.
 - **Nghiệm thu phía thật** (chưa làm): cùng 50 mục nhưng qua LLM thật; đo tỉ lệ đúng, chi phí
   token/lần, và so với luật; ghi vào PROJECT_STATUS.
 - **Rollback**: tắt LLM (chế độ luật) là hệ thống vẫn chạy; nhãn do con người sửa được.
@@ -377,13 +378,28 @@ Thiếu (2) thì trạng thái là "đã làm + test giả lập", không phải
   hạn và hiển thị đúng/sai kèm lý do.
 - **Rollback**: tắt chế độ phân tích; dữ liệu nguồn không đổi.
 
-### 5.8 P7 — cảnh báo (đề xuất, chưa làm)
+### 5.8 P7 — cảnh báo (nền tảng offline đã làm 11/11/2026)
 
-- **Đầu vào**: P5 + P6 (nội dung), P2 (ngưỡng số liệu), P3 (hạn thuế).
-- **Nghiệm thu đo được**: một luật mẫu bắn **đúng 1 lần** cho một sự kiện (không lặp khi chạy lại);
-  cooldown và giờ yên lặng có test; webhook ký HMAC kiểm được bằng chữ ký; gửi thử tới kênh thật
-  do chủ dự án chọn, có log.
-- **Rollback**: tắt kênh; luật cảnh báo lưu trong DB nên tắt từng luật được.
+- **Đầu vào**: P5 (nhãn) đã có; P6 (nội dung phân tích) và P2 (ngưỡng số liệu) chưa có.
+- **Đã làm (offline, migration 15)**: `alert_rules` (khớp `region`/`topic`/`entity`/`keyword`,
+  mức info/important/urgent, cooldown, giờ yên lặng có múi giờ), `alert_deliveries`
+  **UNIQUE (rule, article)** nên một sự kiện chỉ báo đúng một lần kể cả khi quét lại nhiều lần,
+  `alert_skip_log` ghi lý do không bắn (đang tắt / đã gửi / cooldown / giờ yên lặng) để màn hình
+  cài đặt giải thích được sự im lặng. Quét nền bật ở lần đăng nhập admin đầu tiên; trước đó mọi
+  luật đều tắt. Khớp bài dùng **cùng luật hiển thị** với người đọc (vùng bật + chủ đề bật) nên
+  không bao giờ báo thứ người đọc không thấy. Bỏ qua vì giờ yên lặng **không** đánh dấu đã gửi,
+  nên sự kiện vẫn bắn sau khi hết giờ yên lặng.
+- **Kênh**: chỉ `in-app` tồn tại. `telegram`/`email`/`webhook`/`imap`/`slack` được nêu tên ở một
+  chỗ và **bị từ chối** (`channel_not_implemented`) thay vì lưu rồi im lặng không gửi.
+- **Nghiệm thu đo được (offline, có test)**: 16 test alert + 2 test mức router — quét hai lần chỉ
+  tạo **1** thông báo; cooldown chặn rồi hết hạn; giờ yên lặng 22:00–07:00 qua nửa đêm không làm
+  mất sự kiện; bài ở chủ đề tắt không bao giờ báo; `match_kind` lạ khớp **rỗng** chứ không khớp
+  tất cả; API từ chối kênh chưa có. Kiểm tay trên domain thật: `sweep` hai lần → `created 1` rồi
+  `created 0`.
+- **Chưa làm**: gửi thật Telegram/email/webhook (kể cả ký HMAC), luật theo **ngưỡng số liệu**,
+  gộp theo story, chuông trên thanh điều hướng (hiện là một mục trang riêng).
+- **Nghiệm thu phía thật**: cần chủ dự án chọn kênh và cấp khóa; chưa làm.
+- **Rollback**: tắt từng luật hoặc lật cờ enabled là đủ; bảng cảnh báo không ảnh hưởng dữ liệu tin.
 
 ### 5.9 P8 — API/MCP/Hub (đề xuất, chưa làm)
 

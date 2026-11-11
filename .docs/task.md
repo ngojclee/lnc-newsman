@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 11/11/2026 (plan v0.2, P1.5 xong phần code)
+Cập nhật: 11/11/2026 (v0.2.0 — P7 nền tảng cảnh báo offline, P5 nhãn lên người đọc)
 
 ## Đã xong
 
@@ -89,7 +89,7 @@ Cập nhật: 11/11/2026 (plan v0.2, P1.5 xong phần code)
 - [x] Sửa lỗi deadlock thật: `status()` giữ khoá DB rồi gọi `enabled()` khoá lần nữa — nay đọc switch trong cùng khoá.
 - [ ] Đo với LLM thật (cần chủ dự án chọn Agent Hub hay LiteLLM + ngân sách token).
 - [ ] Tóm tắt bằng LLM và gom story (phần còn lại của P5).
-- [ ] Đưa nhãn thực thể lên `/api/v1/articles` và UI (hiện mới lưu và có API admin).
+- [x] Đưa nhãn lên người đọc: `/api/articles` trả `labels {topics, entities}` (một truy vấn mỗi trang) và UI hiện chip chủ đề + thực thể (11/11/2026).
 
 ## P4 nền tảng filings + P5/P6 provider Hub (11/11/2026, offline)
 
@@ -103,6 +103,22 @@ Cập nhật: 11/11/2026 (plan v0.2, P1.5 xong phần code)
 - [ ] **Chưa gọi Hub thật**; chưa biết Hub có đúng route `/chat/completions`, `/models`, `/agents/{id}/run`.
 - [ ] Connector AMF/ESEF và Việt Nam (chờ chủ dự án quyết: chờ ESAP 2027, xin quyền AMF, hay chỉ link thủ công).
 - [ ] Phân tích tài chính (tỷ số, so sánh kỳ, nhận định) thuộc P6.
+
+## P7 — nền tảng cảnh báo (offline, 11/11/2026, v0.2.0)
+
+- [x] Migration 15: `alert_rules` (khớp region/topic/entity/keyword, mức, cooldown, giờ yên lặng + múi giờ), `alert_deliveries` **UNIQUE (rule, article)**, `alert_skip_log`.
+- [x] Một sự kiện chỉ báo **đúng một lần**: quét lại nhiều lần không tạo thêm; có test.
+- [x] Cooldown chặn chuỗi sự kiện rồi hết hạn; có test.
+- [x] Giờ yên lặng (kể cả cửa sổ vắt qua nửa đêm) không làm **mất** sự kiện — bỏ qua không đánh dấu đã gửi; có test.
+- [x] Luật chỉ khớp bài người đọc thấy: cùng điều kiện vùng bật + chủ đề bật; có test.
+- [x] Chỉ kênh `in-app`. `telegram/email/webhook/imap/slack` bị từ chối `channel_not_implemented`, không lưu rồi im lặng.
+- [x] API `GET/POST /api/admin/alerts/rules`, `PUT /api/admin/alerts/rules/{slug}`, `POST /api/admin/alerts/sweep`, `GET /api/alerts`, `POST /api/alerts/{id}/read`, `POST /api/alerts/read-all` (đều cần phiên admin/người đọc).
+- [x] Quét nền 2 phút, khởi động ở lần đăng nhập admin đầu tiên; trước đó mọi luật tắt.
+- [x] UI: trang **Cảnh báo** (hộp thư, chưa đọc, đánh dấu đã đọc, quét ngay) + khối **Luật cảnh báo** trong Cài đặt; VI/EN; Giấy/Sepia/Đêm; 375 px không tràn ngang.
+- [x] 182 Rust test xanh (16 test alert + 2 test mức router); kiểm tay trên domain thật: quét hai lần → `created 1` / `created 0`.
+- [ ] Gửi thật Telegram/email/webhook (kể cả ký HMAC) — **cần chủ dự án chọn kênh và cấp khóa**.
+- [ ] Luật theo ngưỡng số liệu (giá/biến động/on-chain) — cần P2 có dữ liệu thật.
+- [ ] Gộp theo story, chuông trên thanh điều hướng, cửa sổ im lặng theo lịch làm việc.
 
 ## P6–P9
 
