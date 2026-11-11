@@ -1,0 +1,25 @@
+# US issuing authorities. Registered disabled; no network access from the pack.
+
+[[body]]
+code = "federal-register"
+name_vi = "Federal Register — Công báo liên bang Mỹ"
+name_en = "Federal Register — US federal gazette"
+url = "https://www.federalregister.gov/"
+language = "en"
+attribution = "Source: Federal Register (federalregister.gov)"
+
+[[body]]
+code = "irs"
+name_vi = "IRS — Cơ quan thuế Hoa Kỳ"
+name_en = "IRS — Internal Revenue Service"
+url = "https://www.irs.gov/"
+language = "en"
+attribution = "Source: IRS (irs.gov)"
+
+[[body]]
+code = "us-treasury"
+name_vi = "Bộ Tài chính Hoa Kỳ"
+name_en = "US Department of the Treasury"
+url = "https://home.treasury.gov/"
+language = "en"
+attribution = "Source: US Department of the Treasury"

@@ -1,0 +1,25 @@
+# Vietnamese RSS feeds for the `vn` region.
+#
+# Detection is not activation: every source here is registered **disabled**. Enabling a
+# source is an owner decision taken after re-reading the publisher's terms.
+#
+# Terms that must be re-read before enabling (as of 11/11/2026, from secondary sources
+# only — see .docs/sources-candidates.md):
+#   * VnExpress: terms state free use for individuals and non-profit organisations
+#     provided the source is named. Attribution is therefore mandatory; Newsman stores
+#     only the title, link and date, never article text.
+#   * VnEconomy / Thanh Nien: feed URLs appear in third-party code samples; the terms
+#     have NOT been checked. Confirm the URL on the publisher's own site first.
+#
+# The URLs below are kept out of the built-in pack until confirmed on the publisher's
+# documentation: adding a guessed URL would be worse than having none.
+
+[[source]]
+slug = "vnexpress-kinh-doanh"
+name = "VnExpress — Kinh doanh"
+url = "https://vnexpress.net/rss/kinh-doanh.rss"
+tier = "T3"
+language = "vi"
+topic = "finance"
+interval_minutes = 60
+# Attribution: "Nguồn: VnExpress" must accompany any display. Personal / non-profit use.

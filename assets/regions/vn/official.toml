@@ -1,0 +1,25 @@
+# Vietnamese issuing authorities. Registered disabled; no network access from the pack.
+
+[[body]]
+code = "vbpl"
+name_vi = "Cơ sở dữ liệu văn bản pháp luật Việt Nam"
+name_en = "Vietnam legal documents database"
+url = "https://vbpl.vn/"
+language = "vi"
+attribution = "Nguồn: vbpl.vn"
+
+[[body]]
+code = "chinhphu"
+name_vi = "Cổng Thông tin điện tử Chính phủ"
+name_en = "Government of Vietnam portal"
+url = "https://chinhphu.vn/"
+language = "vi"
+attribution = "Nguồn: chinhphu.vn"
+
+[[body]]
+code = "mof"
+name_vi = "Bộ Tài chính"
+name_en = "Ministry of Finance"
+url = "https://mof.gov.vn/"
+language = "vi"
+attribution = "Nguồn: mof.gov.vn"

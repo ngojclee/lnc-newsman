@@ -1,0 +1,27 @@
+# US tax sources and deadlines.
+#
+# !!! SAMPLE DATA — NOT VERIFIED WITH THE IRS !!!
+# The dates below only exercise the engine (quarterly cadence, weekend shifting).
+# Before enabling: check every date on irs.gov, correct it, and set `verified = true`.
+
+[[source]]
+code = "irs"
+name_vi = "IRS — Cơ quan thuế Hoa Kỳ"
+name_en = "IRS — Internal Revenue Service"
+url = "https://www.irs.gov/"
+kind = "authority"
+attribution = "Source: IRS (irs.gov)"
+
+# Sample: a quarterly estimate due on the 15th of the month, shifted forward if weekend.
+[[deadline]]
+code = "us-sample-quarterly"
+source = "irs"
+name_vi = "Nộp thuế ước tính theo quý (mẫu, chưa xác minh)"
+name_en = "Quarterly estimated tax (sample, unverified)"
+cadence = "quarterly"
+day = 15
+weekend_rule = "next_business_day"
+lead_days = 14
+url = "https://www.irs.gov/"
+note = "DỮ LIỆU MẪU: chưa đối chiếu với irs.gov. Không dùng làm hạn nộp thật."
+verified = false

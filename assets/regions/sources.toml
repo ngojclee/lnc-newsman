@@ -1,0 +1,11 @@
+# Example region pack file. Sources here are registered disabled and only run
+# after an admin enables both the region and the source in the UI.
+# `example.invalid` is a reserved name: it points at nothing and never resolves.
+[[source]]
+slug = "example-wire"
+name = "Example wire (placeholder)"
+url = "https://feeds.example.invalid/global/world.xml"
+tier = "T2"
+language = "en"
+topic = "world"
+interval_minutes = 60

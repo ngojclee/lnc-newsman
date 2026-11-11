@@ -1,0 +1,8 @@
+# Region pack root. This directory IS the virtual region `global`:
+# the root always exists, is always enabled and cannot be disabled or renamed.
+code = "global"
+name_vi = "Toàn cầu"
+name_en = "Global"
+currency = ""
+timezone = "UTC"
+language = "en"

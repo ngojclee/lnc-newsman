@@ -1,0 +1,28 @@
+# Vietnamese tax sources and deadlines.
+#
+# !!! SAMPLE DATA — NOT VERIFIED WITH THE TAX AUTHORITY !!!
+# The dates below only exercise the engine. Vietnamese filing dates depend on the
+# declaration type and change with new decrees; check them on the General Department of
+# Taxation site, correct them, then set `verified = true`.
+
+[[source]]
+code = "gdt"
+name_vi = "Cục Thuế — Tổng cục Thuế"
+name_en = "General Department of Taxation"
+url = "https://www.gdt.gov.vn/"
+kind = "authority"
+attribution = "Nguồn: gdt.gov.vn"
+
+# Sample: a monthly declaration on the 20th, shifted forward out of a weekend.
+[[deadline]]
+code = "vn-sample-monthly"
+source = "gdt"
+name_vi = "Khai thuế tháng (mẫu, chưa xác minh)"
+name_en = "Monthly tax filing (sample, unverified)"
+cadence = "monthly"
+day = 20
+weekend_rule = "next_business_day"
+lead_days = 10
+url = "https://www.gdt.gov.vn/"
+note = "DỮ LIỆU MẪU: chưa đối chiếu với cơ quan thuế. Không dùng làm hạn nộp thật."
+verified = false

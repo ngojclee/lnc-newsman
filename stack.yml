@@ -1,0 +1,63 @@
+# LNC Newsman — repo-build stack for 10.20.2.1 (Saigon NAS, endpointId=2).
+# Host root is /share/Docker on this NAS; do not change it to /home/Docker.
+# Built on the host from the Gitea repo (no registry pull), same pattern as wol-vn1.
+#
+# Portainer env (all optional except the two secrets):
+#   DATA_DIR=/share/Docker        host root; data lands in <DATA_DIR>/lnc-newsman
+#   PORT=8462                     host port (container always listens on 8000)
+#   TZ=Asia/Ho_Chi_Minh
+#   MANAGEMENT_KEY=<generated>    admin login key
+#   LNC_API_KEYS=<generated>      read-only API key(s), comma separated
+#   LNC_MASTER_KEY=<generated>    provider secret store key (64 hex)
+#   COOKIE_SECURE=false           LAN HTTP. Set true only behind an HTTPS proxy.
+#   REGIONS_DIR=/data/regions
+#
+# Collector stays off: no source is enabled by the image, and the scheduler only runs
+# when an admin turns it on in Settings.
+services:
+  # Creates the data directory and gives it to the app's uid so the app never needs
+  # root. Idempotent, runs on every deploy.
+  init-data:
+    image: busybox:1.36
+    container_name: lnc-newsman-init
+    command: ["sh", "-c", "mkdir -p /data/regions && chown -R 10001:10001 /data"]
+    volumes:
+      - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data
+    restart: "no"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+  lnc-newsman:
+    build: .
+    container_name: lnc-newsman
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8462}:8000"
+    environment:
+      - DATA_DIR=/data
+      - PORT=8000
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
+      - REGIONS_DIR=${REGIONS_DIR:-/data/regions}
+      - MANAGEMENT_KEY=${MANAGEMENT_KEY:-}
+      - LNC_API_KEYS=${LNC_API_KEYS:-}
+      - LNC_MASTER_KEY=${LNC_MASTER_KEY:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
+      - RUST_LOG=${RUST_LOG:-lnc_newsman=info,tower_http=warn}
+    volumes:
+      - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"

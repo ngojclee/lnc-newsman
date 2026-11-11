@@ -1,0 +1,24 @@
+name: Build and publish LNC Newsman
+
+# Release template only. Manual dispatch is required; no automatic push publication.
+on:
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: docker-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Login to Gitea registry
+        uses: docker/login-action@v3
+        with:
+          registry: gitea.lengoc.me
+          username: ${{ gitea.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - name: Build image
+        run: docker build --pull -t gitea.lengoc.me/apps/lnc-newsman:lnc-latest -t gitea.lengoc.me/apps/lnc-newsman:${{ gitea.sha }} .
+      - name: Push image
+        run: |
+          docker push gitea.lengoc.me/apps/lnc-newsman:lnc-latest
+          docker push gitea.lengoc.me/apps/lnc-newsman:${{ gitea.sha }}

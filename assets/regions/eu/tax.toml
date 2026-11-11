@@ -1,0 +1,10 @@
+# EU-level tax sources. Sample entries only; verify terms before enabling.
+# VAT rules differ per member state, so no EU-wide deadline is declared here.
+
+[[source]]
+code = "ec-vat"
+name_vi = "Ủy ban châu Âu — Thông tin VAT"
+name_en = "European Commission — VAT information"
+url = "https://taxation-customs.ec.europa.eu/taxation/vat_en"
+kind = "guidance"
+attribution = "Source: European Commission"

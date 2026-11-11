@@ -1,0 +1,25 @@
+# LNC Newsman — image-pull stack for 10.20.2.1 (Saigon NAS)
+# Host root is /share/Docker on this NAS; do not change it to /home/Docker.
+# Portainer env: set DATA_DIR, MANAGEMENT_KEY and LNC_API_KEYS before deploy.
+services:
+  lnc-newsman:
+    image: ${LNC_NEWSMAN_IMAGE:-gitea.lengoc.me/apps/lnc-newsman:lnc-latest}
+    pull_policy: always
+    container_name: lnc-newsman
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8462}:8000"
+    environment:
+      DATA_DIR: /data
+      PORT: "8000"
+      TZ: ${TZ:-Europe/Paris}
+      MANAGEMENT_KEY: ${MANAGEMENT_KEY:-}
+      LNC_API_KEYS: ${LNC_API_KEYS:-}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      REGIONS_DIR: ${REGIONS_DIR:-/data/regions}
+      # 64 hex or 32-byte base64. Leave unset to keep the secret store closed.
+      LNC_MASTER_KEY: ${LNC_MASTER_KEY:-}
+      LNC_MASTER_KEY_OLD: ${LNC_MASTER_KEY_OLD:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    volumes:
+      - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data

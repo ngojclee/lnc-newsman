@@ -1,0 +1,17 @@
+# French issuing authorities. Registered disabled; no network access from the pack.
+
+[[body]]
+code = "legifrance"
+name_vi = "Légifrance — Công báo pháp luật Pháp"
+name_en = "Légifrance — French official legal gazette"
+url = "https://www.legifrance.gouv.fr/"
+language = "fr"
+attribution = "Source: Légifrance"
+
+[[body]]
+code = "bofip"
+name_vi = "BOFiP — Học thuyết thuế Pháp"
+name_en = "BOFiP — French tax doctrine"
+url = "https://bofip.impots.gouv.fr/"
+language = "fr"
+attribution = "Source: BOFiP (DGFiP)"

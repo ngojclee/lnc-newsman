@@ -1,0 +1,16 @@
+# Tax sources and recurring deadlines at the `global` level.
+#
+# The deadlines below are SAMPLE RULES, not legal facts. Every one is declared
+# `verified = false`, and the UI shows the "not checked with a tax authority" notice.
+# The owner must confirm each date against the authority before enabling a rule.
+#
+# No deadline is declared at the global level: tax law is jurisdiction-specific, and
+# inventing a worldwide rule would be worse than showing nothing.
+
+[[source]]
+code = "oecd-tax"
+name_vi = "OECD — Thuế"
+name_en = "OECD — Tax"
+url = "https://www.oecd.org/tax/"
+kind = "guidance"
+attribution = "Source: OECD"

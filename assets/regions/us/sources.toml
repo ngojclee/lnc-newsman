@@ -1,0 +1,9 @@
+# Placeholder US sources. Replace with vetted feeds before enabling.
+[[source]]
+slug = "example-us-wire"
+name = "Example US wire (placeholder)"
+url = "https://feeds.example.invalid/us/markets.xml"
+tier = "T2"
+language = "en"
+topic = "finance"
+interval_minutes = 60

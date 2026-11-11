@@ -1,0 +1,9 @@
+# Placeholder EU sources. Replace with vetted feeds before enabling.
+[[source]]
+slug = "example-eu-wire"
+name = "Example EU wire (placeholder)"
+url = "https://feeds.example.invalid/eu/policy.xml"
+tier = "T2"
+language = "en"
+topic = "politics"
+interval_minutes = 90

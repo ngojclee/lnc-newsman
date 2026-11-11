@@ -1,0 +1,11 @@
+# Issuing authorities for the `global` level.
+# Discovery only: every entry is registered disabled and no request is ever made from
+# this file. Enabling an entry is an owner decision taken after reading its terms.
+
+[[body]]
+code = "un"
+name_vi = "Liên Hợp Quốc"
+name_en = "United Nations"
+url = "https://www.un.org/en/"
+language = "en"
+attribution = "Source: United Nations"

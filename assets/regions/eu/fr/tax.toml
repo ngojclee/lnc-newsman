@@ -1,0 +1,45 @@
+# French tax sources and deadlines.
+#
+# !!! SAMPLE DATA — NOT VERIFIED WITH THE TAX AUTHORITY !!!
+# The day numbers below are placeholders that shape the engine (monthly, quarterly,
+# weekend shifting). They are NOT the real French filing dates. Do not enable them for
+# real reminders until the owner has checked each one against impots.gouv.fr and set
+# `verified = true` plus the correct dates.
+
+[[source]]
+code = "dgfip"
+name_vi = "Tổng cục Thuế Pháp (DGFiP)"
+name_en = "French tax authority (DGFiP)"
+url = "https://www.impots.gouv.fr/"
+kind = "authority"
+attribution = "Source: impots.gouv.fr"
+
+# Sample: a monthly declaration due on the 20th, moved to the next business day when
+# that date falls on a weekend.
+[[deadline]]
+code = "fr-sample-monthly"
+source = "dgfip"
+name_vi = "Khai thuế tháng (mẫu, chưa xác minh)"
+name_en = "Monthly filing (sample, unverified)"
+cadence = "monthly"
+day = 20
+weekend_rule = "next_business_day"
+lead_days = 10
+url = "https://www.impots.gouv.fr/"
+note = "DỮ LIỆU MẪU: chưa đối chiếu với impots.gouv.fr. Không dùng làm hạn nộp thật."
+verified = false
+
+# Sample: yearly declaration on 31 May, moved to the previous business day if needed.
+[[deadline]]
+code = "fr-sample-yearly"
+source = "dgfip"
+name_vi = "Khai thuế năm (mẫu, chưa xác minh)"
+name_en = "Yearly filing (sample, unverified)"
+cadence = "yearly"
+month = 5
+day = 31
+weekend_rule = "previous_business_day"
+lead_days = 30
+url = "https://www.impots.gouv.fr/"
+note = "DỮ LIỆU MẪU: chưa đối chiếu với impots.gouv.fr."
+verified = false

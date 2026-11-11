@@ -1,0 +1,14 @@
+/target/
+/data/
+/.local-data/
+ui/*.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
+ui/node_modules/
+ui/dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+.local-data.backup*/

@@ -1,0 +1,17 @@
+# EU-level issuing authorities. Registered disabled; no network access from the pack.
+
+[[body]]
+code = "eur-lex"
+name_vi = "EUR-Lex — Pháp luật EU"
+name_en = "EUR-Lex — EU law"
+url = "https://eur-lex.europa.eu/"
+language = "en"
+attribution = "Source: EUR-Lex (European Union)"
+
+[[body]]
+code = "ec-taxud"
+name_vi = "Ủy ban châu Âu — Thuế và Hải quan"
+name_en = "European Commission — Taxation and Customs Union"
+url = "https://taxation-customs.ec.europa.eu/"
+language = "en"
+attribution = "Source: European Commission"

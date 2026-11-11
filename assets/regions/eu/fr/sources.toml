@@ -1,0 +1,9 @@
+# Placeholder French sources. Replace with vetted feeds before enabling.
+[[source]]
+slug = "example-fr-wire"
+name = "Example FR wire (placeholder)"
+url = "https://feeds.example.invalid/fr/economie.xml"
+tier = "T3"
+language = "fr"
+topic = "finance"
+interval_minutes = 60
