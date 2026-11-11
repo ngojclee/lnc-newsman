@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CatalogManager } from './CatalogManager'
 import { Select } from './Select'
+import { appLinks } from './appLinks'
 import './style.css'
 
 type Lang = 'vi' | 'en'
@@ -94,6 +95,13 @@ function storageGet(key: string): string | null { try { return localStorage.getI
 function storageSet(key: string, value: string) { try { localStorage.setItem(key, value) } catch { /* preference storage is optional */ } }
 const validLang = (value: string | null): value is Lang => value === 'vi' || value === 'en'
 const validMode = (value: string | null): value is ReaderMode => value === 'paper' || value === 'sepia' || value === 'night'
+const isLocal = () => location.hostname === '127.0.0.1' || location.hostname === 'localhost'
+/**
+ * Pages the app can actually route to. Everything else would render an empty
+ * placeholder, so the mobile bar offers only real destinations and the rest stay
+ * in the desktop sidebar until their phase lands.
+ */
+const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'alerts', 'settings']
 const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'alerts', 'timeline', 'saved', 'settings']
 function currentPage(): Page { const hash = location.hash.slice(1) as Page; return pages.includes(hash) ? hash : 'today' }
 
@@ -118,6 +126,15 @@ function App() {
   const refreshRegions = () => { api<RegionsPayload>('/api/admin/regions').then(setRegions).catch(() => setError('load')) }
 
   useEffect(() => { document.documentElement.lang = lang }, [lang])
+  // On a phone the keyboard opens as a visual-viewport change; the fixed bottom bar
+  // would sit on top of the field being typed into, so hide it while typing.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const sync = () => document.body.classList.toggle('keyboard-open', window.innerHeight - vv.height > 140)
+    vv.addEventListener('resize', sync)
+    return () => vv.removeEventListener('resize', sync)
+  }, [])
   useEffect(() => {
     api<{ authenticated: boolean; management_configured: boolean }>('/api/auth/status')
       .then((status) => { setAuthenticated(status.authenticated); setManagementConfigured(status.management_configured) })
@@ -171,18 +188,24 @@ function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLa
 function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions, region, setRegion, onRegionsChanged, error, setError, onCatalogChanged, onSignOut }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; setMode: (v: ReaderMode) => void; page: Page; setPage: (v: Page) => void; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; setRegion: (v: string) => void; onRegionsChanged: () => void; error: string; setError: (v: string) => void; onCatalogChanged: () => void; onSignOut: () => void }) {
   const t = copy[lang]
   const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
+  // Mobile bottom bar: five destinations reachable with one thumb. The remaining
+  // pages stay in the desktop sidebar; nothing becomes unreachable on a phone.
+  const bottomPages: Page[] = ROUTABLE_PAGES.filter((id) => id !== 'market').slice(0, 5)
   const setRoute = (next: Page) => { location.hash = next; setPage(next) }
   const cycleMode = () => setMode(mode === 'paper' ? 'sepia' : mode === 'sepia' ? 'night' : 'paper')
   const signOut = async () => { try { await api('/api/auth/logout', { method: 'POST' }); onSignOut() } catch { setError('logout') } }
   return <div className={`app-shell mode-${mode}`}>
     <aside className="sidebar"><div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
+      <div className="app-switch" aria-label="Chuyển ứng dụng">{appLinks('newsman', isLocal()).map((link) => <a key={link.id} className={link.id === 'newsman' ? 'app-switch-link active' : 'app-switch-link'} href={link.href} aria-current={link.id === 'newsman' ? 'page' : undefined}><span aria-hidden="true">{link.icon}</span>{link.label}</a>)}</div>
       <nav className="nav" aria-label="Primary navigation">{pages.map((id) => <button key={id} aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
-      <div className="side-divider" /><div className="sidebar-footer"><div className="version">v0.2.0 <span>· P7 alerts</span></div><button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${t[mode]}`}><span aria-hidden="true">{mode === 'night' ? '☾' : '☼'}</span>{t[mode]}</button><button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button></div>
+      <div className="side-divider" /><div className="sidebar-footer"><div className="version">v0.3.0 <span>· P8 mobile</span></div><button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${t[mode]}`}><span aria-hidden="true">{mode === 'night' ? '☾' : '☼'}</span>{t[mode]}</button><button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button></div>
     </aside>
     <main className="page-shell"><header className="page-header"><div><div className="breadcrumb">LNC / NEWSMAN</div><h1>{t[page]}</h1></div><div className="header-actions"><div className="region-picker">{regions && <Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} />}</div><button className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button><button className="icon-button" aria-label={t.refresh} onClick={() => location.reload()}>↻</button></div></header>
+      {regions && <div className="mobile-region-bar"><Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} /></div>}
       {error && <div className="alert error" role="alert"><strong>{error === 'logout' ? t.failedLogout : t.loadError}</strong><button onClick={() => setError('')}>{t.dismiss}</button></div>}
       <div className="page-content">{page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} />}{page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} />}{page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}{page === 'market' && <Market t={t} lang={lang} region={region} />}{page === 'alerts' && <AlertsPage t={t} lang={lang} />}{page === 'settings' && <SettingsPage t={t} lang={lang} setLang={setLang} setMode={setMode} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}{!['today', 'topics', 'regions', 'market', 'alerts', 'settings'].includes(page) && <EmptyPage t={t} />}</div>
     </main>
+    <nav className="bottom-nav" aria-label="Điều hướng chính">{bottomPages.map((id) => <button key={id} type="button" className={page === id ? 'bottom-nav-item active' : 'bottom-nav-item'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="bottom-nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
   </div>
 }
 
@@ -292,7 +315,7 @@ function AlertsPage({ t, lang }: { t: Copy; lang: Lang }) {
   if (!items) return <p className="muted" role="status">{t.loading}</p>
   return <div className="content-stack">
     <section className="section-heading"><div><span className="eyebrow">{t.alertsTitle}</span><h2>{unread > 0 ? `${unread} ${t.alertsUnread}` : t.alertsTitle}</h2><p>{t.alertsSub}</p></div>
-      <div className="alerts-actions"><button type="button" className="btn secondary" disabled={busy} onClick={() => void sweep()}>{busy ? t.loading : t.alertsSweep}</button>
+      <div className="section-actions alerts-actions"><button type="button" className="btn secondary" disabled={busy} onClick={() => void sweep()}>{busy ? t.loading : t.alertsSweep}</button>
         <button type="button" className="btn secondary" disabled={busy || unread === 0} onClick={() => void markAll()}>{t.markAllRead}</button></div></section>
     {notice && <p className="muted" role="status">{notice}</p>}
     {error && <p className="form-error" role="alert">{t.loadError}</p>}
@@ -370,7 +393,7 @@ function SettingsPage({ t, lang, setLang, setMode, onCatalogChanged, onRegionsCh
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="actions-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -401,7 +424,7 @@ function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; 
   }
   return <section className="regions-admin" aria-labelledby="regions-title">
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="regions-title">{t.regionsTitle}</h2><p>{t.regionsSub}</p></div>
-      <div className="regions-actions"><span className="muted">{pack?.last_loaded_at ? `${t.packLast}: ${new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(pack.last_loaded_at * 1000))}` : t.packNever}</span>
+      <div className="section-actions regions-actions"><span className="muted">{pack?.last_loaded_at ? `${t.packLast}: ${new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(pack.last_loaded_at * 1000))}` : t.packNever}</span>
         <button type="button" className="btn secondary" disabled={busy !== ''} onClick={() => void reload()}>{busy === 'reload' ? t.reloading : t.reloadRegions}</button></div></div>
     {error && <div className="form-error" role="alert">{t.regionError}</div>}
     {!regions ? <p className="muted" role="status">{t.loading}</p> : <div className="regions-layout">
@@ -498,7 +521,7 @@ function HubManager({ t }: { t: Copy }) {
     <form className="catalog-form" onSubmit={saveKey} autoComplete="off">
       <h3>{t.hubKeyName}</h3>
       <label className="field"><span>{t.hubSecret}</span><input required type="password" autoComplete="new-password" maxLength={8192} value={key} onChange={(e) => setKey(e.target.value)} /><small>{t.hubKeyHint}</small></label>
-      <div className="catalog-form-actions">
+      <div className="catalog-form-actions actions-row">
         <button className="btn primary" disabled={busy || !key}>{busy ? t.saving : t.saveSecret}</button>
         <button type="button" className="btn secondary" disabled={busy || !status?.configured} onClick={() => void runCheck()}>{busy ? t.hubChecking : t.hubCheck}</button>
       </div>

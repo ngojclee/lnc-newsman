@@ -196,7 +196,7 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         <label className="field"><span>{t.enName}</span><input required maxLength={120} value={topicForm.label_en} onChange={(e) => setTopicForm({ ...topicForm, label_en: e.target.value })} /></label>
         <Select label={t.parent} value={topicForm.parent_slug ?? ''} options={topicOptions(topicForm.parent_slug, topicForm.slug)} onChange={(value) => setTopicForm({ ...topicForm, parent_slug: value || null })} />
         <label className="toggle-field"><span>{t.active}</span><input type="checkbox" checked={topicForm.enabled} onChange={(e) => setTopicForm({ ...topicForm, enabled: e.target.checked })} /></label>
-        <div className="catalog-form-actions"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingTopic ? t.save : t.create}</button>{editingTopic && <button type="button" className="btn secondary" onClick={resetTopic}>{t.cancel}</button>}</div>
+        <div className="catalog-form-actions actions-row"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingTopic ? t.save : t.create}</button>{editingTopic && <button type="button" className="btn secondary" onClick={resetTopic}>{t.cancel}</button>}</div>
       </form>
     </div> : <div className="catalog-layout">
       <div className="catalog-list" aria-label={t.sources}>
@@ -228,7 +228,7 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         <label className="field"><span>{t.slug}</span><input required maxLength={64} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={sourceForm.slug} onChange={(e) => setSourceForm({ ...sourceForm, slug: e.target.value })} /><small>{t.slugHint}</small></label>
         <label className="field"><span>{t.sourceName}</span><input required maxLength={120} value={sourceForm.name} onChange={(e) => setSourceForm({ ...sourceForm, name: e.target.value })} /></label>
         <label className="field"><span>{t.url}</span><input required type="url" maxLength={2048} placeholder="https://example.org/feed.xml" value={sourceForm.url} onChange={(e) => { setSourceForm({ ...sourceForm, url: e.target.value }); setPreview(null); setPreviewError('') }} /><small>{t.urlHint}</small></label>
-        <div className="catalog-form-actions"><button type="button" className="btn secondary" disabled={testing || !sourceForm.url} onClick={() => void testFeed()}>{testing ? t.testing : t.test}</button></div>
+        <div className="catalog-form-actions actions-row"><button type="button" className="btn secondary" disabled={testing || !sourceForm.url} onClick={() => void testFeed()}>{testing ? t.testing : t.test}</button></div>
         {previewError && <div className="form-error" role="alert">{t.previewError} {previewError}</div>}
         {preview && <div className="preview-box" role="status"><strong>{t.previewOk(preview.items_seen)}</strong><ol>{preview.sample.map((item) => <li key={item.url}>{item.title}</li>)}</ol></div>}
         <Select label={t.tier} value={sourceForm.tier} options={[{ value: 'T1', label: t.tier1 }, { value: 'T2', label: t.tier2 }, { value: 'T3', label: t.tier3 }, { value: 'T4', label: t.tier4 }]} onChange={(value) => setSourceForm({ ...sourceForm, tier: value })} />
@@ -236,7 +236,7 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         <Select label={t.topic} value={sourceForm.topic_slug ?? ''} options={topicOptions(sourceForm.topic_slug)} onChange={(value) => setSourceForm({ ...sourceForm, topic_slug: value || null })} />
         <label className="field"><span>{t.interval}</span><input type="number" required min={5} max={10080} step={1} value={sourceForm.fetch_interval_minutes} onChange={(e) => setSourceForm({ ...sourceForm, fetch_interval_minutes: Number(e.target.value) })} /><small>{t.intervalHint}</small></label>
         <label className="toggle-field"><span>{t.active}</span><input type="checkbox" checked={sourceForm.enabled} onChange={(e) => setSourceForm({ ...sourceForm, enabled: e.target.checked })} /></label>
-        <div className="catalog-form-actions"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingSource === null ? t.create : t.save}</button>{editingSource !== null && <button type="button" className="btn secondary" onClick={resetSource}>{t.cancel}</button>}</div>
+        <div className="catalog-form-actions actions-row"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingSource === null ? t.create : t.save}</button>{editingSource !== null && <button type="button" className="btn secondary" onClick={resetSource}>{t.cancel}</button>}</div>
       </form>
     </div>}
   </section>

@@ -47,6 +47,12 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .nav-item.active { color: var(--accent); background: var(--accent-soft); font-weight: 750; }
 .nav-icon { width: 18px; color: currentColor; font-size: 17px; text-align: center; }
 .nav-item b { margin-left: auto; min-width: 20px; padding: 2px 6px; border-radius: 20px; color: #fff; background: var(--accent-warm); font-size: 10px; text-align: center; }
+.app-switch { display: flex; gap: 6px; margin: 18px 10px 0; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-card); }
+.app-switch-link { display: flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 8px 6px; border-radius: 9px; color: var(--muted); text-decoration: none; font-size: 11.5px; font-weight: 700; letter-spacing: .02em; }
+.app-switch-link span { font-size: 13px; }
+.app-switch-link:hover { color: var(--ink); background: var(--paper-soft); }
+.app-switch-link.active { color: var(--accent); background: var(--accent-soft); }
+.app-switch-link:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .side-divider { height: 1px; margin: auto 10px 16px; background: var(--line); }
 .sidebar-footer { display: grid; gap: 3px; }
 .version { padding: 0 11px 7px; color: var(--faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
@@ -208,7 +214,15 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .mode-night .pack-issues li { border-color: rgba(242,179,169,.3); background: rgba(179,79,67,.13); }
 .mode-night .pack-issues code { color: #f2b3a9; }
 @media (max-width: 760px) { .regions-layout { grid-template-columns: 1fr; } }
-@media (max-width: 560px) { .region-picker { width: 132px; }.regions-actions { align-items: stretch; flex-direction: column; }.regions-actions .btn { width: 100%; } }
+/* 560px: stack a heading's action group under the text instead of forcing a
+   two-column squeeze that leaves the two buttons touching. */
+@media (max-width: 640px) {
+  .section-heading { align-items: flex-start; flex-direction: column; }
+  .section-actions { justify-content: flex-start; width: 100%; }
+  .section-actions > * { flex: 0 1 auto; }
+}
+@media (max-width: 560px) { .region-picker { width: 106px; min-width: 0; }.region-picker .select-trigger { padding: 0 8px; gap: 4px; }.region-picker .select-value { font-size: 12px; }.regions-actions { align-items: stretch; flex-direction: column; }.regions-actions .btn { width: 100%; }.regions-actions > .muted { order: 2; } }
+@media (max-width: 420px) { .header-actions { gap: 6px; }.language-toggle, .icon-button { width: 40px; height: 40px; } .page-header .region-picker { width: 96px; } }
 
 /* Market / series (P2 foundation) */
 .series-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -267,3 +281,101 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .label-chip { padding: 1px 7px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); background: var(--paper-soft); font-size: 11px; }
 .label-chip.entity { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
 @media (max-width: 560px) { .alert-row { flex-direction: column; align-items: stretch; } .alerts-actions .btn { width: 100%; } }
+
+/* ---------------------------------------------------------------- button rows
+   Every row of buttons is a flex row with one gap, so spacing never depends on
+   whitespace between inline elements. Rows wrap instead of squeezing, and each
+   row aligns to the start so a primary and a secondary keep their order. */
+.actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.actions-row > .btn { flex: 0 0 auto; }
+.section-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
+.settings-actions { justify-content: space-between; }
+.settings-actions > .actions-row { flex: 1 1 auto; }
+.catalog-form-actions, .catalog-entry-actions, .regions-actions, .alerts-actions { gap: 10px; }
+.btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.secondary { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); }
+.text-button { min-height: 36px; padding: 6px 8px; border-radius: 8px; }
+.text-button:hover { background: var(--paper-soft); }
+/* A destructive or secondary action never sits flush against the primary one. */
+.btn.primary + .btn.secondary, .btn.secondary + .btn.primary { margin-left: 0; }
+
+/* ------------------------------------------------------------ mobile shell (P9)
+   Phones get a compact top bar and a thumb-reachable bottom bar. Everything that
+   touches an edge pads itself with the safe-area inset, inputs stay at 16px so
+   iOS does not zoom on focus, and every control is at least 44px tall. */
+.bottom-nav { display: none; }
+@media (max-width: 900px) {
+  html, body, #root { min-height: 100%; }
+  body { -webkit-text-size-adjust: 100%; overscroll-behavior-y: contain; }
+  .app-shell { min-height: 100dvh; }
+  /* Top bar: brand, region, language, refresh — padded for the status bar. */
+  .sidebar { padding-top: calc(8px + env(safe-area-inset-top)); padding-left: calc(14px + env(safe-area-inset-left)); padding-right: calc(14px + env(safe-area-inset-right)); }
+  .app-switch { margin: 8px 0 0; }
+  .app-switch-link { min-height: 44px; }
+  .nav { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-item, .footer-action { min-height: 44px; }
+  .page-header { padding-top: 10px; padding-bottom: 10px; }
+  .language-toggle, .icon-button { width: 44px; height: 44px; }
+  .page-header { min-height: 62px; gap: 8px; }
+  .page-header > div:first-child { min-width: 0; flex: 1 1 auto; }
+  .page-header h1 { font-size: 20px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0; }
+  .breadcrumb { display: none; }
+  /* On a phone the region picker moves under the title as its own row so the
+     title can never be squeezed by the three header controls. */
+  .header-actions { flex: none; gap: 6px; }
+  .page-header .region-picker { display: block; width: 104px; }
+  .page-header .region-picker .select-trigger { height: 40px; }
+  .select-trigger { min-height: 44px; }
+  /* The bottom bar replaces the horizontal nav strip on a phone. */
+  .sidebar .nav { display: none; }
+  .bottom-nav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding: 4px calc(6px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(14px);
+    border-top: 1px solid var(--line); }
+  .bottom-nav-item { flex: 1 1 0; min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    border: 0; border-radius: 12px; padding: 6px 2px; color: var(--muted); background: transparent;
+    font-size: 10.5px; font-weight: 700; line-height: 1.1; }
+  .bottom-nav-item span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .bottom-nav-icon { font-size: 17px; }
+  .bottom-nav-item.active { color: var(--accent); background: var(--accent-soft); }
+  /* Keep the last row of content clear of the bar. */
+  .page-content { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  /* iOS zooms any input under 16px on focus. */
+  input, select, textarea { font-size: 16px; }
+  .btn { min-height: 44px; }
+  .text-button { min-height: 44px; padding: 10px 12px; }
+  .topic-chip { min-height: 44px; }
+  .alert-row .btn { min-height: 44px; }
+}
+@media (max-width: 560px) {
+  .section-actions { justify-content: flex-start; }
+  .settings-actions { align-items: stretch; flex-direction: column; }
+  .actions-row { width: 100%; }
+  .actions-row > .btn { flex: 1 1 auto; }
+}
+/* Keyboard-safe inputs: when a field is focused mid-screen the browser scrolls it
+   into view, but the fixed bar would cover it — so hide the bar while typing. */
+@media (max-width: 900px) {
+  body.keyboard-open .bottom-nav { display: none; }
+  body.keyboard-open .page-content { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+}
+/* The visual switch stays 46x26 (it must look like a switch), but its hit area is
+   44px tall on touch screens: ::before expands the target without moving the pill. */
+@media (max-width: 900px) {
+  .switch { min-height: 26px; }
+  .switch::before { content: ""; position: absolute; inset: -9px -6px; border-radius: 999px; }
+  .select-trigger { min-height: 44px; }
+}
+/* Very narrow phones: the header keeps the title and the three controls only;
+   the region filter lives in the page body where it has room to read. */
+
+
+/* Phones: the region filter moves into the page body so the title always has room. */
+.mobile-region-bar { display: none; }
+@media (max-width: 900px) {
+  .page-header .region-picker { display: none; }
+  .mobile-region-bar { display: block; padding: 10px clamp(18px, 4vw, 22px) 0; }
+  .mobile-region-bar .field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .mobile-region-bar .select-trigger { background: var(--paper-card); }
+}
