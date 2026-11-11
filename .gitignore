@@ -12,3 +12,5 @@ ui/dist/
 !.env.example
 .DS_Store
 .local-data.backup*/
+.local-ui/
+.claude/launch.json
