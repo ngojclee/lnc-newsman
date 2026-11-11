@@ -120,6 +120,16 @@ Cập nhật: 11/11/2026 (v0.2.0 — P7 nền tảng cảnh báo offline, P5 nh�
 - [ ] Luật theo ngưỡng số liệu (giá/biến động/on-chain) — cần P2 có dữ liệu thật.
 - [ ] Gộp theo story, chuông trên thanh điều hướng, cửa sổ im lặng theo lịch làm việc.
 
+## UI + mobile (12/11/2026, v0.3.0)
+
+- [x] Hàng nút dùng flex/grid + `gap` 10px, cho wrap; dưới 640px nhóm nút của tiêu đề xuống dưới thay vì bị ép dính nhau. Kiểm 360/375/390px, 6 trang: không cặp nút nào cách < 6px.
+- [x] Vùng chạm ≥ 44px (nút, ô chọn, chip); công tắc giữ hình 46×26 nhưng nới vùng chạm bằng `::before`.
+- [x] Thanh chuyển app: `ui/src/appLinks.ts` (bản sao byte-identical của lnc-library) → sidebar desktop, hàng dưới brand trên mobile; link Library `https://ebooks.lengoc.me`, đánh dấu app hiện tại.
+- [x] Mobile: `viewport-fit=cover` + safe-area, thanh điều hướng đáy 5 mục (52px), `100dvh`, cuộn mượt, ô nhập 16px, thanh đáy ẩn khi bàn phím mở; bộ chọn vùng chuyển xuống thân trang để tiêu đề không bị bóp.
+- [x] `manifest.webmanifest` + icon 192/512/maskable + `apple-touch-icon` + meta PWA (icon 32px đã soi, đọc được).
+- [x] `.docs/mobile-apk-plan.md` — **chỉ kế hoạch**: Capacitor vs Tauri 2, màn hình nhập server + kiểm `/health`, API base URL, bearer vs cookie cross-site, cleartext Android, iOS cần macOS; 6 câu hỏi cho chủ dự án.
+- [ ] Build APK thật — **chờ chủ dự án quyết** cách xác thực và phân phối.
+
 ## P6–P9
 
 Xem bảng giai đoạn trong `plan.md` mục 5: P2 kho secret + connector (Bitcoin/on-chain, vĩ mô), P3 văn bản chính thức & thuế, P4 chứng khoán, P5 LLM, P6 phân tích & nhận định, P7 cảnh báo, P8 REST/MCP/Hub, P9 triển khai NAS. Các quyết định cần anh chốt nằm ở `plan.md` mục 8.
