@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 11/11/2026 (v0.2.0 — P7 nền tảng cảnh báo offline, P5 nhãn lên người đọc)
+Cập nhật: 12/11/2026 (v0.4.1 — P7 kênh Telegram relay/direct, sửa sidebar bị giãn)
 
 ## Đã xong
 
@@ -119,6 +119,20 @@ Cập nhật: 11/11/2026 (v0.2.0 — P7 nền tảng cảnh báo offline, P5 nh�
 - [ ] Gửi thật Telegram/email/webhook (kể cả ký HMAC) — **cần chủ dự án chọn kênh và cấp khóa**.
 - [ ] Luật theo ngưỡng số liệu (giá/biến động/on-chain) — cần P2 có dữ liệu thật.
 - [ ] Gộp theo story, chuông trên thanh điều hướng, cửa sổ im lặng theo lịch làm việc.
+
+## P7 — kênh Telegram (12/11/2026, v0.4.1)
+
+- [x] Khám phá API thật trước khi viết client: `telegram.lengoc.me` = `cygnus-gateway` 0.2.5.1, `POST /send` `{bot?, method, payload}`, auth `Authorization: Bearer <api key>`; `payload` là nguyên văn body Bot API nên `message_thread_id` (forum topic) đi qua được, không cần sửa relay.
+- [x] `telegram_mode` = `relay | direct | off` (`env_or_cfg`: `TELEGRAM_MODE` thắng setting); `TELEGRAM_RELAY_BASE_URL` chỉ https; `TELEGRAM_ALLOWED_HOSTS`; host relay fleet luôn được phép.
+- [x] Secret ghi-một-chiều trong vault: `telegram-relay-token`, `telegram-bot-token`; `Endpoint` có `Debug` tự viết để log không in URL chứa token; API chỉ trả "đã có / chưa có".
+- [x] Migration 16 `alert_telegram_outbox`; sweep chỉ ghi hàng đợi, flusher 30s gửi ngoài khoá DB, claim `pending → sending` trước khi gọi nên mỗi cảnh báo gửi tối đa một lần, hàng kẹt sau 300s được lấy lại, 5 lần thử rồi `failed`.
+- [x] Nội dung = tiêu đề + link bài (đúng như hộp thư trong app); `alerts_topic_id` tuỳ chọn để vào topic riêng.
+- [x] Luật được khai `telegram` ngay khi kênh bật, chưa cần secret; thiếu đích/khóa hiện thành `reason` + hàng đợi thay vì từ chối lưu luật.
+- [x] Admin: `GET /api/admin/telegram`, `POST /api/admin/telegram/flush`, các trường trong `/api/settings`; UI khối "Kênh Telegram" (chế độ, chat id, topic, trạng thái sẵn sàng, hàng đợi, Gửi ngay).
+- [x] Sửa lỗi sidebar bị giãn (chủ dự án báo): `.side-shelves { align-content: start }`; đo lại 1440×900: ô lọc 37px, "Mọi tin đang đọc" 37px, đầu nhóm 33px, mục 33px.
+- [x] 203 test xanh; clippy `-D warnings` sạch; UI build sạch; deploy `df5f64d` → production 0.4.1.
+- [ ] **Chờ chủ dự án chọn bot trên relay** (và chat/group id) — chưa có bot nào nên production để `telegram_mode=off`; chưa gửi thật vào chat nào.
+- [ ] Nhận tin vào / định tuyến topic (chiều inbound) thuộc lane Library — app này chỉ gửi.
 
 ## UI + mobile (12/11/2026, v0.3.0)
 
