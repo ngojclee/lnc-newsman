@@ -360,3 +360,51 @@ fn tools_list_is_filtered_by_the_callers_scopes() {
         "no scope means no tools, and no tool means no data"
     );
 }
+
+/// The other side of argument checking: a **declared** argument must never be refused.
+///
+/// A reject-list that drifts from the schema is worse than no check at all — an agent
+/// would be blocked from a parameter the tool advertises. This walks every published
+/// tool, builds an argument object containing exactly the properties its schema
+/// declares, and asserts the checker accepts it. Any future drift between the tool
+/// table and the schema fails here.
+#[test]
+fn a_declared_argument_is_never_refused() {
+    for tool in tools() {
+        let properties = tool.input["properties"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let mut arguments = serde_json::Map::new();
+        for key in properties.keys() {
+            arguments.insert(key.clone(), serde_json::Value::Null);
+        }
+        assert!(
+            reject_unknown_arguments(&tool, &serde_json::Value::Object(arguments))
+                .is_ok(),
+            "{} refused a property it declares in its own schema",
+            tool.name
+        );
+    }
+    // And the rejecting side still works, for a key nobody declares.
+    let regions = tools()
+        .into_iter()
+        .find(|tool| tool.name == "regions")
+        .unwrap();
+    let error = reject_unknown_arguments(&regions, &serde_json::json!({"limit": 5}))
+        .expect_err("regions takes no arguments, so `limit` must be refused");
+    assert!(error.contains("limit"), "{error}");
+}
+
+/// A read tool is checked too. Silently ignoring `{"language": "vi"}` on a search is
+/// worse than an error: the caller believes a filter was applied that never was.
+#[test]
+fn a_read_tool_also_refuses_an_undeclared_argument() {
+    let topics = tools()
+        .into_iter()
+        .find(|tool| tool.name == "topics")
+        .unwrap();
+    let error = reject_unknown_arguments(&topics, &serde_json::json!({"language": "vi"}))
+        .expect_err("an undeclared filter must not be ignored");
+    assert!(error.contains("language"), "{error}");
+}

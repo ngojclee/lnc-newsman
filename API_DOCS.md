@@ -223,6 +223,7 @@ These write **only** the app's own analytic data. None of them can reach a sourc
 
 Rules that hold for every write tool:
 
+- **An undeclared argument is refused on every tool, read and write.** Silently ignoring one is worse than an error: the caller believes it applied a filter (or set an author) that never took effect. The check derives the allowed names from the tool's own schema, so adding a parameter cannot drift out of sync — a test walks every tool and proves a declared argument is never refused.
 - **The author is the verified delegation**, never an argument. No tool has an `author` field, and an **undeclared argument is refused** (`isError` with `unknown argument: author`) rather than ignored — `additionalProperties: false` alone is a note to the client, so the server enforces it. This is what stops an agent believing it set an author it did not.
 - **Ownership is enforced on update and delete.** A note or brief written by the owner in the web UI has no author and is not reachable through this boundary; one written by another client is refused too.
 - **Every write is appended to `newsman_write_log`** (time, client id, app id, tool, record kind, record id) and is readable through `write_log`. No tool can insert into or alter that table except the write path itself.
