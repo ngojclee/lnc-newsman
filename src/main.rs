@@ -19,6 +19,7 @@ mod filings;
 mod hub;
 mod llm;
 mod legal;
+mod connector;
 mod mcp;
 mod providers;
 mod regions;
@@ -50,8 +51,8 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 struct AppState {
-    cfg: config::Config,
-    db: Mutex<db::Database>,
+    pub(crate) cfg: config::Config,
+    pub(crate) db: Mutex<db::Database>,
     login_limiter: Mutex<auth::LoginLimiter>,
     started_at: u64,
     fetcher: fetch::Fetcher,
@@ -62,7 +63,7 @@ struct AppState {
     /// Production uses `collector::HOST_GAP`; tests shrink it to keep the suite fast.
     host_gap: std::time::Duration,
     /// `None` when `LNC_MASTER_KEY` is absent; the secret store then stays closed.
-    secrets: Option<secrets::SecretBox>,
+    pub(crate) secrets: Option<secrets::SecretBox>,
     /// Operator-supplied provider settings (SEC contact User-Agent and similar).
     connector_config: connectors::ConnectorConfig,
     /// LLM provider configuration (owner-set base URL/model; off by default).
@@ -71,6 +72,11 @@ struct AppState {
     hub: hub::ProviderConfig,
     /// Telegram alert delivery: relay or direct, plus the hosts allowed to be private.
     telegram: telegram::TelegramConfig,
+    /// Business MCP Hub connector (P8): app-specific bearer + delegation secret,
+    /// resolved `env_or_cfg`, plus the single-use nonce table for replay defence.
+    pub(crate) connector: connector::ConnectorConfig,
+    /// Nonces already accepted, mapped to the moment they expire.
+    pub(crate) connector_nonces: Mutex<std::collections::HashMap<String, u64>>,
     /// Admin switch for the LLM layer. Off means "rules only", which always works.
     llm_enabled: bool,
     pack: Mutex<regions::PackStatus>,
@@ -89,6 +95,8 @@ impl AppState {
             host_gates: Mutex::new(std::collections::HashMap::new()),
             host_gap: collector::HOST_GAP,
             secrets: None,
+            connector: connector::ConnectorConfig::default(),
+            connector_nonces: Mutex::new(std::collections::HashMap::new()),
             connector_config: connectors::ConnectorConfig::default(),
             llm: llm::LlmConfig {
                 base_url: None,
@@ -180,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
     app_state.llm = llm::LlmConfig::from_env();
     app_state.hub = hub::ProviderConfig::from_env();
     app_state.telegram = telegram::TelegramConfig::from_env();
+    app_state.connector = connector::ConnectorConfig::from_env();
     if app_state.secrets.is_none() {
         tracing::info!("LNC_MASTER_KEY is not set; the provider secret store stays closed");
     }
@@ -269,6 +278,10 @@ fn router(state: SharedState) -> Router {
             "/api/admin/legal-sources/{code}",
             axum::routing::put(legal::toggle_handler),
         )
+        .route(
+            "/api/admin/connector",
+            get(connector::admin_status).patch(connector::admin_update),
+        )
         .route("/api/admin/connectors", get(connectors::status_handler))
         .route(
             "/api/admin/connectors/{id}/run",
@@ -307,12 +320,16 @@ fn router(state: SharedState) -> Router {
         .route("/api/v1/companies/{id}/facts", get(filings::list_facts))
         .route("/api/v1/tax-calendar", get(tax::list_calendar))
         .route("/api/v1/articles", get(collector::articles))
-        // P8: read-only MCP over the same data, same credentials as REST v1.
-        .route("/mcp", post(mcp::handle).get(mcp::get_info))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session_or_api,
         ));
+    // P8: read-only MCP over the same data. Its own credential gate, because it also
+    // accepts a signed delegation from the Business MCP Hub; reader session/key still
+    // work exactly as they do on `/api/v1/*`.
+    let mcp_api = Router::new()
+        .route("/mcp", post(mcp::handle).get(mcp::get_info))
+        .layer(middleware::from_fn_with_state(state.clone(), connector::require_mcp));
     Router::new()
         .route("/health", get(health))
         .route("/api/auth/status", get(auth_status))
@@ -324,6 +341,7 @@ fn router(state: SharedState) -> Router {
         .route("/admin", get(admin))
         .merge(session_only)
         .merge(read_api)
+        .merge(mcp_api)
         .nest_service("/assets", ServeDir::new("ui/dist/assets"))
         .fallback_service(ServeDir::new("ui/dist"))
         .layer(middleware::from_fn(csrf_guard))
@@ -366,6 +384,20 @@ async fn security_headers(req: Request, next: Next) -> Response {
 }
 
 async fn csrf_guard(req: Request, next: Next) -> Response {
+    // A Hub call authenticates with a `Bearer` the browser never has, and CSRF is
+    // precisely an attack that rides a browser's own credential; a request carrying
+    // the connector bearer has no cookie authority to borrow. It is still fully
+    // authenticated by the delegation signature in `connector::require_mcp`.
+    //
+    // The same reasoning covers an unauthenticated `POST /mcp`: with no session cookie
+    // there is no ambient authority to forge, so the honest answer there is the
+    // credential gate's 401 rather than a CSRF complaint. Scoped to `/mcp` so every
+    // other route keeps the guard it had.
+    if connector::presents_connector_bearer(req.headers())
+        || (req.uri().path() == "/mcp" && auth::cookie_value(req.headers()).is_none())
+    {
+        return next.run(req).await;
+    }
     if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
         && req
             .headers()
@@ -408,7 +440,7 @@ async fn host_guard(State(state): State<SharedState>, req: Request, next: Next) 
     }
 }
 
-fn session_valid(state: &SharedState, headers: &HeaderMap) -> bool {
+pub(crate) fn session_valid(state: &SharedState, headers: &HeaderMap) -> bool {
     let (Some(key), Some(token)) = (
         state.cfg.management_key.as_deref(),
         auth::cookie_value(headers),
@@ -767,6 +799,8 @@ mod tests {
             },
             hub: hub::ProviderConfig::default(),
             telegram: telegram::TelegramConfig::default(),
+            connector: connector::ConnectorConfig::default(),
+            connector_nonces: Mutex::new(std::collections::HashMap::new()),
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),

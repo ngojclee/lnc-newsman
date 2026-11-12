@@ -1,6 +1,6 @@
 # LNC Newsman — Project Status
 
-Updated: 2026-11-11
+Updated: 2026-11-12
 
 ## Current milestone
 
@@ -138,6 +138,21 @@ Chosen as the next phase that is **fully doable offline**: `/mcp` wraps data the
 - **Tests**: 192 pass (7 MCP + 2 docs). Covered: 401 without and with a wrong key; `initialize`/`tools/list` stable across calls and containing no write tool and no duplicate name; a tool's payload equals the REST endpoint's payload for the same query; missing argument, unknown tool, disabled region and unknown method each take their intended error path; a batch answers every call in order; `GET /mcp` is 405.
 - **Checked by hand on the local build** (`127.0.0.1:8000`, demo key, synthetic rows): `initialize` returns protocol `2025-06-18`, `serverInfo.name` `lnc-newsman`, version `0.4.0`; no key → 401; `tools/list` returns the seven names; `newsman__latest_articles{limit:2}` returns `isError:false` with two items.
 - **Still open in P8**: registering the endpoint with the Agent Hub (needs the owner's Hub key and a connector record) and any write surface — administration stays on the session-authenticated web UI.
+
+## P8 connector half — Business MCP Hub boundary (2026-11-12, v0.4.4)
+
+The other half of P8: the endpoint can now be mounted on the Hub. The Hub is MCP-native and proxies `tools/call` to our own `POST /mcp`, so the work was a **credential and scope boundary**, not a second API.
+
+- **Two credentials, two provenances.** The Hub sends an app-specific `Authorization: Bearer <connector token>` **plus** five signed delegation headers (`X-MCP-Hub-Client-ID/Scopes/Timestamp/Nonce/Signature`, optional `-App-ID` for the v4 envelope). The bearer alone would let the Hub do anything with the connector's full rights, so **every tool decision is made from the signed scopes**, never from the bearer.
+- **`env_or_cfg`, both directions.** `CONNECTOR_BEARER` / `DELEGATION_SECRET` (legacy `LNC_CONNECTOR_TOKEN` / `LNC_DELEGATION_SECRET` still read) / `CONNECTOR_AUDIENCE` / `CONNECTOR_MAX_SCOPES`: env wins when set; otherwise the value is read from the existing sealed store (`connector-bearer`, `delegation-secret`) or from `settings`. That means the owner can pair from `/admin` **without a redeploy**, and an operator can pin both at deploy time. Verified live: with env blank, pasting both values into `/admin` flipped `enabled` to `true` and a signed `tools/list` then answered 200 on the same running process.
+- **Reject paths, all measured over real HTTP, not just unit-tested**: wrong token → 401 `connector_auth_required` (an unpaired connector answers identically, so a caller cannot tell misconfiguration from a wrong token); bad signature, wrong audience, timestamp >90 s, replayed nonce, or a scope outside the ceiling → 403 `delegation_denied`. A nonce is only claimed **after** the signature verifies, so an unauthenticated caller cannot burn one.
+- **Tool names are now bare** (`regions`, not `newsman__regions`). This was a real bug waiting to happen: the Hub prepends its namespace, so the old names would have reached an agent as `newsman__newsman__regions`. `newsman__<tool>` is still **accepted** (prefix stripped before lookup) so anything written against 0.4.3 keeps working — proved by test.
+- **Unknown tool and out-of-scope tool answer identically** (`-32601`, "Unknown or unauthorized MCP tool"), and `tools/list` is filtered by the caller's scopes, so probing the namespace reveals nothing.
+- **No write tool exists to grant.** `CONNECTOR_MAX_SCOPES` accepts only `newsman:read`; anything else is refused at write time with `unsupported_connector_scope` rather than silently narrowed, so the ceiling cannot look wider than it is.
+- **CSRF, deliberately and narrowly.** A Hub call cannot send `X-Requested-With`, and CSRF is an attack that rides a *browser's* credential — which a bearer-carrying request does not have. The exemption is `POST /mcp` plus the connector bearer, nothing else. An unauthenticated `POST /mcp` also skips it so the honest answer is the credential gate's 401 instead of a CSRF complaint; every other route keeps the guard unchanged.
+- **Tests: 237** (up from 192), clippy `-D warnings` clean, `npm run build` clean. `src/connector_tests.rs` writes the envelope out by hand rather than reusing `envelope()`, so a change to the signed bytes fails a test instead of passing silently.
+- **Admin card** (`/admin`, "Business MCP Hub connector"): shows whether each value is set and **where it came from** (`env` / `admin` / `unset`) — never a value. The two secrets are not entered there; they go through the existing provider-keys panel, which is already write-only.
+- **Not done**: the connector record on the Hub itself (the owner creates it from the pairing values in the hand-off) and enabling it there. No record was created, no key printed, no grant changed.
 
 ## P7 Telegram channel (2026-11-12, v0.4.1)
 

@@ -146,7 +146,7 @@ async fn a_tool_answers_what_the_rest_endpoint_answers() {
     let app = crate::router(state());
     let (_, mcp_body) = rpc(
         app.clone(),
-        call("newsman__latest_articles", serde_json::json!({"limit": 10})),
+        call("latest_articles", serde_json::json!({"limit": 10})),
         Some("test-api-key"),
     )
     .await;
@@ -175,7 +175,7 @@ async fn a_bad_argument_and_an_unknown_tool_are_reported_without_a_transport_err
     // Missing required `code`: the tool answers isError, the transport stays 200.
     let (status, body) = rpc(
         app.clone(),
-        call("newsman__observations", serde_json::json!({})),
+        call("observations", serde_json::json!({})),
         Some("test-api-key"),
     )
     .await;
@@ -184,12 +184,14 @@ async fn a_bad_argument_and_an_unknown_tool_are_reported_without_a_transport_err
     // An unknown tool is a JSON-RPC parameter error, not a tool result.
     let (status, body) = rpc(
         app.clone(),
-        call("newsman__drop_everything", serde_json::json!({})),
+        call("drop_everything", serde_json::json!({})),
         Some("test-api-key"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["error"]["code"], -32602);
+    assert_eq!(body["error"]["code"], -32601,
+        "an unknown tool and an out-of-scope tool answer identically"
+    );
     // A region that is not enabled is refused the same way the REST endpoint refuses it.
     let (_, body) = rpc(
         app.clone(),
@@ -216,7 +218,7 @@ async fn a_batch_answers_every_call_in_order() {
     let app = crate::router(state());
     let batch = serde_json::json!([
         {"jsonrpc": "2.0", "id": "a", "method": "ping"},
-        call("newsman__topics", serde_json::json!({}))
+        call("topics", serde_json::json!({}))
     ]);
     let (status, body) = rpc(app, batch, Some("test-api-key")).await;
     assert_eq!(status, StatusCode::OK);
@@ -255,10 +257,16 @@ fn the_tool_list_has_no_write_tool_and_no_duplicate_name() {
     };
     assert!(unique, "duplicate tool name in {names:?}");
     for name in names.drain(..) {
-        assert!(name.starts_with("newsman__"), "{name} is not namespaced");
+        // Names are bare on purpose: the Business MCP Hub adds its namespace when it
+        // proxies, so advertising `newsman__regions` here would reach an agent as
+        // `newsman__newsman__regions`.
+        assert!(
+            !name.starts_with("newsman__"),
+            "{name} already carries the Hub namespace"
+        );
         for forbidden in ["create", "delete", "update", "set", "post", "write", "run"] {
             assert!(
-                !name.split("__").nth(1).unwrap_or("").contains(forbidden),
+                !name.contains(forbidden),
                 "{name} looks like a write tool"
             );
         }

@@ -38,6 +38,8 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | PUT | `/api/admin/secrets/{name}` | `{ "value": "..." }` — write-only; the value is encrypted immediately and cannot be read back |
 | DELETE | `/api/admin/secrets/{name}` | Remove a secret |
 | POST | `/api/admin/secrets/rewrap` | Re-encrypt every secret under the current key with a new nonce (rotation). Returns `rewrapped`; 409 `secret_rewrap_failed` and **no changes** if any row cannot be opened |
+| GET | `/api/admin/connector` | Business MCP Hub connector card: `enabled`, `audience`, `max_scopes`, and the **source** of each value (`env`/`admin`/`unset`) — never a value |
+| PATCH | `/api/admin/connector` | Partial JSON `audience`, `max_scopes`; a `null` restores the built-in default. 400 `invalid_connector_audience` / `invalid_connector_scopes` / `unsupported_connector_scope`. The bearer and the delegation secret are **not** accepted here — they are secrets, written through `PUT /api/admin/secrets/{name}` |
 | GET | `/api/admin/connectors` | Connector id, provider, region, enabled, health, `last_error`, run times, `requests_today`/`daily_quota`, `requests_last_run`, `needs_secret`. No secrets |
 | POST | `/api/admin/connectors/{id}/run` | Run one connector now. Same gates as a scheduled run: 409 with `connector_disabled`, `connector_region_off`, `connector_secret_missing`, `connector_not_configured`, `connector_quota_exhausted`, `connector_cache_fresh` or `connector_not_due`; 502 with `connector_fetch_failed`, `connector_provider_error`, `connector_unauthorized`, `connector_invalid_data` |
 | GET | `/api/admin/legal-sources` | Legal-text sources with the terms verdict each one rests on: `terms_verdict` (`verified`/`not_required`/`unverified`/`prohibited`), `terms_checked_on`, `terms_url`, `terms_quote`, `terms_note`, `pollable`, `block_reason`, `evidence_age_days`, `evidence_stale`. No secrets |
@@ -149,25 +151,57 @@ Sending never runs while the database lock is held: the sweep queues one row per
 | GET | `/api/admin/telegram` | Resolved mode, relay host check, `chat_id`, whether each secret is stored, `ready` + `reason`, and queue counts. Never returns a secret |
 | POST | `/api/admin/telegram/flush` | Sends everything queued now; answers `{ ok, sent, failed, skipped }` (the same payload the background flusher uses) |
 
-## MCP endpoint (P8, offline part)
+## MCP endpoint (P8)
 
-`POST /mcp` speaks JSON-RPC 2.0 and accepts the same credentials as REST v1 (session cookie or a read-only API key). `GET /mcp` answers 405 `stream_not_supported`: this server does not open a server-sent event stream.
+`POST /mcp` speaks JSON-RPC 2.0. `GET /mcp` answers 405 `stream_not_supported`: this server does not open a server-sent event stream.
 
-Methods: `initialize` (protocol `2025-06-18`, `serverInfo.name` = `lnc-newsman`), `ping`, `tools/list`, `tools/call`. A JSON-RPC batch is answered in order. An unknown method returns `-32601`; an unknown tool returns `-32602`; a bad tool argument is reported **inside** the result as `isError: true`, so a client can show the message without treating it as a transport failure.
+Three credentials are accepted, and they are told apart by **how** they arrive:
+
+| Caller | Credential | Scope |
+|---|---|---|
+| Signed-in browser | session cookie (+ `X-Requested-With` on POST) | every tool |
+| Reader client | `x-api-key` (or `Authorization: Bearer` with a reader key) | every tool |
+| Business MCP Hub | `Authorization: Bearer <connector token>` plus the signed delegation headers below | only the scopes it was granted; today that is `newsman:read` |
+
+The Hub path refuses a call when the connector is not paired. Error codes: 401 `connector_auth_required` for a missing or wrong connector token (an unpaired connector answers identically — a caller cannot tell the two apart), 403 `delegation_denied` for a bad or missing signature, the wrong audience, a timestamp more than 90 s off, a replayed nonce, a malformed header, or a scope outside the connector ceiling.
+
+Delegation headers, HMAC-SHA256 hex over the envelope, lowercase: `X-MCP-Hub-Client-ID`, `X-MCP-Hub-Client-Scopes` (normalised, sorted, comma-separated), `X-MCP-Hub-Client-Timestamp`, `X-MCP-Hub-Client-Nonce`, `X-MCP-Hub-Client-Signature`; optional `X-MCP-Hub-App-Id` switches the envelope to v4.
+
+```text
+v3
+<audience>
+<client_id>
+<timestamp>
+<nonce>
+<scopes>
+v4
+<audience>
+<client_id>
+<app_id>
+<timestamp>
+<nonce>
+<scopes>
+```
+
+Audience defaults to `lnc-newsman` (`CONNECTOR_AUDIENCE` or the admin card). A nonce is single-use for 300 s after a **valid** signature; an unauthenticated request cannot burn one. The app id is only ever the signed assertion, never a tool argument.
+
+Methods: `initialize` (protocol `2025-06-18`, `serverInfo.name` = `lnc-newsman`), `ping`, `tools/list`, `tools/call`. A JSON-RPC batch is answered in order. An unknown method returns `-32601`. **An unknown tool and a tool the caller has no scope for return the same `-32601` with the same message** ("Unknown or unauthorized MCP tool"), and `tools/list` is filtered by the caller's scopes, so probing the namespace yields nothing. A bad tool argument is reported **inside** the result as `isError: true`, so a client can show the message without treating it as a transport failure.
 
 Every tool is read-only and answers through the same function the matching REST endpoint calls, so it can never expose a row REST hides. A tool that needs provider or phase data that does not exist yet is **not listed** — a missing tool is better than one answering "no data" for months.
 
+**Tool names carry no namespace.** The Business MCP Hub prepends its own, so an agent reaches these as `newsman__regions`; advertising `newsman__regions` upstream would produce `newsman__newsman__regions`. A client written against v0.4.3 that still sends `newsman__<tool>` is accepted, because the prefix is stripped before lookup.
+
 | Tool | Arguments | Same data as |
 |---|---|---|
-| `newsman__regions` | — | `GET /api/v1/regions` |
-| `newsman__topics` | — | `GET /api/v1/topics` |
-| `newsman__latest_articles` | `region?`, `topic?`, `limit?` 1–100 | `GET /api/v1/articles` |
-| `newsman__documents` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/documents` |
-| `newsman__tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
-| `newsman__series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |
-| `newsman__observations` | `code` (required), `limit?` 1–200 | `GET /api/v1/series/{code}/observations` |
+| `regions` | — | `GET /api/v1/regions` |
+| `topics` | — | `GET /api/v1/topics` |
+| `latest_articles` | `region?`, `topic?`, `limit?` 1–100 | `GET /api/v1/articles` |
+| `documents` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/documents` |
+| `tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
+| `series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |
+| `observations` | `code` (required), `limit?` 1–200 | `GET /api/v1/series/{code}/observations` |
 
-Still to come with their phases: `newsman__market_snapshot` (needs live provider data), `newsman__region_brief` (P6) and a write surface (none is planned — administration stays on the session-authenticated web UI).
+Still to come with their phases: `market_snapshot` (needs live provider data), `region_brief` (P6) and a write surface (none is planned — administration stays on the session-authenticated web UI).
 
 ## Secrets and connectors (P2 foundation)
 

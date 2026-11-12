@@ -18,17 +18,41 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::SharedState;
+use crate::connector::{Caller, scope_allows};
 
 /// Protocol revision this endpoint implements.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+/// Identical for an unknown tool and for a tool the caller may not use, so a caller
+/// cannot enumerate the namespace by comparing two errors.
+pub const UNKNOWN_TOOL: &str = "Unknown or unauthorized MCP tool";
 pub const SERVER_NAME: &str = "lnc-newsman";
 
 /// One tool: name, description and its input JSON schema. The list is the single
 /// source of truth for `tools/list` and for the API documentation check.
+///
+/// Names are **bare** (`regions`, not `newsman__regions`): the Business MCP Hub adds
+/// its namespace when it proxies, so a prefixed name here would reach an agent as
+/// `newsman__newsman__regions`. `newsman__*` is still accepted as an alias so a client
+/// written against v0.4.3 keeps working.
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
     pub input: Value,
+}
+
+/// The scope a tool requires. There is exactly one, because every tool is a read; a
+/// write tool would have to add its own scope here before it could be granted.
+pub const TOOL_SCOPE: &str = crate::connector::READ_SCOPE;
+
+/// The scope needed to call `tool`, or `None` when the name is not a tool we publish.
+/// An unknown name denying here is what makes "unlisted tool" and "missing scope" the
+/// same answer: a caller learns nothing from probing.
+pub fn tool_scope(tool: &str) -> Option<&'static str> {
+    let bare = tool.strip_prefix("newsman__").unwrap_or(tool);
+    tools()
+        .iter()
+        .any(|known| known.name == bare)
+        .then_some(TOOL_SCOPE)
 }
 
 fn empty_object() -> Value {
@@ -38,17 +62,17 @@ fn empty_object() -> Value {
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool {
-            name: "newsman__regions",
+            name: "regions",
             description: "Enabled regions and the effective set (a region includes its parents).",
             input: empty_object(),
         },
         Tool {
-            name: "newsman__topics",
+            name: "topics",
             description: "Enabled topics in the reader's tree order.",
             input: empty_object(),
         },
         Tool {
-            name: "newsman__latest_articles",
+            name: "latest_articles",
             description: "Newest visible articles (titles, links and labels only; no article text is stored).",
             input: json!({
                 "type": "object",
@@ -61,7 +85,7 @@ pub fn tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "newsman__documents",
+            name: "documents",
             description: "Official documents (metadata and our written summary, with the legal disclaimer).",
             input: json!({
                 "type": "object",
@@ -75,7 +99,7 @@ pub fn tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "newsman__tax_calendar",
+            name: "tax_calendar",
             description: "Declared tax deadlines for the enabled regions. Deadlines are pack data and may be unverified; the response says so.",
             input: json!({
                 "type": "object",
@@ -87,7 +111,7 @@ pub fn tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "newsman__series",
+            name: "series",
             description: "Enabled numeric time series and their credit line, by region.",
             input: json!({"type": "object", "properties": {
                 "region": {"type": "string"},
@@ -95,12 +119,12 @@ pub fn tools() -> Vec<Tool> {
             }, "additionalProperties": false}),
         },
         Tool {
-            name: "newsman__observations",
+            name: "observations",
             description: "Points of one series, newest first, with the as-of time and revision of each point.",
             input: json!({
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Series code, from newsman__series."},
+                    "code": {"type": "string", "description": "Series code, from the series tool."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 30}
                 },
                 "required": ["code"],
@@ -110,10 +134,11 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
-fn tool_descriptors() -> Value {
+fn tool_descriptors(caller: Option<&Caller>) -> Value {
     Value::Array(
         tools()
             .into_iter()
+            .filter(|tool| scope_allows(caller, tool.name))
             .map(|tool| {
                 json!({
                     "name": tool.name,
@@ -183,12 +208,12 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
         .lock()
         .map_err(|_| "database lock poisoned".to_string())?;
     match name {
-        "newsman__regions" => crate::regions::payload(&db, true).map_err(|err| err.to_string()),
-        "newsman__topics" => db
+        "regions" => crate::regions::payload(&db, true).map_err(|err| err.to_string()),
+        "topics" => db
             .topics()
             .map(|topics| json!({"data": topics}))
             .map_err(|err| err.to_string()),
-        "newsman__latest_articles" => {
+        "latest_articles" => {
             let region = string_arg(arguments, "region");
             let topic = string_arg(arguments, "topic");
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
@@ -208,7 +233,7 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
             .map(|data| json!({"data": data}))
             .map_err(|err| err.to_string())
         }
-        "newsman__documents" => {
+        "documents" => {
             let region = string_arg(arguments, "region");
             let topic = string_arg(arguments, "topic");
             let q = string_arg(arguments, "q");
@@ -228,7 +253,7 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
             .map(|data| json!({"data": data}))
             .map_err(|err| err.to_string())
         }
-        "newsman__tax_calendar" => {
+        "tax_calendar" => {
             let region = string_arg(arguments, "region");
             let horizon = int_arg(arguments, "horizon_days", 120, 1, 366)?;
             if let Some(code) = region.as_deref()
@@ -245,7 +270,7 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
                 "holidays_modelled": false
             }))
         }
-        "newsman__series" => {
+        "series" => {
             let region = string_arg(arguments, "region");
             let limit = int_arg(arguments, "limit", 100, 1, 500)?;
             if let Some(code) = region.as_deref()
@@ -259,7 +284,7 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
                 .map(|data| json!({"data": data}))
                 .map_err(|err| err.to_string())
         }
-        "newsman__observations" => {
+        "observations" => {
             let code = string_arg(arguments, "code").ok_or("`code` is required")?;
             let limit = int_arg(arguments, "limit", 30, 1, 200)?;
             let stored = crate::series::series(&db, &code)
@@ -281,20 +306,30 @@ fn dispatch(state: &SharedState, name: &str, arguments: &Value) -> Result<Value,
     }
 }
 
-pub async fn handle(State(state): State<SharedState>, Json(body): Json<Value>) -> Response {
+pub async fn handle(
+    State(state): State<SharedState>,
+    caller: Option<axum::Extension<Caller>>,
+    Json(body): Json<Value>,
+) -> Response {
+    // A reader session or key carries no delegation; it sees everything, exactly as
+    // it did before the connector existed.
+    let caller = caller.map(|axum::Extension(caller)| caller);
     // A batch is accepted and answered in order; MCP clients may send one.
     if let Value::Array(calls) = body {
         if calls.is_empty() {
             return rpc_error(Value::Null, -32600, "empty batch");
         }
-        let answers: Vec<Value> = calls.into_iter().map(|call| single(&state, call)).collect();
+        let answers: Vec<Value> = calls
+            .into_iter()
+            .map(|call| single(&state, caller.as_ref(), call))
+            .collect();
         return Json(Value::Array(answers)).into_response();
     }
-    let answer = single(&state, body);
+    let answer = single(&state, caller.as_ref(), body);
     Json(answer).into_response()
 }
 
-fn single(state: &SharedState, body: Value) -> Value {
+fn single(state: &SharedState, caller: Option<&Caller>, body: Value) -> Value {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
     let method = body.get("method").and_then(Value::as_str).unwrap_or("");
     let params = body.get("params").cloned().unwrap_or(Value::Null);
@@ -316,19 +351,24 @@ fn single(state: &SharedState, body: Value) -> Value {
         "tools/list" => json!({
             "jsonrpc": "2.0",
             "id": id,
-            "result": {"tools": tool_descriptors()}
+            "result": {"tools": tool_descriptors(caller)}
         }),
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-            if !tools().iter().any(|tool| tool.name == name) {
+            let bare = name.strip_prefix("newsman__").unwrap_or(name);
+            let known = tools().iter().any(|tool| tool.name == bare);
+            // Discovery and direct calls use the same rule: an unlisted tool and a
+            // tool the caller has no scope for answer identically, so probing the
+            // namespace yields nothing.
+            if !known || !scope_allows(caller, bare) {
                 return json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "error": {"code": -32602, "message": format!("unknown tool `{name}`")}
+                    "error": {"code": -32601, "message": UNKNOWN_TOOL}
                 });
             }
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            let result = call_tool(state, name, &arguments);
+            let result = call_tool(state, bare, &arguments);
             json!({"jsonrpc": "2.0", "id": id, "result": result})
         }
         other => json!({

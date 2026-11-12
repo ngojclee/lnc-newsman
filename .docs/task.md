@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.4.3 — govinfo chạy thật trên production; sửa 2 lỗi gán nhãn)
+Cập nhật: 12/11/2026 (v0.4.4 — ranh giới connector Business MCP Hub; tên tool bỏ tiền tố)
 
 ## Đã xong
 
@@ -170,7 +170,23 @@ Cập nhật: 12/11/2026 (v0.4.3 — govinfo chạy thật trên production; s�
 - [x] `src/docs_tests.rs`: route ↔ `API_DOCS.md` khớp 100%, `mcp_available` khớp route `/mcp`; bổ sung các route alerts còn thiếu trong tài liệu.
 - [x] 192 test xanh (7 MCP + 2 tài liệu), clippy `-D warnings` sạch.
 - [x] Kiểm tay trên bản local: `initialize` → protocol `2025-06-18`, `serverInfo.name` `lnc-newsman`; không khóa → 401; `tools/list` 7 tên; gọi `latest_articles` → `isError:false`.
-- [ ] Đăng ký `/mcp` lên Agent Hub — **chờ khóa Hub của chủ dự án**.
+- [x] **Đổi tên công bố thành tên trần** (`regions` chứ không `newsman__regions`) — Hub tự thêm namespace, giữ tên cũ sẽ thành `newsman__newsman__regions`; vẫn nhận tên có tiền tố để client cũ không gãy.
+
+## P8 phần connector — Business MCP Hub (12/11/2026, v0.4.4)
+
+- [x] `CONNECTOR_BEARER`, `DELEGATION_SECRET`, `CONNECTOR_AUDIENCE`, `CONNECTOR_MAX_SCOPES` theo `env_or_cfg`: env thắng, trống thì lấy giá trị trong kho bí mật sẵn có / `settings` (dán ở `/admin`, **không cần redeploy**). Vẫn đọc tên cũ `LNC_CONNECTOR_TOKEN` / `LNC_DELEGATION_SECRET`.
+- [x] Kiểm chữ ký ủy quyền HMAC-SHA256 (envelope v3/v4), audience, skew 90 s, nonce dùng một lần (300 s, chỉ ghi nhận **sau khi** chữ ký đúng), scope `newsman:read`; so sánh constant-time.
+- [x] Sai/thiếu token → 401 `connector_auth_required` (connector chưa ghép nối trả lời y hệt); chữ ký sai / sai audience / hết hạn / replay / scope ngoài trần → 403 `delegation_denied`.
+- [x] Giữ nguyên đường session + API key đọc cho `/mcp`; tách route `/mcp` khỏi nhóm `read_api` để có cổng riêng.
+- [x] Tool lạ và tool thiếu scope trả **cùng** một lỗi `-32601`; `tools/list` lọc theo scope → dò namespace không thu được gì.
+- [x] Không có tool ghi để cấp quyền: `CONNECTOR_MAX_SCOPES` chỉ nhận `newsman:read`, giá trị khác bị từ chối (`unsupported_connector_scope`) thay vì âm thầm thu hẹp.
+- [x] Miễn CSRF **chỉ** cho `POST /mcp` + bearer connector (Hub không gửi được `X-Requested-With`; request mang bearer không có quyền cookie để mượn). Mọi route khác giữ nguyên.
+- [x] Card `/admin` "Business MCP Hub connector": chỉ báo đã đặt hay chưa và **nguồn** (`env`/`admin`/`unset`), không bao giờ hiện giá trị; hai khóa đi qua panel provider-keys sẵn có.
+- [x] 237 test xanh (thêm 15 ở `src/connector_tests.rs`), clippy `-D warnings` sạch, `npm run build` sạch.
+- [x] Đo qua HTTP thật (11 kịch bản, server thật + HMAC tự ký như Hub): tất cả reject path đúng mã, `tools/list` 7 tên trần, đọc có dữ liệu, API key đọc vẫn chạy.
+- [x] Đo `env_or_cfg` thật: env trống → dán 2 khóa ở `/admin` → `enabled:true`, chữ ký hợp lệ được chấp nhận ngay trên tiến trình đang chạy.
+- [ ] **Tạo bản ghi connector trên Hub** — chủ dự án làm, dùng id/namespace/url/scopes trong bàn giao. Không session nào tạo bản ghi, in khóa hay đổi quyền.
+- [ ] Bật connector trên Hub sau khi `POST /admin/api/connectors/{id}/test` trả `ok`.
 
 ## P8 — nguồn văn bản pháp luật (12/11/2026, v0.4.2)
 
