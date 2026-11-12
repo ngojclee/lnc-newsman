@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.4.2 — P8 nguồn văn bản pháp luật có cổng điều khoản; P7 Telegram)
+Cập nhật: 12/11/2026 (v0.4.3 — govinfo chạy thật trên production; sửa 2 lỗi gán nhãn)
 
 ## Đã xong
 
@@ -210,6 +210,16 @@ Chủ dự án duyệt bật govinfo. Đã làm đúng thứ tự và **hoàn l�
 - **Vẫn chưa đọc được luật NAT thật**: `iptables -t nat -S` trong netns `netbird-nas` chỉ ra chain rỗng và cảnh báo "iptables-legacy tables present"; ADM của ASUSTOR lại dùng bảng khác thường. Kết luận "thiếu MASQUERADE" giờ **phù hợp mạnh với bằng chứng** nhưng vẫn là suy ra từ hành vi, chưa phải đọc trực tiếp luật — session chẩn đoán read-only trên NAS sẽ xác nhận.
 - [x] Đã **tắt lại** `govinfo` và vùng `us` (200 cả hai). Bốn nguồn luật trở về `enabled=false`, đúng như bản phát hành 0.4.2. Không có bài nào được lưu, không có cấu hình nào bị đổi ngoài hai công tắc vừa hoàn lại.
 - [ ] **Cần chủ dự án / hạ tầng**: khôi phục NAT cho các bridge mới trên NAS Saigon (ASUSTOR ADM, Docker 29.6.2) — hoặc cho Newsman chạy `network_mode: host` như `lnc-social-dl`/`wolweb`. Không tự sửa firewall/NAT của NAS: ngoài phạm vi và không có phê duyệt cho thay đổi hạ tầng dùng chung. Sau khi thông, bật lại chỉ là hai nút và lượt fetch sẽ lưu ~100 public law như đã chứng minh ở local.
+
+### Đã thông egress — govinfo chạy thật (12/11/2026, v0.4.3)
+
+- [x] NAS đã khôi phục 17 luật masquerade (mỗi bridge một luật). Tự kiểm lại từ trong container trước khi bật: `1.1.1.1:443`, `10.20.0.1:53`, `10.20.1.105:9443` đều mở; `wget https://www.govinfo.gov/rss/plaw.xml` trả **200, 131 833 byte**.
+- [x] Bật `us` → 200, bật `govinfo` → 200, `POST /api/admin/sources/6/fetch` → **`items_new: 100`, `items_seen: 100`, `status: ok`, 578 ms** (trước đó 10 575 ms timeout). Reader trả đúng tên nguồn, tier T1, vùng `us`, chủ đề `politics`, link gốc `govinfo.gov/app/details/...`.
+- [x] Hai lỗi gán nhãn thật, chỉ lộ ra khi có 100 bài thật:
+  - **Mọi từ viết hoa đều thành ticker.** Hàm tách thực thể đổi tiêu đề sang chữ hoa trước khi so, nên tiêu đề Title Case biến mọi từ thành token in hoa: cả 100 bài đều có `TICKER:LAW`, 97 bài có `TICKER:ACT`, 147 "thực thể" phần lớn là hư từ tiếng Anh. Nay: ký hiệu phải **viết hoa ngay trong nguồn** (`TICKER:AAPL` trong "lifts AAPL" vẫn còn; "Public", "Rural" thì không), và tiêu đề **viết hoa toàn bộ** thì không suy ra ticker nào. Trên đúng 100 tiêu đề đó, rác giảm từ ~100 dòng xuống 12, và 12 dòng đó là acronym thật trong tên luật (`FISA`, `LACA`, `GI`, `VA`, `ROAD`) cộng vài `ORG:` — chỉ còn số La Mã (`Title VII`) là sai, đã loại nốt.
+  - **`reclassify_all` không thể hoàn tác chính nó.** Chú thích ghi "safe to repeat" nhưng `store` chỉ upsert, nên đổi luật thì nhãn cũ nằm lại mãi. Nay nó xoá nhãn `rule` của bài trước khi gán lại; nhãn `human` vẫn không bị đụng (có test).
+- [x] **220 test xanh**, clippy `-D warnings` sạch. `cargo fmt --check` còn 15 diff ở `alerts.rs`/`db.rs`/`legal.rs`/`legal_tests.rs`/`main.rs`/`telegram.rs`/`telegram_tests.rs` — đều **có từ trước** (tái hiện khi stash thay đổi này), nên để nguyên thay vì trộn vào bản sửa.
+- [ ] Còn lại của P8: Légifrance chờ khóa PISTE; EUR-Lex và vbpl.vn chờ đọc được điều khoản của trang.
 
 ## Rà soát giao diện cuối (checklist dùng chung, mục U)
 

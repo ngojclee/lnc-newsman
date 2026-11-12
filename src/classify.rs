@@ -268,19 +268,45 @@ pub fn extract_entities(title: &str) -> Vec<String> {
     let mut out = BTreeSet::new();
     let folded = crate::documents::fold_diacritics(title);
     let upper = folded.to_ascii_uppercase();
+    // The folded title is what exchange and asset matching run on. Ticker detection is
+    // different: it needs the *original* casing, because folding destroys the only
+    // signal that separates a symbol from an ordinary word. "Public Law 119 - … Act of
+    // 2026" is Title Case, so every word in it was an all-caps token once uppercased and
+    // 100 real govinfo items came back labelled `TICKER:LAW`, `TICKER:ACT`,
+    // `TICKER:OF`. A symbol is written in capitals *and* nothing else in its token is:
+    // "lifts AAPL" and "AAPL tăng" qualify, "Public" and "Rural" do not.
+    let original_tokens: Vec<&str> = folded
+        .split(|ch: char| !ch.is_alphanumeric() && ch != ':' && ch != '.')
+        .filter(|token| !token.is_empty())
+        .collect();
     let tokens: Vec<&str> = upper
         .split(|ch: char| !ch.is_alphanumeric() && ch != ':' && ch != '.')
         .filter(|token| !token.is_empty())
         .collect();
-    for token in &tokens {
-        // Ticker style: 2–5 uppercase letters with at least one vowel, not a common word.
-        let bare = token.trim_matches('.');
-        if (2..=5).contains(&bare.len())
-            && bare.chars().all(|ch| ch.is_ascii_uppercase())
-            && bare.chars().any(|ch| "AEIOU".contains(ch))
-            && !STOP_WORDS.contains(&bare)
-        {
-            out.insert(format!("TICKER:{bare}"));
+
+    // If the whole title is already in capitals, capitalisation carries no information —
+    // a feed that writes "PUBLIC LAW 119 … ACT OF 2025" or "OIL RISES" is not shouting
+    // tickers, it simply has no mixed case. Guessing symbols from it produced
+    // `TICKER:RURAL` and `TICKER:OIL` too. Rather than guess, take no tickers from such
+    // a title; exchange-qualified and asset matching below still work on it.
+    let all_caps_title = folded.chars().any(|ch| ch.is_alphabetic())
+        && !folded.chars().any(|ch| ch.is_ascii_lowercase());
+    if !all_caps_title {
+        for (token, original) in tokens.iter().zip(&original_tokens) {
+            // Ticker style: 2–5 uppercase letters with at least one vowel, not a common
+            // word.
+            let bare = token.trim_matches('.');
+            let bare_original = original.trim_matches('.');
+            if (2..=5).contains(&bare.len())
+                && bare.chars().all(|ch| ch.is_ascii_uppercase())
+                // Written in capitals in the source, not merely folded there.
+                && !bare_original.is_empty()
+                && bare_original.chars().all(|ch| ch.is_ascii_uppercase())
+                && bare.chars().any(|ch| "AEIOU".contains(ch))
+                && !STOP_WORDS.contains(&bare)
+            {
+                out.insert(format!("TICKER:{bare}"));
+            }
         }
     }
     // Exchange-qualified tickers: EPA:MC, NASDAQ:AAPL, HOSE:VCB.
@@ -344,10 +370,19 @@ pub fn extract_entities(title: &str) -> Vec<String> {
 }
 
 /// Words that look like tickers but are ordinary prose.
+///
+/// Ticker detection now requires the word to be genuinely capitalised in the source and
+/// takes nothing from an all-caps title, so this list no longer has to enumerate every
+/// ordinary English word. It keeps only what is ambiguous *even when genuinely
+/// capitalised*: market abbreviations that are also words, and a handful of short
+/// words a sports or legal headline can put in capitals.
 const STOP_WORDS: &[&str] = &[
-    "AI", "CEO", "CFO", "THE", "AND", "FOR", "NOT", "NEW", "YOU", "ALL", "BUT", "ITS", "MAY",
-    "CAN", "HAS", "ARE", "WAS", "WHO", "WHY", "HOW", "ONE", "TWO", "TOP", "NOW", "OUT", "DAY",
-    "USA", "EU", "GDP", "CPI", "PMI", "IPO", "ETF", "API", "URL", "PDF", "HTML", "HTTP", "HTTPS",
+    "AI", "CEO", "CFO", "USA", "EU", "GDP", "CPI", "PMI", "IPO", "ETF", "API", "URL", "PDF",
+    "HTML", "HTTP", "HTTPS", "ACT", "LAW", "BILL", "THE", "AND", "FOR", "NOT", "NEW", "ALL", "BUT",
+    "ITS", "MAY", "CAN", "HAS", "ARE", "WAS", "WHO", "WHY", "HOW", "ONE", "TWO", "TOP", "NOW",
+    "OUT", "DAY", "OFF", "PER", "PRO", "SUB", "VIA", "YOU", "OUR", "HIS", "HER", "HIM",
+    // Roman numerals: "FISA Amendments Act … Title VII" is a section, not a listing.
+    "II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII", "XIII", "XIV", "XV", "XVI",
 ];
 
 /// Picks a topic by keyword score. Returns `(slug, matched_keyword, score)`.
@@ -526,6 +561,12 @@ pub fn labels(db: &db::Database, article_id: i64) -> rusqlite::Result<Vec<(Strin
 }
 
 /// Re-runs the rule layer for every article. Cheap, deterministic and safe to repeat.
+///
+/// "Safe to repeat" only holds if a repeat pass *removes* what the previous pass added
+/// and this one no longer produces. `store` upserts, so without the delete below a rule
+/// change would leave the old labels in place forever: after the ticker fix, the 100
+/// govinfo articles kept `TICKER:LAW`/`TICKER:ACT` until they were deleted here. Rule
+/// labels for a kind are therefore cleared first; a `human` label is never touched.
 pub fn reclassify_all(db: &db::Database) -> anyhow::Result<usize> {
     let rows: Vec<(i64, String, String)> = {
         let mut stmt = db.conn.prepare(
@@ -537,6 +578,10 @@ pub fn reclassify_all(db: &db::Database) -> anyhow::Result<usize> {
     };
     let mut written = 0;
     for (id, title, region) in rows {
+        db.conn.execute(
+            "DELETE FROM article_matches WHERE article_id=?1 AND origin='rule'",
+            rusqlite::params![id],
+        )?;
         written += save(db, id, &classify(&region, &title))?;
     }
     Ok(written)

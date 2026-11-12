@@ -283,6 +283,65 @@ fn entities_are_extracted_with_types() {
     );
 }
 
+/// Regression: the 100 real govinfo public-law items fetched on production came back
+/// with `TICKER:LAW`, `TICKER:ACT`, `TICKER:OF` and `TICKER:ON` on almost every row,
+/// because folding a Title-Case headline to uppercase turns every ordinary word into an
+/// all-caps token. These are the exact titles that exposed it.
+#[test]
+fn a_title_case_headline_yields_no_tickers_from_ordinary_words() {
+    // A place name in a headline is capitalised like a ticker too. It is not one, and
+    // with no country entity type available the honest answer is no entity at all.
+    for title in [
+        "Public Law 119 - 137 - United States Commission on International Religious Freedom Reauthorization Act of 2026",
+        "Public Law 119 - 111 - Lindsey O. Graham Sanctioning Russia and Iran Act of 2025",
+        "Public Law 119 - 58 - Secure Rural Schools Reauthorization Act of 2025",
+        "Public Law 119 - 3 - Joint Resolution Providing for Congressional Disapproval",
+    ] {
+        let label = classify("us", title);
+        assert!(
+            label.entities.is_empty(),
+            "{title} produced {:?}",
+            label.entities
+        );
+    }
+    // A real ticker in a headline still survives alongside the ordinary words.
+    let mixed = classify("us", "Public Law 119 - Act of 2026 lifts AAPL");
+    assert!(
+        mixed.entities.iter().any(|entity| entity == "TICKER:AAPL"),
+        "{:?}",
+        mixed.entities
+    );
+    assert!(
+        mixed.entities.iter().all(|entity| entity != "TICKER:LAW"),
+        "{:?}",
+        mixed.entities
+    );
+}
+
+/// A headline with no mixed case at all says nothing about which words are symbols.
+/// Guessing produced `TICKER:RURAL` and `TICKER:OIL`; taking none is the honest answer.
+#[test]
+fn an_all_caps_headline_yields_no_guessed_tickers() {
+    for title in [
+        "PUBLIC LAW 119 - 58 - SECURE RURAL SCHOOLS REAUTHORIZATION ACT OF 2025",
+        "US AND IRAN TALKS RESUME AS OIL RISES",
+    ] {
+        let label = classify("us", title);
+        assert!(
+            label.entities.iter().all(|e| !e.starts_with("TICKER:")),
+            "{title} produced {:?}",
+            label.entities
+        );
+    }
+    // The lowercase equivalent behaves the same way, which is the point.
+    let lower = classify("us", "oil rises as talks resume");
+    assert!(
+        lower.entities.iter().all(|e| !e.starts_with("TICKER:")),
+        "{:?}",
+        lower.entities
+    );
+}
+
 #[test]
 fn ties_keep_the_declared_rule_order() {
     // "market" (finance) and "world" both appear once; finance is declared first.
@@ -388,5 +447,44 @@ fn reclassifying_the_whole_table_is_safe_to_repeat() {
     assert_eq!(
         count as usize, first,
         "labels are upserted, never duplicated"
+    );
+}
+
+/// A repeat pass must also *remove* labels the current rules no longer produce.
+/// `store` alone only upserts, which is why the 100 govinfo articles kept
+/// `TICKER:LAW`/`TICKER:ACT` after the ticker rule was fixed.
+#[test]
+fn reclassifying_removes_a_rule_label_that_no_longer_applies() {
+    let state = crate::providers::tests_support::state_with(crate::fetch::Fetcher::public_only());
+    let db = state.db.lock().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO articles(id,canonical_url,title,source_id)
+             VALUES (1,'https://example.invalid/1','Public Law 119 - Act of 2026',NULL)",
+            [],
+        )
+        .unwrap();
+    // What the old rule would have written.
+    for stale in ["TICKER:LAW", "TICKER:ACT"] {
+        store(&db.conn, 1, "entity", stale, "rule", "pattern").unwrap();
+    }
+    // A human label must survive the sweep.
+    store(&db.conn, 1, "topic", "politics", "human", "owner").unwrap();
+
+    reclassify_all(&db).unwrap();
+
+    let stored = labels(&db, 1).unwrap();
+    assert!(
+        stored
+            .iter()
+            .all(|(kind, value)| !(kind == "entity"
+                && (value == "TICKER:LAW" || value == "TICKER:ACT"))),
+        "stale rule entities were not removed: {stored:?}"
+    );
+    assert!(
+        stored
+            .iter()
+            .any(|(kind, value)| kind == "topic" && value == "politics"),
+        "a human label must survive: {stored:?}"
     );
 }
