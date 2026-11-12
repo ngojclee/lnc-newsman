@@ -180,7 +180,19 @@ The owner approved switching govinfo on. The two steps were done in the document
 - **Measured inside the container** (`lnc-newsman`, 172.31.0.2): DNS resolves fine (both A and AAAA), but every outbound TCP connect fails — `1.1.1.1:443`, `8.8.8.8:53`, Cloudflare's address for `www.govinfo.gov`, the LAN firewall `10.20.0.1`, another VM `10.20.1.105:9443`, and even its own gateway `172.31.0.1`. A container-to-container call on the **same host** (`172.18.0.3:8081`) succeeds.
 - **Control group, same host, same commands, same moment**: `immich_server` 172.19.0.5, `kavita` 172.21.0.2, `vaultwarden` 172.22.0.2, `lazylibrarian` 172.18.0.4, `fail2ban` 172.28.0.2 and `couchdb` 172.17.0.2 all reached govinfo with **HTTP 200**; `wolweb` (network `host`) did too. Failing: `lnc-library` 172.29.0.2, `lnc-cwa-trial` 172.30.0.2 and `lnc-newsman` 172.31.0.2. **Every failing subnet was created in the last ~40 h; the working ones are older.**
 - **Ruled out**: MTU (all bridges 1500), global forwarding (`ip_forward=1`, per-bridge `forwarding=1`), link state (all `up`, `carrier=1`), DNS (resolves correctly), and the application itself (identical binary and config as the local end-to-end proof, which fetched 100 public laws).
-- **Not established**: the exact mechanism. `iptables -t nat -S` read through the `netbird-nas` netns shows only empty default chains, but that command warns that **iptables-legacy tables are present** and the ASUSTOR ADM host uses a non-standard table setup, so "the MASQUERADE rules are missing" is **not** a conclusion this evidence supports. A NAS administrator should read the real NAT rules (or test recreating the bridge) before touching anything.
+- **Not established directly**: `iptables -t nat -S` read through the `netbird-nas` netns shows only empty default chains, but that command warns that **iptables-legacy tables are present** and the ASUSTOR ADM host uses a non-standard table setup, so the NAT rules were never read first-hand. A read-only diagnostic session on the NAS should confirm it.
+- **A clean exit-code matrix narrows the mechanism** (`0` open, `1` refused, `124` timeout), run against three failing (`172.29`, `172.30`, `172.31`) and three working (`172.17`, `172.18`, `172.19`) containers, same six targets:
+
+  | Target | Failing subnets | Working subnets |
+  |---|---|---|
+  | Portainer on the host itself — `10.20.2.1:19943` | **0** | 0 |
+  | A closed port on the host — `10.20.2.1:22` | 1 (refused) | 1 |
+  | A container on another bridge, same host — `172.18.0.3:8081` | **0** | 0 |
+  | OPNSense — `10.20.0.1:53` | **124** | 0 |
+  | Another VM — `10.20.1.105:9443` | **124** | 0 |
+  | `1.1.1.1:443` | **124** | 0 |
+
+  Reaching the host itself and reaching another bridge both work, so **bridge-to-bridge forwarding is fine**; only destinations **off the host** time out. That is the signature of a source network without masquerade — the reply has no route back. It makes the missing-NAT explanation fit the evidence strongly, while still being inferred from behaviour rather than read from the rule set.
 - **Not changed**: no DNS, Caddy, Cloudflare, firewall or Portainer stack configuration was modified. The only changes were the two application switches, both reverted. No articles were stored.
 - **Next step belongs to the owner/infra**: restore outbound NAT for the new bridge networks on the Saigon NAS, or run Newsman with `network_mode: host` (as `lnc-social-dl` and `wolweb` do). Once egress works, re-enabling is the same two buttons and the fetch should store ~100 public laws as the local proof did.
 
