@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.4.4 — ranh giới connector Business MCP Hub; tên tool bỏ tiền tố)
+Cập nhật: 12/11/2026 (v0.5.0 — quyền ghi newsman:write cho agent Hub; infinite scroll)
 
 ## Đã xong
 
@@ -187,6 +187,28 @@ Cập nhật: 12/11/2026 (v0.4.4 — ranh giới connector Business MCP Hub; tê
 - [x] Đo `env_or_cfg` thật: env trống → dán 2 khóa ở `/admin` → `enabled:true`, chữ ký hợp lệ được chấp nhận ngay trên tiến trình đang chạy.
 - [ ] **Tạo bản ghi connector trên Hub** — chủ dự án làm, dùng id/namespace/url/scopes trong bàn giao. Không session nào tạo bản ghi, in khóa hay đổi quyền.
 - [ ] Bật connector trên Hub sau khi `POST /admin/api/connectors/{id}/test` trả `ok`.
+
+## P8 — quyền ghi qua connector (12/11/2026, v0.5.0)
+
+- [x] `newsman:write` (mới), cần **cả** `newsman:read`. 6 tool ghi: `note_create`/`note_update`/`note_delete`, `analysis_create`/`analysis_update`, `article_flag`; 3 tool đọc thêm: `notes`, `analyses`, `write_log` — tổng 16 tool.
+- [x] Ranh giới theo **hình dạng**: mọi tool ghi chỉ chạm `newsman_notes`, `newsman_analyses`, `newsman_article_flags` (migration 18, chỉ thêm bảng). Không mở nguồn/vùng/connector/khoá/collector/alert.
+- [x] Tác giả = `client_id` của delegation, **không** từ tham số. Tham số lạ bị **từ chối** (`unknown argument`) — `additionalProperties:false` không được server thực thi, đây là lỗi tìm ra khi đo qua HTTP.
+- [x] Sửa/xoá chỉ trên bản ghi của chính agent; bản ghi của owner/agent khác bị từ chối.
+- [x] Mỗi lần ghi → `newsman_write_log`; đọc qua tool `write_log` và `/api/admin/connector/writes` (nhóm session-only).
+- [x] Id phải trỏ tới bản ghi đã lưu và hiển thị được; giới hạn độ dài; danh sách trích dẫn sai bị từ chối chứ không cắt bớt.
+- [x] Card `/admin` hiện **nhãn tác giả** cho brief và cho từng lần ghi.
+- [x] 254 test, clippy sạch, UI build sạch; đo qua HTTP thật 10 kịch bản (thiếu scope → `-32601`, có scope → ghi và gắn nhãn, author giả → từ chối, cite sai → từ chối, log có mặt, đường API key đọc không đổi).
+- [x] docs-test phủ **tool** chứ không chỉ route: 16 tool phải có tên trong `API_DOCS.md`, và ngược lại.
+- [ ] Owner đặt `allowed_scopes = newsman:read, newsman:write` cho connector trên Hub.
+
+## Giao diện — infinite scroll (12/11/2026, v0.5.0)
+
+- [x] Bỏ nút "Xem thêm"; sentinel + `IntersectionObserver` (`useInfiniteScroll`). API vẫn offset, chỉ đổi cách kích hoạt.
+- [x] Một lần thử cho mỗi trang đã render (observer disconnect khi bắn, dựng lại sau khi danh sách dài thêm).
+- [x] Lần tải không thêm gì → dừng, hiện lại nút "Không tải thêm được — thử lại" (không lặp vô hạn).
+- [x] Không có `IntersectionObserver` → giữ nút; danh sách có giới hạn (rail) không có sentinel.
+- [x] Đo trong trình duyệt thật với 120 bài: 30 → 60 → 120; đổi mục reset; lỗi mạng hiện lại nút.
+- [x] Ghi lại: browser pane của app **hoãn** IntersectionObserver khi trang ẩn hoặc cuộn bằng script — chỉ đo được bằng cuộn thật.
 
 ## P8 — nguồn văn bản pháp luật (12/11/2026, v0.4.2)
 
