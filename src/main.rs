@@ -21,6 +21,7 @@ mod regions;
 mod secrets;
 mod series;
 mod tax;
+mod themes;
 
 use axum::{
     Json, Router,
@@ -122,6 +123,8 @@ struct DashboardQuery {
 #[derive(Serialize)]
 struct Dashboard {
     topics: Vec<db::Topic>,
+    /// Enabled sources with a reader-visible item count, for the desktop browse list.
+    sources: Vec<collector::SourceFacet>,
     stats: collector::Stats,
 }
 
@@ -571,7 +574,7 @@ async fn patch_settings(
         || patch
             .default_reader_mode
             .as_ref()
-            .is_some_and(|v| !["paper", "sepia", "night"].contains(&v.as_str()))
+            .is_some_and(|v| !crate::themes::READER_MODES.contains(&v.as_str()))
     {
         return failure(StatusCode::BAD_REQUEST, "invalid_settings");
     }
@@ -615,8 +618,10 @@ async fn dashboard(
         return failure(StatusCode::BAD_REQUEST, "invalid_region");
     }
     let result = db.topics().and_then(|topics| {
+        let sources = collector::source_facets(&db, region.as_deref())?;
         Ok(Dashboard {
             topics,
+            sources,
             stats: collector::stats(&db, region.as_deref())?,
         })
     });

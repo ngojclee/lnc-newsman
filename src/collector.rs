@@ -473,6 +473,8 @@ pub async fn runs(State(state): State<SharedState>, Path(id): Path<i64>) -> Resp
 pub struct ArticleQuery {
     topic: Option<String>,
     region: Option<String>,
+    /// Source slug, so the desktop browse list can narrow the reader to one feed.
+    source: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -505,11 +507,14 @@ pub struct Labels {
 
 /// Newest first. A topic filter includes its descendants and a region filter
 /// includes that region's ancestors (`fr` also returns `eu` and `global`). Disabled
-/// topics and items outside the effective region set are hidden.
+/// topics and items outside the effective region set are hidden. `source` narrows to
+/// one feed and is applied on top of the same visibility rules, so a source filter can
+/// only ever hide items the reader already shows.
 pub fn list_articles(
     db: &crate::db::Database,
     topic: Option<&str>,
     region: Option<&str>,
+    source: Option<&str>,
     limit: i64,
     offset: i64,
 ) -> rusqlite::Result<Vec<Article>> {
@@ -529,10 +534,11 @@ pub fn list_articles(
            AND (?1 IS NULL OR a.topic_slug IN (SELECT slug FROM tree))
            AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)
            AND (?2 IS NULL OR COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM branch))
+           AND (?5 IS NULL OR s.slug=?5)
          ORDER BY COALESCE(a.published_at, strftime('%Y-%m-%dT%H:%M:%SZ', a.fetched_at, 'unixepoch')) DESC, a.id DESC
          LIMIT ?3 OFFSET ?4",
     )?;
-    let rows = stmt.query_map(params![topic, region, limit, offset], |r| {
+    let rows = stmt.query_map(params![topic, region, limit, offset, source], |r| {
         Ok(Article {
             id: r.get(0)?,
             title: r.get(1)?,
@@ -610,13 +616,18 @@ pub async fn articles(
         .as_deref()
         .map(|code| code.trim().to_ascii_lowercase())
         .filter(|code| !code.is_empty());
+    let source = query
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|slug| !slug.is_empty());
     let result = {
         let db = state.db.lock().expect("database lock poisoned");
         match region.as_deref() {
             Some(code) if !matches!(regions::region_enabled(&db, code), Ok(true)) => {
                 return failure(StatusCode::BAD_REQUEST, "invalid_region");
             }
-            _ => list_articles(&db, topic, region.as_deref(), limit, offset),
+            _ => list_articles(&db, topic, region.as_deref(), source, limit, offset),
         }
     };
     match result {
@@ -634,6 +645,47 @@ pub struct Stats {
     pub sources_enabled: i64,
     pub sources_paused: i64,
     pub topic_counts: HashMap<String, i64>,
+}
+
+/// One entry of the desktop sidebar's source list. The count follows the same
+/// visibility rules as the reader (enabled topic, effective region set), so a number
+/// here is exactly how many items that filter will show.
+#[derive(Serialize)]
+pub struct SourceFacet {
+    pub slug: String,
+    pub name: String,
+    pub tier: String,
+    pub region: String,
+    pub articles: i64,
+}
+
+pub fn source_facets(db: &crate::db::Database, region: Option<&str>) -> rusqlite::Result<Vec<SourceFacet>> {
+    let mut stmt = db.conn.prepare(
+        "WITH RECURSIVE up(code) AS (
+           SELECT code FROM regions
+            WHERE (?1 IS NULL AND enabled=1)
+               OR (?1 IS NOT NULL AND code=?1 AND enabled=1)
+           UNION SELECT r.parent_code FROM regions r JOIN up ON r.code=up.code WHERE r.parent_code IS NOT NULL)
+         SELECT s.slug, s.name, s.tier, COALESCE(NULLIF(s.region,''),'global'),
+                COUNT(a.id)
+         FROM sources s
+         LEFT JOIN articles a ON a.source_id=s.id
+          AND (a.topic_slug IS NULL OR a.topic_slug IN (SELECT slug FROM topics WHERE enabled=1))
+          AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)
+         WHERE s.enabled=1
+         GROUP BY s.id
+         ORDER BY COUNT(a.id) DESC, s.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([region], |r| {
+        Ok(SourceFacet {
+            slug: r.get(0)?,
+            name: r.get(1)?,
+            tier: r.get(2)?,
+            region: r.get(3)?,
+            articles: r.get(4)?,
+        })
+    })?;
+    rows.collect()
 }
 
 /// Article counters use the same effective region set and topic visibility as

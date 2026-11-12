@@ -178,7 +178,7 @@ fn a_source_pointing_at_an_unknown_region_falls_back_to_global() {
         })
         .unwrap();
     assert_eq!(region, "global");
-    let visible = crate::collector::list_articles(&db, None, None, 50, 0).unwrap();
+    let visible = crate::collector::list_articles(&db, None, None, None, 50, 0).unwrap();
     assert_eq!(
         visible.len(),
         1,
@@ -493,7 +493,7 @@ fn reader_region_filter_includes_ancestors_and_hides_disabled_regions() {
                 )
                 .unwrap();
         }
-        let articles = crate::collector::list_articles(&db, None, None, 50, 0).unwrap();
+        let articles = crate::collector::list_articles(&db, None, None, None, 50, 0).unwrap();
         let regions: HashSet<_> = articles
             .iter()
             .map(|a| a.region_code.clone().unwrap())
@@ -503,9 +503,9 @@ fn reader_region_filter_includes_ancestors_and_hides_disabled_regions() {
             HashSet::from(["global".to_string(), "eu".into(), "fr".into()]),
             "items from the disabled us region must be hidden"
         );
-        let fr = crate::collector::list_articles(&db, None, Some("fr"), 50, 0).unwrap();
+        let fr = crate::collector::list_articles(&db, None, Some("fr"), None, 50, 0).unwrap();
         assert_eq!(fr.len(), 3, "fr also returns eu and global items");
-        let us = crate::collector::list_articles(&db, None, Some("us"), 50, 0).unwrap();
+        let us = crate::collector::list_articles(&db, None, Some("us"), None, 50, 0).unwrap();
         assert!(
             us.is_empty(),
             "a disabled region is not a valid filter target"
@@ -558,7 +558,7 @@ fn dashboard_counters_match_the_region_filtered_reader() {
             .unwrap();
     }
     let counters = crate::collector::stats(&db, None).unwrap();
-    let listed = crate::collector::list_articles(&db, None, None, 100, 0).unwrap();
+    let listed = crate::collector::list_articles(&db, None, None, None, 100, 0).unwrap();
     assert_eq!(
         counters.articles_total,
         listed.len() as i64,
@@ -590,7 +590,7 @@ fn dashboard_counters_match_the_region_filtered_reader() {
     assert_eq!(counters.articles_total, 1, "only the global item remains");
     assert_eq!(counters.topic_counts.get("finance"), Some(&1));
     assert_eq!(
-        crate::collector::list_articles(&db, None, None, 100, 0)
+        crate::collector::list_articles(&db, None, None, None, 100, 0)
             .unwrap()
             .len(),
         1,
@@ -1051,7 +1051,7 @@ fn migration_five_preserves_sources_and_articles() {
         )
         .unwrap();
     assert_eq!(free_article, "global");
-    let visible = crate::collector::list_articles(&db, None, None, 50, 0).unwrap();
+    let visible = crate::collector::list_articles(&db, None, None, None, 50, 0).unwrap();
     assert_eq!(
         visible.len(),
         2,

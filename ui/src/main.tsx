@@ -3,14 +3,15 @@ import { createRoot } from 'react-dom/client'
 import { CatalogManager } from './CatalogManager'
 import { Select } from './Select'
 import { appLinks } from './appLinks'
+import { THEMES, ReaderMode, applyMode, isMode } from './themes'
 import './style.css'
 
 type Lang = 'vi' | 'en'
-type ReaderMode = 'paper' | 'sepia' | 'night'
 type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'alerts' | 'timeline' | 'saved' | 'settings'
 type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: string | null; enabled: boolean }
+type SourceFacet = { slug: string; name: string; tier: string; region: string; articles: number }
 type Stats = { collector_enabled: boolean; articles_total: number; articles_24h: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
-type Dashboard = { topics: Topic[]; stats: Stats }
+type Dashboard = { topics: Topic[]; sources: SourceFacet[]; stats: Stats }
 type Settings = { version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean }
 type Labels = { topics: string[]; entities: string[] }
 type Article = { id: number; title: string; url: string; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string; labels?: Labels }
@@ -31,6 +32,8 @@ type TaxDeadline = { code: string; region: string; name_vi: string; name_en: str
 type TaxPayload = { data: TaxDeadline[]; disclaimer_vi: string; disclaimer_en: string; holidays_modelled: boolean }
 type ProviderStatus = { configured: boolean; base_host: string | null; allowed_hosts: string[]; models: [string, string, string]; agent: string; timeout_seconds: number; tokens_used_today: number; daily_budget: number; calls_today: number; has_secret: boolean }
 type ConnectorStatus = { id: string; provider: string; region: string; enabled: boolean; health: string; last_error: string | null; last_run_at: number | null; next_run_at: number | null; requests_today: number; daily_quota: number; needs_secret: boolean }
+/** The reader filters a link or the sidebar can set. */
+type Filter = { topic: string | null; source: string | null }
 
 const copy = {
   vi: {
@@ -40,8 +43,8 @@ const copy = {
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
     alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật. Không gửi Telegram/email ở giai đoạn này.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Chỉ kênh trong ứng dụng đã hoạt động; Telegram/email/webhook thuộc bước sau.', entities: 'Thực thể',
-    paper: 'Giấy', sepia: 'Sepia', night: 'Đêm', changeTheme: 'Đổi chế độ đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
-    settingsTitle: 'Cài đặt hiển thị', settingsSub: 'Đặt mặc định cho lần đầu mở ứng dụng. Thiết lập trên trình duyệt hiện tại sẽ được ưu tiên.', language: 'Ngôn ngữ mặc định', readerMode: 'Chế độ đọc mặc định', save: 'Lưu mặc định', saving: 'Đang lưu…', savedToast: 'Đã lưu cài đặt', admin: 'Quản trị', signOut: 'Đăng xuất',
+    changeTheme: 'Đổi nền đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
+    settingsTitle: 'Cài đặt hiển thị', settingsSub: 'Đặt mặc định cho lần đầu mở ứng dụng. Thiết lập trên trình duyệt hiện tại sẽ được ưu tiên.', language: 'Ngôn ngữ mặc định', readerMode: 'Nền đọc mặc định', save: 'Lưu mặc định', saving: 'Đang lưu…', savedToast: 'Đã lưu cài đặt', admin: 'Quản trị', signOut: 'Đăng xuất',
     emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
     region: 'Vùng', allRegions: 'Mọi vùng đang bật', regionsTitle: 'Vùng và region pack', regionsSub: 'Bật vùng để job quét và trang đọc dùng vùng đó cùng các vùng cha. Vùng mới phát hiện từ thư mục pack luôn ở trạng thái tắt.',
     reloadRegions: 'Nạp lại vùng', reloading: 'Đang nạp…', packIssues: 'Lỗi pack', packClean: 'Không có lỗi pack.', packSummary: (r: number, s: number) => `${r} vùng, ${s} nguồn từ pack`, packNever: 'Chưa nạp pack', packLast: 'Lần nạp gần nhất',
@@ -53,6 +56,8 @@ const copy = {
     seriesPoints: (n: number) => `${n} điểm`, observing: 'Lấy dữ liệu', latestValue: 'Giá trị mới nhất', asOf: 'Ghi nhận lúc', observedAt: 'Kỳ dữ liệu', revision: (n: number) => `bản ${n}`, noAttribution: 'Chưa có dòng ghi nguồn cho chuỗi này.',
     hubTitle: 'LNC Agent Hub', hubSub: 'Kết nối Hub cho phân loại, tóm tắt và nghiên cứu. Khóa chỉ ghi, không hiện lại. Cấu hình địa chỉ do máy chủ quyết định (biến môi trường), không nhập ở đây.', hubKeyName: 'hub-api-key', hubKeyHint: 'Khóa riêng của Newsman trên Hub. Dán vào đây; giá trị không bao giờ được trả lại.', hubCheck: 'Kiểm tra kết nối', hubChecking: 'Đang kiểm tra…', hubCheckOk: (n: number) => `Kết nối được, thấy ${n} model. Chỉ liệt kê model, chưa sinh nội dung, chưa tốn token.`, hubCheckFail: 'Không kết nối được Hub. Kiểm tra địa chỉ, allowlist host và khóa.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model theo tác vụ', hubClassify: 'Phân loại', hubSummarise: 'Tóm tắt', hubAnalyse: 'Phân tích', hubAgent: 'Agent', hubBudget: 'Token hôm nay', hubSecret: 'Khóa', hubSaved: 'Đã lưu khóa Hub.', hubHasKey: 'đã có khóa', hubNoKey: 'chưa có khóa', hubNotConfigured: 'Máy chủ chưa đặt HUB_BASE_URL hoặc host chưa nằm trong HUB_ALLOWED_HOSTS.',
     secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
+    // --- browse sidebar, rails and the filter chip (W1/W2 in the shared UI plan)
+    browse: 'Duyệt', browseAll: 'Mọi tin đang đọc', byTopic: 'Chủ đề', byRegion: 'Vùng', bySource: 'Nguồn', quickFilter: 'Lọc nhanh', filterPlaceholder: 'Tên chủ đề hoặc nguồn…', clearFilter: 'Bỏ lọc', showing: 'Đang xem', noMatch: 'Không có mục nào khớp', railLatest: 'Tin mới nhất', railAlerts: 'Cảnh báo gần đây', railWatch: 'Theo dõi', seeAll: 'Xem tất cả', emptyRail: 'Chưa có gì', itemUnit: 'tin', tabbarLabel: 'Điều hướng một tay', themeLabel: 'Nền đọc',
   },
   en: {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
@@ -61,7 +66,7 @@ const copy = {
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
     alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule. No Telegram/email in this phase.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'Only the in-app channel works; Telegram/email/webhook come later.', entities: 'Entities',
-    paper: 'Paper', sepia: 'Sepia', night: 'Night', changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
+    changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
     settingsTitle: 'Display settings', settingsSub: 'Set defaults for first-time visitors. This browser’s own preferences take precedence.', language: 'Default language', readerMode: 'Default reading mode', save: 'Save defaults', saving: 'Saving…', savedToast: 'Settings saved', admin: 'Admin', signOut: 'Sign out',
     emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
     region: 'Region', allRegions: 'All enabled regions', regionsTitle: 'Regions and region packs', regionsSub: 'Enable a region so jobs and the reader use it together with its parent regions. Regions discovered from the pack directory always start disabled.',
@@ -72,8 +77,9 @@ const copy = {
     dueIn: (n: number) => n === 0 ? 'today' : `in ${n} days`, dueSoon: 'Due soon', unverified: 'Not checked with the tax authority', verified: 'Verified', taxNotice: 'Not legal or tax advice. Deadlines come from a declared region pack rule and no network call was made; verify them with the tax authority.', holidaysNote: 'Public holidays are not modelled; a date is only shifted by a declared weekend rule.', docSummary: 'Written summary', docNoSummary: 'No written summary for this document yet.', effectiveOn: 'Effective', publishedOn: 'Published', searchDocs: 'Search documents', searchHint: 'Accents are optional (e.g. thue).', allTopicsDoc: 'All topics',
     market: 'Markets', marketTitle: 'Time series', marketSub: 'Numeric data by region. No provider is connected yet: this list only fills once a real connector is approved and running.', noSeries: 'No series yet', noSeriesSub: 'P2 provides only the series store and the connector framework. Real data needs a chosen provider (plan section 8).',
     seriesPoints: (n: number) => `${n} points`, observing: 'Fetch data', latestValue: 'Latest value', asOf: 'Known as of', observedAt: 'Period', revision: (n: number) => `revision ${n}`, noAttribution: 'This series has no credit line yet.',
-    hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research. The key is write-only and never shown again. The address is server configuration (environment), not entered here.', hubKeyName: 'hub-api-key', hubKeyHint: 'Newsman\u2019s own Hub key. Paste it here; the value is never returned.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'The server has no HUB_BASE_URL, or the host is not in HUB_ALLOWED_HOSTS.',
+    hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research. The key is write-only and never shown again. The address is server configuration (environment), not entered here.', hubKeyName: 'hub-api-key', hubKeyHint: 'Newsman’s own Hub key. Paste it here; the value is never returned.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'The server has no HUB_BASE_URL, or the host is not in HUB_ALLOWED_HOSTS.',
     secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
+    browse: 'Browse', browseAll: 'Everything visible', byTopic: 'Topics', byRegion: 'Regions', bySource: 'Sources', quickFilter: 'Quick filter', filterPlaceholder: 'Topic or source name…', clearFilter: 'Clear filter', showing: 'Showing', noMatch: 'Nothing matches', railLatest: 'Latest items', railAlerts: 'Recent alerts', railWatch: 'Following', seeAll: 'See all', emptyRail: 'Nothing yet', itemUnit: 'items', tabbarLabel: 'One-handed navigation', themeLabel: 'Reading theme',
   },
 } as const
 type Copy = (typeof copy)[Lang]
@@ -94,11 +100,10 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 function storageGet(key: string): string | null { try { return localStorage.getItem(key) } catch { return null } }
 function storageSet(key: string, value: string) { try { localStorage.setItem(key, value) } catch { /* preference storage is optional */ } }
 const validLang = (value: string | null): value is Lang => value === 'vi' || value === 'en'
-const validMode = (value: string | null): value is ReaderMode => value === 'paper' || value === 'sepia' || value === 'night'
 const isLocal = () => location.hostname === '127.0.0.1' || location.hostname === 'localhost'
 /**
  * Pages the app can actually route to. Everything else would render an empty
- * placeholder, so the mobile bar offers only real destinations and the rest stay
+ * placeholder, so the phone tab bar offers only real destinations and the rest stay
  * in the desktop sidebar until their phase lands.
  */
 const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'alerts', 'settings']
@@ -111,7 +116,7 @@ function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [managementConfigured, setManagementConfigured] = useState(false)
   const [lang, setLangState] = useState<Lang>(validLang(storedLang) ? storedLang : 'vi')
-  const [mode, setModeState] = useState<ReaderMode>(validMode(storedMode) ? storedMode : 'paper')
+  const [mode, setModeState] = useState<ReaderMode>(isMode(storedMode) ? storedMode : 'paper')
   const [page, setPage] = useState<Page>(currentPage)
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [regions, setRegions] = useState<RegionsPayload | null>(null)
@@ -126,7 +131,10 @@ function App() {
   const refreshRegions = () => { api<RegionsPayload>('/api/admin/regions').then(setRegions).catch(() => setError('load')) }
 
   useEffect(() => { document.documentElement.lang = lang }, [lang])
-  // On a phone the keyboard opens as a visual-viewport change; the fixed bottom bar
+  // The reading mode lives on <html data-mode>, so it covers the page behind the
+  // shell and the overscroll area too; the status-bar colour follows it.
+  useEffect(() => { applyMode(mode) }, [mode])
+  // On a phone the keyboard opens as a visual-viewport change; the fixed tab bar
   // would sit on top of the field being typed into, so hide it while typing.
   useEffect(() => {
     const vv = window.visualViewport
@@ -150,7 +158,7 @@ function App() {
     refreshRegions()
     api<Settings>('/api/settings').then((settings) => {
       if (!validLang(storageGet('lnc-newsman-language')) && validLang(settings.language)) setLangState(settings.language)
-      if (!validMode(storageGet('lnc-newsman-reader-mode')) && validMode(settings.default_reader_mode)) setModeState(settings.default_reader_mode)
+      if (!isMode(storageGet('lnc-newsman-reader-mode')) && isMode(settings.default_reader_mode)) setModeState(settings.default_reader_mode)
     }).catch(() => setError('load'))
   }, [authenticated])
 
@@ -177,7 +185,7 @@ function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLa
     catch (err) { setError(err instanceof ApiError && err.status === 429 ? t.limited : t.invalid) }
     finally { setPending(false) }
   }
-  return <main className={`login-page mode-${mode}`}><section className="login-card">
+  return <main className="login-page"><section className="login-card">
     <div className="login-brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>{t.subtitle}</span></div></div>
     <div className="login-copy"><p className="eyebrow">{t.signIn}</p><h1>{t.welcome}</h1><p>{offline ? t.loadError : configured ? t.keyHint : t.missing}</p></div>
     <form onSubmit={submit} className="login-form"><label htmlFor="management-key">{t.key}</label><input id="management-key" type="password" autoComplete="current-password" autoFocus value={key} onChange={(e) => setKey(e.target.value)} placeholder="••••••••••••" /><button className="btn primary" disabled={!key || pending || !configured}>{pending ? t.checking : t.enter}</button>{error && <div className="form-error" role="alert">{error}</div>}</form>
@@ -185,27 +193,104 @@ function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLa
   </section></main>
 }
 
+const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
+
 function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions, region, setRegion, onRegionsChanged, error, setError, onCatalogChanged, onSignOut }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; setMode: (v: ReaderMode) => void; page: Page; setPage: (v: Page) => void; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; setRegion: (v: string) => void; onRegionsChanged: () => void; error: string; setError: (v: string) => void; onCatalogChanged: () => void; onSignOut: () => void }) {
   const t = copy[lang]
-  const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
-  // Mobile bottom bar: five destinations reachable with one thumb. The remaining
-  // pages stay in the desktop sidebar; nothing becomes unreachable on a phone.
-  const bottomPages: Page[] = ROUTABLE_PAGES.filter((id) => id !== 'market').slice(0, 5)
-  const setRoute = (next: Page) => { location.hash = next; setPage(next) }
-  const cycleMode = () => setMode(mode === 'paper' ? 'sepia' : mode === 'sepia' ? 'night' : 'paper')
+  // The browse panel narrows the reader: a topic from the tree, or one enabled source.
+  // Both are plain filters on /api/articles, so nothing here needs new server state.
+  const [filter, setFilter] = useState<Filter>({ topic: null, source: null })
+  const [railFilter, setRailFilter] = useState('')
+  const cycleMode = () => setMode(THEMES[(THEMES.findIndex((theme) => theme.id === mode) + 1) % THEMES.length].id)
   const signOut = async () => { try { await api('/api/auth/logout', { method: 'POST' }); onSignOut() } catch { setError('logout') } }
-  return <div className={`app-shell mode-${mode}`}>
-    <aside className="sidebar"><div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
-      <div className="app-switch" aria-label="Chuyển ứng dụng">{appLinks('newsman', isLocal()).map((link) => <a key={link.id} className={link.id === 'newsman' ? 'app-switch-link active' : 'app-switch-link'} href={link.href} aria-current={link.id === 'newsman' ? 'page' : undefined}><span aria-hidden="true">{link.icon}</span>{link.label}</a>)}</div>
-      <nav className="nav" aria-label="Primary navigation">{pages.map((id) => <button key={id} aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
-      <div className="side-divider" /><div className="sidebar-footer"><div className="version">v0.3.0 <span>· P8 mobile</span></div><button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${t[mode]}`}><span aria-hidden="true">{mode === 'night' ? '☾' : '☼'}</span>{t[mode]}</button><button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button></div>
+  const openFilter = (next: Filter) => { setFilter(next); if (page !== 'topics') setRoute('topics') }
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
+      <div className="app-switch" aria-label="Chuyển ứng dụng / Switch app">{appLinks('newsman', isLocal()).map((link) => <a key={link.id} className={link.id === 'newsman' ? 'app-switch-link active' : 'app-switch-link'} href={link.href} aria-current={link.id === 'newsman' ? 'page' : undefined}><span aria-hidden="true">{link.icon}</span>{link.label}</a>)}</div>
+      <nav className="nav" aria-label="Primary navigation">{ROUTABLE_PAGES.map((id) => <button key={id} aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+      <BrowseSidebar t={t} lang={lang} dashboard={dashboard} regions={regions} region={region} filter={filter} query={railFilter} setQuery={setRailFilter} onPick={openFilter} />
+      <div className="side-divider" />
+      <div className="sidebar-footer">
+        <div className="version">v{__APP_VERSION__} <span>· P8 UI</span></div>
+        <button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}><span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>{themeName(mode, lang)}</button>
+        <button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button>
+      </div>
     </aside>
-    <main className="page-shell"><header className="page-header"><div><div className="breadcrumb">LNC / NEWSMAN</div><h1>{t[page]}</h1></div><div className="header-actions"><div className="region-picker">{regions && <Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} />}</div><button className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button><button className="icon-button" aria-label={t.refresh} onClick={() => location.reload()}>↻</button></div></header>
+    <main className="page-shell">
+      <header className="page-header">
+        <div><div className="breadcrumb">LNC / NEWSMAN</div><h1>{t[page]}</h1></div>
+        <div className="header-actions">
+          <div className="region-picker">{regions && <Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} />}</div>
+          <button className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button>
+          <button className="icon-button" aria-label={t.refresh} onClick={() => location.reload()}>↻</button>
+        </div>
+      </header>
       {regions && <div className="mobile-region-bar"><Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} /></div>}
       {error && <div className="alert error" role="alert"><strong>{error === 'logout' ? t.failedLogout : t.loadError}</strong><button onClick={() => setError('')}>{t.dismiss}</button></div>}
-      <div className="page-content">{page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} />}{page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} />}{page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}{page === 'market' && <Market t={t} lang={lang} region={region} />}{page === 'alerts' && <AlertsPage t={t} lang={lang} />}{page === 'settings' && <SettingsPage t={t} lang={lang} setLang={setLang} setMode={setMode} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}{!['today', 'topics', 'regions', 'market', 'alerts', 'settings'].includes(page) && <EmptyPage t={t} />}</div>
+      <div className="page-content">
+        {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} />}
+        {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} />}
+        {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}
+        {page === 'market' && <Market t={t} lang={lang} region={region} />}
+        {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
+        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}
+        {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
+      </div>
     </main>
-    <nav className="bottom-nav" aria-label="Điều hướng chính">{bottomPages.map((id) => <button key={id} type="button" className={page === id ? 'bottom-nav-item active' : 'bottom-nav-item'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="bottom-nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+    <nav className="tabbar" aria-label={t.tabbarLabel}>{ROUTABLE_PAGES.filter((id) => id !== 'market').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+  </div>
+  function setRoute(next: Page) { location.hash = next; setPage(next) }
+}
+
+function themeName(mode: ReaderMode, lang: Lang): string {
+  const spec = THEMES.find((theme) => theme.id === mode) ?? THEMES[0]
+  return lang === 'vi' ? spec.vi : spec.en
+}
+
+/**
+ * Desktop browse list (W1 of the shared UI plan): the same filter the reader uses,
+ * expressed as counts. Phones get the tab bar instead and never see this panel.
+ */
+function BrowseSidebar({ t, lang, dashboard, regions, region, filter, query, setQuery, onPick }: { t: Copy; lang: Lang; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; filter: Filter; query: string; setQuery: (v: string) => void; onPick: (v: Filter) => void }) {
+  const topics = dashboard?.topics ?? []
+  const sources = dashboard?.sources ?? []
+  const counts = dashboard?.stats.topic_counts ?? {}
+  const needle = query.trim().toLowerCase()
+  const matches = (label: string) => !needle || label.toLowerCase().includes(needle)
+  const topicLabel = (topic: Topic) => lang === 'vi' ? topic.label_vi : topic.label_en
+  const total = (slug: string, seen = new Set<string>()): number => {
+    if (seen.has(slug)) return 0
+    seen.add(slug)
+    return (counts[slug] ?? 0) + topics.filter((item) => item.parent_slug === slug).reduce((sum, child) => sum + total(child.slug, seen), 0)
+  }
+  const shownTopics = topics.filter((topic) => matches(topicLabel(topic)))
+  const shownSources = sources.filter((source) => matches(source.name))
+  const shownRegions = (regions?.data ?? []).filter((item) => item.enabled && matches(lang === 'vi' ? item.label_vi : item.label_en))
+  return <div className="side-shelves">
+    <label className="side-filter field"><span className="field-label">{t.quickFilter}</span><input type="search" value={query} placeholder={t.filterPlaceholder} onChange={(event) => setQuery(event.target.value)} /></label>
+    <button type="button" className={filter.topic === null && filter.source === null ? 'side-all active' : 'side-all'} onClick={() => onPick({ topic: null, source: null })}><span>{t.browseAll}</span><em>{dashboard?.stats.articles_total ?? '—'}</em></button>
+    <div className="side-group">
+      <div className="side-group-head" role="presentation"><span>{t.byRegion}</span><i>{lang === 'vi' ? 'đang bật' : 'on'}</i></div>
+      <div className="side-items">
+        {shownRegions.length === 0 && <p className="index-empty">{t.noMatch}</p>}
+        {shownRegions.map((item) => <button key={item.code} type="button" className={region === item.code ? 'side-item active' : 'side-item'} onClick={() => onPick({ topic: null, source: null })} title={item.code}><span>{lang === 'vi' ? item.label_vi : item.label_en}</span><em>{item.source_count}</em></button>)}
+      </div>
+    </div>
+    <div className="side-group">
+      <div className="side-group-head" role="presentation"><span>{t.byTopic}</span><i>{topics.length}</i></div>
+      <div className="side-items">
+        {shownTopics.length === 0 && <p className="index-empty">{t.noMatch}</p>}
+        {shownTopics.map((topic) => <button key={topic.slug} type="button" className={filter.topic === topic.slug ? 'side-item active' : 'side-item'} onClick={() => onPick({ topic: topic.slug, source: null })} title={topic.slug}><span>{topicLabel(topic)}</span><em>{total(topic.slug)}</em></button>)}
+      </div>
+    </div>
+    <div className="side-group">
+      <div className="side-group-head" role="presentation"><span>{t.bySource}</span><i>{sources.length}</i></div>
+      <div className="side-items">
+        {shownSources.length === 0 && <p className="index-empty">{t.noMatch}</p>}
+        {shownSources.slice(0, 40).map((source) => <button key={source.slug} type="button" className={filter.source === source.slug ? 'side-item active' : 'side-item'} onClick={() => onPick({ topic: null, source: source.slug })} title={`${source.slug} · ${source.region}`}><span>{source.name}</span><em>{source.articles}</em></button>)}
+      </div>
+    </div>
   </div>
 }
 
@@ -219,24 +304,28 @@ function topicLabel(lang: Lang, topics: Topic[] | undefined, slug: string | null
   const topic = topics?.find((item) => item.slug === slug)
   return topic ? (lang === 'vi' ? topic.label_vi : topic.label_en) : null
 }
-function ArticleList({ t, lang, topic, topics, region }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string }) {
+function useArticles(topic: string | null, region: string, source: string | null, pageSize = 30) {
   const [items, setItems] = useState<Article[] | null>(null)
   const [error, setError] = useState(false)
   const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
-  const pageSize = 30
   const load = async (offset: number) => {
     setBusy(true); setError(false)
     try {
-      const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
-      if (topic) query.set('topic', topic)
-      if (region) query.set('region', region)
-      const result = await api<{ data: Article[] }>(`/api/articles?${query}`)
+      const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
+      if (topic) params.set('topic', topic)
+      if (source) params.set('source', source)
+      if (region) params.set('region', region)
+      const result = await api<{ data: Article[] }>(`/api/articles?${params}`)
       setItems((current) => offset === 0 || !current ? result.data : [...current, ...result.data])
       setMore(result.data.length === pageSize)
     } catch { setError(true) } finally { setBusy(false) }
   }
-  useEffect(() => { setItems(null); void load(0) }, [topic, region])
+  useEffect(() => { setItems(null); void load(0) }, [topic, region, source])
+  return { items, error, more, busy, load }
+}
+function ArticleList({ t, lang, topic, topics, region, source, limit }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; limit?: number }) {
+  const { items, error, more, busy, load } = useArticles(topic, region ?? '', source ?? null, limit)
   if (error && !items) return <p className="form-error" role="alert">{t.loadError}</p>
   if (!items) return <p className="muted" role="status">{t.loading}</p>
   if (items.length === 0) return <div className="empty-card"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div>
@@ -249,16 +338,66 @@ function ArticleList({ t, lang, topic, topics, region }: { t: Copy; lang: Lang; 
       <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>
       <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
     </article>
-  })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}{more && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : t.loadMore}</button>}</div>
+  })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}{more && !limit && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : t.loadMore}</button>}</div>
 }
-function Today({ t, lang, dashboard, region, setPage }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void }) {
-  const stats = dashboard?.stats
-  return <div className="content-stack"><section className="welcome-grid"><div className="welcome-card"><div className="eyebrow">{new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</div><h2>{t.briefing}</h2><p>{t.briefingSub}</p><div className="welcome-actions"><button className="btn primary" onClick={() => setPage('topics')}>{t.topics} <span>→</span></button><span className="quiet-note">{stats ? (stats.collector_enabled ? t.collectorOn : t.collectorOff) : ''}</span></div></div><div className="signal-card"><span className="signal-ring">◎</span><div><strong>{stats ? stats.articles_24h : '—'}</strong><span>{t.articles24h}</span></div><div className="signal-line" /><span className="muted">{stats ? `${stats.sources_enabled} · ${t.sourcesEnabled}${stats.sources_paused ? ` · ${stats.sources_paused} ${t.sourcesPaused.toLowerCase()}` : ''}` : '—'}</span></div></section>
-    <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{t.latest}</h2></div><span className="muted">{stats ? `${stats.articles_total} · ${t.articlesTotal}` : '—'}</span></section><ArticleList t={t} lang={lang} topic={null} topics={dashboard?.topics} region={region} /></div>
+
+/**
+ * A home rail: a heading, an optional "see all" and a horizontal strip. Rails are the
+ * home page the shared UI plan asks for (Latest / Alerts / Following) and are built
+ * only from endpoints that already exist.
+ */
+function Rail({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return <section className="rail"><div className="rail-head"><h2 className="section-title">{title}</h2>{action}</div><div className="rail-strip">{children}</div></section>
 }
-function Topics({ t, lang, dashboard, region }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string }) {
-  const [selected, setSelected] = useState<string | null>(null)
+
+function MiniArticle({ lang, item, topics }: { lang: Lang; item: Article; topics?: Topic[] }) {
+  return <article className="mini-card"><span className="mini-tier">{item.source_tier}</span><a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a><div className="article-meta"><span>{item.source_name}</span>{topicLabel(lang, topics, item.topic_slug) && <span>· {topicLabel(lang, topics, item.topic_slug)}</span>}<span>· {formatDate(lang, item.published_at) ?? formatDate(lang, item.fetched_at) ?? t_none(lang)}</span></div></article>
+}
+function t_none(lang: Lang) { return lang === 'vi' ? 'không rõ ngày' : 'no date' }
+
+function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; onPick: (v: Filter) => void }) {
   const topics = dashboard?.topics ?? []
+  const sources = dashboard?.sources ?? []
+  const [latest, setLatest] = useState<Article[] | null>(null)
+  const [watched, setWatched] = useState<Article[] | null>(null)
+  const [alerts, setAlerts] = useState<AlertDelivery[] | null>(null)
+  useEffect(() => {
+    const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
+    api<{ data: Article[] }>(`/api/articles?limit=8${suffix}`).then((payload) => setLatest(payload.data)).catch(() => setLatest([]))
+    api<{ data: AlertDelivery[] }>('/api/alerts?limit=5').then((payload) => setAlerts(payload.data)).catch(() => setAlerts([]))
+  }, [region])
+  // "Following" = the enabled source with the most visible items; with no sources it
+  // stays empty rather than guessing.
+  useEffect(() => {
+    if (!sources.length) { setWatched([]); return }
+    const top = sources[0]
+    const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
+    api<{ data: Article[] }>(`/api/articles?limit=8&source=${encodeURIComponent(top.slug)}${suffix}`).then((payload) => setWatched(payload.data)).catch(() => setWatched([]))
+  }, [sources, region])
+  return <>
+    <Rail title={t.railLatest} action={<button type="button" className="text-button" onClick={() => onPick({ topic: null, source: null })}>{t.seeAll}</button>}>
+      {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} lang={lang} item={item} topics={topics} />)}
+    </Rail>
+    <Rail title={t.railAlerts} action={<button type="button" className="text-button" onClick={() => { location.hash = 'alerts' }}>{t.seeAll}</button>}>
+      {!alerts ? <p className="muted">{t.loading}</p> : alerts.length === 0 ? <p className="rail-empty">{t.alertsEmpty} — {t.alertsEmptySub}</p> : alerts.map((item) => <article className="mini-card" key={item.id}><span className={`alert-level ${item.level}`}>{item.level}</span><a href={item.article_url} target="_blank" rel="noopener noreferrer">{item.article_title}</a><div className="article-meta"><span>{lang === 'vi' ? item.rule_label_vi : item.rule_label_en}</span><span>· {formatDate(lang, new Date(item.created_at * 1000).toISOString())}</span></div></article>)}
+    </Rail>
+    <Rail title={t.railWatch} action={sources.length > 0 ? <button type="button" className="text-button" onClick={() => onPick({ topic: null, source: sources[0].slug })}>{sources[0].name}</button> : undefined}>
+      {!watched ? <p className="muted">{t.loading}</p> : watched.length === 0 ? <p className="rail-empty">{t.emptyRail}</p> : watched.map((item) => <MiniArticle key={item.id} lang={lang} item={item} topics={topics} />)}
+    </Rail>
+  </>
+}
+
+function Today({ t, lang, dashboard, region, setPage, onPick }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void; onPick: (v: Filter) => void }) {
+  const stats = dashboard?.stats
+  return <div className="content-stack">
+    <section className="welcome-grid"><div className="welcome-card"><div className="eyebrow">{new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</div><h2>{t.briefing}</h2><p>{t.briefingSub}</p><div className="welcome-actions"><button className="btn primary" onClick={() => setPage('topics')}>{t.topics} <span>→</span></button><span className="quiet-note">{stats ? (stats.collector_enabled ? t.collectorOn : t.collectorOff) : ''}</span></div></div><div className="signal-card"><span className="signal-ring">◎</span><div><strong>{stats ? stats.articles_24h : '—'}</strong><span>{t.articles24h}</span></div><div className="signal-line" /><span className="muted">{stats ? `${stats.sources_enabled} · ${t.sourcesEnabled}${stats.sources_paused ? ` · ${stats.sources_paused} ${t.sourcesPaused.toLowerCase()}` : ''}` : '—'}</span></div></section>
+    <HomeRails t={t} lang={lang} dashboard={dashboard} region={region} onPick={onPick} />
+  </div>
+}
+
+function Topics({ t, lang, dashboard, region, filter, setFilter }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; filter: Filter; setFilter: (v: Filter) => void }) {
+  const topics = dashboard?.topics ?? []
+  const sources = dashboard?.sources ?? []
   const parentTrail = (topic: Topic): string => {
     const ancestors: string[] = []
     const seen = new Set([topic.slug])
@@ -279,11 +418,19 @@ function Topics({ t, lang, dashboard, region }: { t: Copy; lang: Lang; dashboard
     return (dashboard?.stats.topic_counts[slug] ?? 0) + topics.filter((item) => item.parent_slug === slug).reduce((sum, child) => sum + total(child.slug, seen), 0)
   }
   if (!dashboard) return <p className="muted">{t.loadError}</p>
-  return <div className="content-stack"><section className="section-heading"><div><span className="eyebrow">{t.topics}</span><h2>{t.sampleTopics}</h2><p>{t.sampleTopicsSub}</p></div></section>
-    <div className="topic-grid">{topics.map((topic) => <button type="button" className="topic-card" key={topic.slug} aria-pressed={selected === topic.slug} onClick={() => setSelected(selected === topic.slug ? null : topic.slug)}><span className="topic-dot" />{parentTrail(topic) && <p>{parentTrail(topic)} →</p>}<h3>{lang === 'vi' ? topic.label_vi : topic.label_en}</h3><p>{lang === 'vi' ? topic.label_en : topic.label_vi}</p><span className="topic-count">{total(topic.slug)} {t.topicArticles}</span></button>)}</div>
-    <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{selected ? topicLabel(lang, topics, selected) : t.latest}</h2></div><div className="topic-chip-row"><button type="button" className="topic-chip" aria-pressed={selected === null} onClick={() => setSelected(null)}>{t.allTopics}</button></div></section>
-    <ArticleList t={t} lang={lang} topic={selected} topics={topics} region={region} /></div>
+  const activeSource = sources.find((source) => source.slug === filter.source)
+  const chipLabel = filter.source ? activeSource?.name ?? filter.source : filter.topic ? topicLabel(lang, topics, filter.topic) ?? filter.topic : null
+  return <div className="content-stack">
+    <div className="chip-row">
+      <button type="button" className={filter.topic === null && filter.source === null ? 'chip active' : 'chip'} onClick={() => setFilter({ topic: null, source: null })}>{t.allTopics}</button>
+      {chipLabel && <button type="button" className="chip active filter-chip" onClick={() => setFilter({ topic: null, source: null })}>{t.showing}: {chipLabel}<span aria-hidden="true"> ×</span></button>}
+    </div>
+    {!filter.source && <div className="topic-grid">{topics.map((topic) => <button type="button" className="topic-card" key={topic.slug} aria-pressed={filter.topic === topic.slug} onClick={() => setFilter({ topic: filter.topic === topic.slug ? null : topic.slug, source: null })}><span className="topic-dot" />{parentTrail(topic) && <p>{parentTrail(topic)} →</p>}<h3>{lang === 'vi' ? topic.label_vi : topic.label_en}</h3><p>{lang === 'vi' ? topic.label_en : topic.label_vi}</p><span className="topic-count">{total(topic.slug)} {t.topicArticles}</span></button>)}</div>}
+    <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{filter.source ? activeSource?.name ?? t.bySource : filter.topic ? topicLabel(lang, topics, filter.topic) : t.latest}</h2></div></section>
+    <ArticleList t={t} lang={lang} topic={filter.topic} topics={topics} region={region} source={filter.source} />
+  </div>
 }
+
 function AlertsPage({ t, lang }: { t: Copy; lang: Lang }) {
   const [items, setItems] = useState<AlertDelivery[] | null>(null)
   const [unread, setUnread] = useState(0)
@@ -315,7 +462,7 @@ function AlertsPage({ t, lang }: { t: Copy; lang: Lang }) {
   if (!items) return <p className="muted" role="status">{t.loading}</p>
   return <div className="content-stack">
     <section className="section-heading"><div><span className="eyebrow">{t.alertsTitle}</span><h2>{unread > 0 ? `${unread} ${t.alertsUnread}` : t.alertsTitle}</h2><p>{t.alertsSub}</p></div>
-      <div className="section-actions alerts-actions"><button type="button" className="btn secondary" disabled={busy} onClick={() => void sweep()}>{busy ? t.loading : t.alertsSweep}</button>
+      <div className="btn-row section-actions"><button type="button" className="btn secondary" disabled={busy} onClick={() => void sweep()}>{busy ? t.loading : t.alertsSweep}</button>
         <button type="button" className="btn secondary" disabled={busy || unread === 0} onClick={() => void markAll()}>{t.markAllRead}</button></div></section>
     {notice && <p className="muted" role="status">{notice}</p>}
     {error && <p className="form-error" role="alert">{t.loadError}</p>}
@@ -360,7 +507,7 @@ function AlertRulesManager({ t, lang }: { t: Copy; lang: Lang }) {
   </section>
 }
 function EmptyPage({ t }: { t: Copy }) { return <div className="content-stack"><div className="empty-card"><div className="empty-art">✦</div><h3>{t.emptyTitle}</h3><p>{t.emptySub}</p></div></div> }
-function SettingsPage({ t, lang, setLang, setMode, onCatalogChanged, onRegionsChanged, regions, dashboard }: { t: Copy; lang: Lang; setLang: (v: Lang) => void; setMode: (v: ReaderMode) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
+function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onRegionsChanged, regions, dashboard }: { t: Copy; lang: Lang; mode: ReaderMode; setMode: (v: ReaderMode) => void; setLang: (v: Lang) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [error, setError] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -384,16 +531,18 @@ function SettingsPage({ t, lang, setLang, setMode, onCatalogChanged, onRegionsCh
   }
   if (!settings) return <div role={error ? 'alert' : 'status'} className="loading-inline">{error ? t.settingsError : t.loading}</div>
   const stats = dashboard?.stats
+  const themeOptions = THEMES.map((theme) => ({ value: theme.id, label: lang === 'vi' ? theme.vi : theme.en }))
   return <div className="content-stack settings-page"><section className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2>{t.settingsTitle}</h2><p>{t.settingsSub}</p></div>{saved && <span className="save-state" role="status">✓ {t.savedToast}</span>}</section>
     {error && <div className="form-error" role="alert">{t.settingsError}</div>}
     <div className="settings-grid"><section className="settings-card"><div className="card-heading"><span className="card-icon">Aa</span><div><h3>{t.settingsTitle}</h3><p>{t.settingsSub}</p></div></div>
       <Select label={t.language} value={settings.language} options={[{ value: 'vi', label: 'Tiếng Việt' }, { value: 'en', label: 'English' }]} onChange={(value) => { setSaved(false); setSettings({ ...settings, language: value as Lang }) }} />
-      <Select label={t.readerMode} value={settings.default_reader_mode} options={[{ value: 'paper', label: t.paper }, { value: 'sepia', label: t.sepia }, { value: 'night', label: t.night }]} onChange={(value) => { setSaved(false); setSettings({ ...settings, default_reader_mode: value as ReaderMode }) }} />
+      <Select label={t.readerMode} value={settings.default_reader_mode} options={themeOptions} onChange={(value) => { setSaved(false); setSettings({ ...settings, default_reader_mode: value as ReaderMode }) }} />
+      <div className="theme-grid" role="group" aria-label={t.themeLabel}>{THEMES.map((theme) => <button key={theme.id} type="button" className={mode === theme.id ? 'theme-swatch active' : 'theme-swatch'} style={{ background: theme.bg, color: theme.dark ? '#e8e0d4' : '#332f2a' }} aria-pressed={mode === theme.id} onClick={() => setMode(theme.id)}><span className="swatch-sample" aria-hidden="true">Aa</span><span className="swatch-name">{lang === 'vi' ? theme.vi : theme.en}</span></button>)}</div>
     </section><section className="settings-card"><div className="card-heading"><span className="card-icon">◷</span><div><h3>{t.nextPhase}</h3><p>{t.collectorHelp}</p></div></div>
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="actions-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -424,7 +573,7 @@ function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; 
   }
   return <section className="regions-admin" aria-labelledby="regions-title">
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="regions-title">{t.regionsTitle}</h2><p>{t.regionsSub}</p></div>
-      <div className="section-actions regions-actions"><span className="muted">{pack?.last_loaded_at ? `${t.packLast}: ${new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(pack.last_loaded_at * 1000))}` : t.packNever}</span>
+      <div className="btn-row section-actions"><span className="muted">{pack?.last_loaded_at ? `${t.packLast}: ${new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(pack.last_loaded_at * 1000))}` : t.packNever}</span>
         <button type="button" className="btn secondary" disabled={busy !== ''} onClick={() => void reload()}>{busy === 'reload' ? t.reloading : t.reloadRegions}</button></div></div>
     {error && <div className="form-error" role="alert">{t.regionError}</div>}
     {!regions ? <p className="muted" role="status">{t.loading}</p> : <div className="regions-layout">
@@ -521,7 +670,7 @@ function HubManager({ t }: { t: Copy }) {
     <form className="catalog-form" onSubmit={saveKey} autoComplete="off">
       <h3>{t.hubKeyName}</h3>
       <label className="field"><span>{t.hubSecret}</span><input required type="password" autoComplete="new-password" maxLength={8192} value={key} onChange={(e) => setKey(e.target.value)} /><small>{t.hubKeyHint}</small></label>
-      <div className="catalog-form-actions actions-row">
+      <div className="btn-row catalog-form-actions">
         <button className="btn primary" disabled={busy || !key}>{busy ? t.saving : t.saveSecret}</button>
         <button type="button" className="btn secondary" disabled={busy || !status?.configured} onClick={() => void runCheck()}>{busy ? t.hubChecking : t.hubCheck}</button>
       </div>
@@ -570,7 +719,7 @@ function SecretsManager({ t }: { t: Copy }) {
       <form className="catalog-form" onSubmit={save} autoComplete="off">
         <label className="field"><span>{t.secretName}</span><input required maxLength={64} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={name} onChange={(e) => setName(e.target.value)} placeholder="provider-api-key" /></label>
         <label className="field"><span>{t.secretValue}</span><input required type="password" autoComplete="new-password" maxLength={8192} value={value} onChange={(e) => setValue(e.target.value)} /></label>
-        <div className="catalog-form-actions"><button className="btn primary" disabled={busy || closed || !name || !value}>{busy ? t.saving : t.saveSecret}</button></div>
+        <div className="btn-row catalog-form-actions"><button className="btn primary" disabled={busy || closed || !name || !value}>{busy ? t.saving : t.saveSecret}</button></div>
       </form>
     </div>
   </section>
