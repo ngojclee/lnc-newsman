@@ -57,9 +57,11 @@ services:
       - CONNECTOR_BEARER=${CONNECTOR_BEARER:-}
       - DELEGATION_SECRET=${DELEGATION_SECRET:-}
       - CONNECTOR_AUDIENCE=${CONNECTOR_AUDIENCE:-lnc-newsman}
-      # Both scopes by default, matching the connector record. Set this to
-      # `newsman:read` to keep a deployment read-only without touching the code.
-      - CONNECTOR_MAX_SCOPES=${CONNECTOR_MAX_SCOPES:-newsman:read,newsman:write}
+      # Deliberately no default: an empty value means "the code's ceiling applies",
+      # which is both scopes this build implements. A compose default would silently
+      # become the real ceiling for every deployment that reads this file, and could
+      # narrow it below what the code grants without anyone noticing.
+      - CONNECTOR_MAX_SCOPES=${CONNECTOR_MAX_SCOPES:-}
       - RUST_LOG=${RUST_LOG:-lnc_newsman=info,tower_http=warn}
     volumes:
       - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data

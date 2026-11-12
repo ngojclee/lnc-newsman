@@ -140,6 +140,16 @@ Redeploy để container nhận env mới.
 lưu hai tên `connector-bearer` và `delegation-secret`. Chúng vào kho mã hóa sẵn có
 (`LNC_MASTER_KEY`), và có hiệu lực **ngay** trên tiến trình đang chạy.
 
+**Owner không cần đặt env nào cho Newsman.** Cả ba giá trị đều khai trong compose dạng
+**rỗng**, và rỗng nghĩa là "để code quyết định": hai khóa rơi xuống giá trị dán ở `/admin`,
+còn trần scope lấy từ chính build (`newsman:read` + `newsman:write`). Không cần redeploy để
+"ăn" env. Chỉ đặt `CONNECTOR_MAX_SCOPES` nếu muốn trần **hẹp hơn** mặc định.
+
+Nguyên tắc đằng sau (đáng nhớ khi sửa sau này): **giá trị mặc định nằm ở tầng nào thì hiệu
+lực giới hạn ở tầng đó.** Mặc định trong code đúng với mọi deployment; mặc định trong
+`stack.yml` chỉ đúng với deployment đọc file đó — và có thể âm thầm hạ trần thấp hơn thứ
+code cho phép.
+
 Quy tắc `env_or_cfg`: **env thắng** khi có giá trị; env trống thì dùng giá trị trong
 `/admin`. Vì vậy có thể ghép nối ở `/admin` trước rồi chuyển sang env sau mà không phải
 xoá gì. Nếu để cả hai trống, connector **chưa ghép nối** và mọi call trả 401 — cố ý

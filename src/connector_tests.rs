@@ -730,3 +730,19 @@ fn the_admin_card_refuses_what_it_cannot_honour() {
     assert!(!rendered.contains(BEARER), "{rendered}");
     assert!(!rendered.contains(SECRET), "{rendered}");
 }
+
+/// The ceiling must come from the build, not from whatever a deployment file happens to
+/// set. An empty `CONNECTOR_MAX_SCOPES` therefore means "both scopes this build
+/// implements" — a compose default that narrowed it would be a ceiling nobody declared.
+#[test]
+fn an_empty_ceiling_means_every_scope_this_build_has() {
+    let mut state = state_with_connector();
+    std::sync::Arc::get_mut(&mut state)
+        .expect("not shared")
+        .connector
+        .max_scopes = None;
+    assert_eq!(
+        resolve(&state).max_scopes,
+        ALL_SCOPES.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
+}
