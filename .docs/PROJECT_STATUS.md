@@ -155,6 +155,20 @@ The other half of P8: the endpoint can now be mounted on the Hub. The Hub is MCP
 - **Deployed**: GitOps was wedged for ~10 min (`lastSyncDate: 0`, three workflows `syncing` at once, zero Docker image/build events in an hour) and cleared on its own — **no Portainer restart, no stack stop, no `stackFileContent`**. Live: `/api/app-info` `0.4.4`, container `4035d7430f09` healthy, stack status 1. Verified on production: no credential → 401 `unauthorized`; a Hub-shaped call before pairing → 401 `connector_auth_required`; the reader API key still lists all seven bare-named tools and `regions` returns data.
 - **Not done**: the connector record on the Hub itself (the owner creates it from the pairing values in the hand-off) and enabling it there. No record was created, no key printed, no grant changed.
 
+## P8 write surface — notes, briefs and flags for Hub agents (2026-11-12, v0.5.0)
+
+Owner's decision: let an outside agent write analyses and notes through the Business MCP Hub, and nothing more.
+
+- **`newsman:write`** (new scope) unlocks six tools: `note_create`/`note_update`/`note_delete`, `analysis_create`/`analysis_update`, `article_flag`. Three read tools were added too (`notes`, `analyses`, `write_log`). A write tool needs **both** scopes: writing a note on an article means seeing that article first.
+- **The boundary is a shape, not a blocklist.** Every write tool touches one of three new tables (`newsman_notes`, `newsman_analyses`, `newsman_article_flags`); sources, regions, connectors, secrets, the collector switch and alert delivery are not reachable at all, so they stay behind `/admin`. A test asserts no write tool is named after a configuration surface.
+- **The author is the verified delegation**, never an argument. `author_client` comes from the `Caller` the boundary built, and ownership is enforced on update/delete: a note the owner wrote in the web UI (`author_client` NULL) and one another client wrote are both refused.
+- **A real bug found by measuring instead of trusting the schema**: `additionalProperties: false` is a note to the *client*, not something an MCP server enforces. `{"author":"louis"}` was silently dropped and the call succeeded, so an agent would believe its forgery worked. The server now refuses an undeclared argument (`unknown argument: author`), with a test and an HTTP smoke case.
+- **Every write is audited** in `newsman_write_log` (time, client id, app id, tool, record kind, record id), readable through the `write_log` tool and `/api/admin/connector/writes`. Metadata only — never the note text.
+- **Ids resolve against visible rows**: a note needs an existing article/document, a cited article id must be stored, a brief cannot name a disabled region or topic, lengths are bounded (`too_long`, `too_many_sources`, `invalid_sources`).
+- **`GET /api/admin/connector/analyses`** and the admin card show the **author label** so the owner can tell agent output from their own.
+- **Tests: 254** (11 write tests + 1 argument test), clippy `-D warnings` clean, UI build clean. Measured over real HTTP: no scope → `-32601`, with scope → note stored and attributed to the client id, forged author → refused, bad citation → refused, audit row present, reader API key path unchanged.
+- Migration **18** is additive only (four `CREATE TABLE`, no `DROP`, no `DELETE`); verified applying cleanly on a fresh database before deploying.
+
 ## P7 Telegram channel (2026-11-12, v0.4.1)
 
 Requested by the owner through the UI lane: alerts into Telegram, two configuration paths, one decision shared with LNC Library (`.docs/l8-agent-chat-telegram.md`, part B).

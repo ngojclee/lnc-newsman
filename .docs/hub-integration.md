@@ -160,6 +160,32 @@ Hub tự thêm namespace. Vì vậy `/mcp` của Newsman công bố **tên trầ
 tiền tố vẫn được **chấp nhận** khi gọi (strip trước khi tra) để client viết cho 0.4.3
 không gãy.
 
+## 4b. Scope ghi (`newsman:write`, từ 0.5.0)
+
+Agent được cấp `newsman:write` **và** `newsman:read` mới ghi được, và chỉ ghi dữ liệu
+phân tích của Newsman:
+
+| Tool | Ghi gì |
+|---|---|
+| `note_create` / `note_update` / `note_delete` | ghi chú trên một bài hoặc một tài liệu |
+| `analysis_create` / `analysis_update` | brief/tổng hợp, có danh sách id bài nguồn |
+| `article_flag` | nhãn ngắn trên một bài |
+
+**Không** mở qua connector: cấu hình nguồn/vùng, connector, khoá provider, bật collector,
+gửi alert ra ngoài — vẫn chỉ qua `/admin`.
+
+Bốn điều đáng biết khi vận hành:
+
+1. **Tác giả luôn là `client_id` của Hub**, không phải tham số. Gửi `author` trong
+   arguments sẽ bị từ chối (`unknown argument`), không bị bỏ qua — nếu bỏ qua im lặng,
+   agent sẽ tưởng đã đặt được.
+2. **Sửa/xoá chỉ trên bản ghi của chính mình.** Ghi chú owner viết trong web UI
+   (`author_client` NULL) và ghi chú của agent khác đều không sửa được.
+3. **Mỗi lần ghi có một dòng `newsman_write_log`** (thời điểm, client_id, tool, id bản
+   ghi) — xem ở `/admin` card connector hoặc qua tool `write_log`.
+4. **Trần scope**: `CONNECTOR_MAX_SCOPES` mặc định giờ là `newsman:read,newsman:write`.
+   Muốn connector chỉ đọc thì đặt lại `newsman:read`.
+
 ## 5. Những gì phía Newsman từ chối và mã lỗi
 
 | Tình huống | HTTP | `error` |
@@ -169,10 +195,10 @@ không gãy.
 | Thiếu header delegation, sai chữ ký, sai audience | 403 | `delegation_denied` |
 | Timestamp lệch quá 90 s | 403 | `delegation_denied` |
 | Nonce đã dùng trong 300 s | 403 | `delegation_denied` |
-| Scope ngoài trần (`newsman:read`) | 403 | `delegation_denied` |
+| Scope ngoài trần | 403 | `delegation_denied` |
 | Tool không tồn tại **hoặc** thiếu scope | 200 (JSON-RPC) | `-32601` + `Unknown or unauthorized MCP tool` |
 
-Chỉ có **một** scope và **không có** tool ghi; `CONNECTOR_MAX_SCOPES` từ chối mọi giá trị
+Có hai scope: `newsman:read` và `newsman:write`. `CONNECTOR_MAX_SCOPES` từ chối mọi giá trị
 khác thay vì âm thầm mở rộng.
 
 `POST /mcp` được miễn header `X-Requested-With` khi request mang bearer connector (Hub
