@@ -67,6 +67,7 @@ impl Database {
                 16,
                 include_str!("../migrations/0016_alert_telegram.sql"),
             ),
+            (17, include_str!("../migrations/0017_legal_sources.sql")),
         ] {
             let applied: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",

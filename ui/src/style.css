@@ -348,7 +348,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
   .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; position: fixed; inset: auto 0 0 0; z-index: 20;
     height: calc(var(--tabbar-h) + var(--safe-b));
     padding: 0 calc(6px + env(safe-area-inset-right)) var(--safe-b) calc(6px + env(safe-area-inset-left));
-    background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    /* Solid, not translucent-on-blur: Lightning CSS drops `backdrop-filter` from the
+       build, which left a 6%-transparent bar with the page text showing through it.
+       A tab bar must be readable over any content, so it is opaque outright. */
+    background: var(--paper);
     border-top: 1px solid var(--line); }
   .tab { display: grid; place-items: center; align-content: center; gap: 3px; min-height: var(--tabbar-h);
     border: 0; border-radius: 12px; padding: 6px 2px; color: var(--muted); background: transparent;
@@ -460,3 +463,17 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .chip:hover { color: var(--ink); }
 .chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .filter-chip { font-weight: 700; }
+
+/* Legal-source card: the terms quote is evidence, kept available but folded away so a
+   settings row stays a row instead of turning into a wall of legal text. */
+.legal-terms { margin-top: 4px; font-size: 0.82rem; }
+.legal-terms summary { cursor: pointer; color: var(--muted, #666); }
+.legal-terms blockquote { margin: 6px 0 2px; padding-left: 10px; border-left: 2px solid var(--line, #ddd); white-space: pre-wrap; }
+.legal-terms a { word-break: break-all; }
+/* Why a source is not followed is a sentence, not a status chip: give it its own line
+   and the muted colour, so it never reads like a health metric. */
+.legal-reason { color: var(--muted, #666); font-size: 0.82rem; }
+
+/* In a legal-source card the action slot often holds a short status word rather than a
+   button; it is not an interactive row, so keep the text at body size. */
+.legal-sources .catalog-entry-actions { align-items: center; font-size: 0.82rem; }

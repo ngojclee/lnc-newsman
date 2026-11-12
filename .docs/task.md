@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.4.1 — P7 kênh Telegram relay/direct, sửa sidebar bị giãn)
+Cập nhật: 12/11/2026 (v0.4.2 — P8 nguồn văn bản pháp luật có cổng điều khoản; P7 Telegram)
 
 ## Đã xong
 
@@ -171,6 +171,30 @@ Cập nhật: 12/11/2026 (v0.4.1 — P7 kênh Telegram relay/direct, sửa sideb
 - [x] 192 test xanh (7 MCP + 2 tài liệu), clippy `-D warnings` sạch.
 - [x] Kiểm tay trên bản local: `initialize` → protocol `2025-06-18`, `serverInfo.name` `lnc-newsman`; không khóa → 401; `tools/list` 7 tên; gọi `latest_articles` → `isError:false`.
 - [ ] Đăng ký `/mcp` lên Agent Hub — **chờ khóa Hub của chủ dự án**.
+
+## P8 — nguồn văn bản pháp luật (12/11/2026, v0.4.2)
+
+Yêu cầu qua lane Finance Overview, theo `.docs/legal-sources.md` (repo `lnc-library-ui`) §8: **Newsman phát hiện + cảnh báo, Library giữ toàn văn.** Ràng buộc cứng: kiểm điều khoản từng nguồn trước khi lấy, không tải hàng loạt, không dùng nguồn thương mại.
+
+- [x] Đọc điều khoản 4 nguồn, ghi lại URL + ngày + trích nguyên văn: govinfo = `not_required` (GPO: public documents dùng lại được, cần ghi nguồn; có RSS theo bộ sưu tập, không khóa); Légifrance = `verified` (licence ouverte 2.0 + CGU PISTE + CGU API + quota, **cần đăng ký khóa**); EUR-Lex = `unverified` (trang thông báo trả 202 rỗng, feed "temporarily not available"); vbpl.vn = `unverified` (không có trang điều khoản đọc được, `robots.txt` chặn `/api/` và `/Pages/`).
+- [x] Migration 17 `legal_sources`: `terms_verdict` + `terms_checked_on` + `terms_url` + `terms_quote` + `terms_note`, ràng buộc `CHECK`; mọi dòng khởi tạo `enabled=0`.
+- [x] `src/legal.rs`: `verdict_allows_polling` chỉ nhận `verified`/`not_required`; `set_enabled` từ chối `terms_unverified`, `terms_prohibit_polling`, `no_documented_channel`, `region_disabled`; seed lại không bật lại và không ghi đè dòng chủ dự án đã sửa.
+- [x] govinfo là nguồn duy nhất có kênh kiểm chứng được ⇒ bật nó sẽ tạo luôn source `legal-govinfo` (T1, 12 giờ/lần) cho collector; không viết thêm mã mạng nào.
+- [x] API `GET /api/admin/legal-sources`, `PUT /api/admin/legal-sources/{code}`; thẻ "Nguồn văn bản pháp luật" trong Cài đặt có lý do chưa theo dõi + panel "Điều khoản" gấp gọn (trích dẫn + URL), cờ `evidence_stale` sau 180 ngày.
+- [x] Chứng minh đầu-cuối rồi tắt lại: bật `us` + govinfo → fetch lưu **100 public law**, reader trả đúng tên nguồn/T1/link gốc; sau đó tắt govinfo, tắt `us`/`eu`, xoá 100 bài + source probe.
+- [x] Hai lỗi UI thật gặp khi rà màn này: (1) Lightning CSS bỏ `backdrop-filter` khỏi bản build nên thanh tab dưới chỉ còn nền trong suốt 6% — chữ lộ qua; đã đổi sang nền đặc, đo lại 375×812; (2) nút "Bật theo dõi" hiện cả khi server chắc chắn từ chối — nay chỉ hiện khi bấm được.
+- [x] **217 test xanh** (13 test legal + 1 test hình dạng feed govinfo thật), clippy `-D warnings` sạch, UI build sạch.
+- [ ] Còn chờ chủ dự án: (a) đọc bằng chứng điều khoản trong thẻ Cài đặt rồi quyết có bật govinfo; (b) nếu muốn Légifrance → đăng ký PISTE lấy khóa + trả lời hạn mức; (c) EUR-Lex và vbpl.vn chỉ mở khi đọc được điều khoản của trang (hoặc có kênh công bố chính thức).
+
+## Rà soát giao diện cuối (checklist dùng chung, mục U)
+
+Nhận từ lane Library (`.docs/task.md` bên đó, mục "U — Rà soát giao diện cuối"). Nguyên tắc: app cho người đọc cuối — không lỗi cân đối, không chữ kiểu ghi chú kỹ thuật.
+
+- [ ] **Sidebar/kệ chủ đề-nguồn**: cân đối như Library — đã sửa `align-content: start` (v0.4.1), đo lại 1440×900: ô lọc 37 px, mục 33 px; còn phải rà nhãn nhóm và số đếm khi có dữ liệu thật.
+- [ ] **Trang đọc tin + cài đặt nguồn/vùng**: không còn chữ kỹ thuật, empty-state rõ ở trang chủ (đã có câu dẫn "Hãy thêm nguồn RSS/Atom…"); rà lại phần Cài đặt một lượt khi có dữ liệu thật.
+- [ ] **Trang alerts/briefs**: badge mức độ nhất quán, không lộ id/field thô.
+- [ ] **Mobile 375×812**: không scroll ngang; dropdown không bị cắt trong card. Đã kiểm thẻ Nguồn văn bản pháp luật (không tràn ngang); còn rà các màn còn lại.
+- [ ] **Song ngữ vi/en**: duyệt lại toàn bộ key — thẻ mới đã có đủ cả hai ngôn ngữ.
 
 ## P6–P9
 

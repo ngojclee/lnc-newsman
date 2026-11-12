@@ -18,6 +18,7 @@ mod fetch;
 mod filings;
 mod hub;
 mod llm;
+mod legal;
 mod mcp;
 mod providers;
 mod regions;
@@ -191,6 +192,13 @@ async fn main() -> anyhow::Result<()> {
         Ok(added) => tracing::info!(added, "provider connectors registered (all disabled)"),
         Err(err) => tracing::warn!(%err, "could not register provider connectors"),
     }
+    // Legal sources are seeded from their audited terms verdicts, always disabled. A
+    // source whose terms were not read can never be switched on by the gate.
+    match legal::seed(&state.db.lock().expect("database lock poisoned")) {
+        Ok(0) => {}
+        Ok(added) => tracing::info!(added, "legal sources registered (all disabled)"),
+        Err(err) => tracing::warn!(%err, "could not register legal sources"),
+    }
     collector::spawn_scheduler(state.clone());
     tracing::info!(%addr, data_dir = %state.cfg.data_dir.display(), "starting lnc-newsman");
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -255,6 +263,11 @@ fn router(state: SharedState) -> Router {
         .route(
             "/api/admin/tax-rules/{code}",
             axum::routing::put(tax::set_rule_enabled),
+        )
+        .route("/api/admin/legal-sources", get(legal::list_handler))
+        .route(
+            "/api/admin/legal-sources/{code}",
+            axum::routing::put(legal::toggle_handler),
         )
         .route("/api/admin/connectors", get(connectors::status_handler))
         .route(

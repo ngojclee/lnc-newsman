@@ -37,6 +37,7 @@ type DocsPayload = { data: DocRow[]; effective: string[] }
 type TaxDeadline = { code: string; region: string; name_vi: string; name_en: string; cadence: string; source_code: string; url: string; note: string; verified: boolean; lead_days: number; due_on: string; days_until: number; due_soon: boolean; nominal_on: string; weekend_rule: string }
 type TaxPayload = { data: TaxDeadline[]; disclaimer_vi: string; disclaimer_en: string; holidays_modelled: boolean }
 type ProviderStatus = { configured: boolean; base_host: string | null; allowed_hosts: string[]; models: [string, string, string]; agent: string; timeout_seconds: number; tokens_used_today: number; daily_budget: number; calls_today: number; has_secret: boolean }
+type LegalSource = { code: string; region: string; name_vi: string; name_en: string; access_kind: string; endpoint: string; access_note: string; licence: string; attribution: string; terms_verdict: string; terms_checked_on: string; terms_url: string; terms_quote: string; terms_note: string; rate_limit_per_day: number; enabled: boolean; pollable: boolean; block_reason: string | null; evidence_age_days: number | null; evidence_stale: boolean }
 type ConnectorStatus = { id: string; provider: string; region: string; enabled: boolean; health: string; last_error: string | null; last_run_at: number | null; next_run_at: number | null; requests_today: number; daily_quota: number; needs_secret: boolean }
 /** The reader filters a link or the sidebar can set. */
 type Filter = { topic: string | null; source: string | null }
@@ -61,7 +62,7 @@ const copy = {
     market: 'Thị trường', marketTitle: 'Chuỗi số liệu', marketSub: 'Dữ liệu số theo vùng. Chưa kết nối nhà cung cấp nào: danh sách này chỉ có khi một connector thật được duyệt và chạy.', noSeries: 'Chưa có chuỗi số liệu', noSeriesSub: 'P2 mới có kho chuỗi và khung connector. Dữ liệu thật cần chọn nhà cung cấp (plan mục 8).',
     seriesPoints: (n: number) => `${n} điểm`, observing: 'Lấy dữ liệu', latestValue: 'Giá trị mới nhất', asOf: 'Ghi nhận lúc', observedAt: 'Kỳ dữ liệu', revision: (n: number) => `bản ${n}`, noAttribution: 'Chưa có dòng ghi nguồn cho chuỗi này.',
     hubTitle: 'LNC Agent Hub', hubSub: 'Kết nối Hub cho phân loại, tóm tắt và nghiên cứu. Khóa chỉ ghi, không hiện lại. Cấu hình địa chỉ do máy chủ quyết định (biến môi trường), không nhập ở đây.', hubKeyName: 'hub-api-key', hubKeyHint: 'Khóa riêng của Newsman trên Hub. Dán vào đây; giá trị không bao giờ được trả lại.', hubCheck: 'Kiểm tra kết nối', hubChecking: 'Đang kiểm tra…', hubCheckOk: (n: number) => `Kết nối được, thấy ${n} model. Chỉ liệt kê model, chưa sinh nội dung, chưa tốn token.`, hubCheckFail: 'Không kết nối được Hub. Kiểm tra địa chỉ, allowlist host và khóa.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model theo tác vụ', hubClassify: 'Phân loại', hubSummarise: 'Tóm tắt', hubAnalyse: 'Phân tích', hubAgent: 'Agent', hubBudget: 'Token hôm nay', hubSecret: 'Khóa', hubSaved: 'Đã lưu khóa Hub.', hubHasKey: 'đã có khóa', hubNoKey: 'chưa có khóa', hubNotConfigured: 'Máy chủ chưa đặt HUB_BASE_URL hoặc host chưa nằm trong HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
+    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', legalTitle: 'Nguồn văn bản pháp luật', legalSub: 'Mỗi nguồn kèm điều khoản sử dụng đã đọc và ngày kiểm. Nguồn chưa đọc được điều khoản thì không bật được.', legalBlocked: 'Chưa được bật', legalBlockedUnverified: 'Chưa kiểm điều khoản', legalBlockedProhibited: 'Không được phép', legalTurnsOn: 'Bật theo dõi', legalTurnsOff: 'Tắt theo dõi', legalTerms: 'Điều khoản', legalChecked: 'Kiểm ngày', legalStale: 'Điều khoản đã kiểm quá lâu, cần đọc lại', legalNoChannel: 'Chưa có kênh truy cập chính thức', legalReasonUnverified: 'Chưa đọc được điều khoản sử dụng của trang nên chưa theo dõi.', legalReasonProhibited: 'Điều khoản của trang không cho phép lấy tự động.', valid_terms_unverified: 'Chưa đọc được điều khoản sử dụng nên không bật được nguồn này.', valid_terms_prohibit_polling: 'Điều khoản của trang không cho phép lấy tự động.', valid_no_documented_channel: 'Nguồn chưa có kênh truy cập chính thức.', valid_region_disabled: 'Vùng của nguồn này đang tắt.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
     // --- browse sidebar, rails and the filter chip (W1/W2 in the shared UI plan)
     browse: 'Duyệt', browseAll: 'Mọi tin đang đọc', byTopic: 'Chủ đề', byRegion: 'Vùng', bySource: 'Nguồn', quickFilter: 'Lọc nhanh', filterPlaceholder: 'Tên chủ đề hoặc nguồn…', clearFilter: 'Bỏ lọc', showing: 'Đang xem', noMatch: 'Không có mục nào khớp', railLatest: 'Tin mới nhất', railAlerts: 'Cảnh báo gần đây', railWatch: 'Theo dõi', seeAll: 'Xem tất cả', emptyRail: 'Chưa có gì', itemUnit: 'tin', tabbarLabel: 'Điều hướng một tay', themeLabel: 'Nền đọc',
   },
@@ -84,7 +85,7 @@ const copy = {
     market: 'Markets', marketTitle: 'Time series', marketSub: 'Numeric data by region. No provider is connected yet: this list only fills once a real connector is approved and running.', noSeries: 'No series yet', noSeriesSub: 'P2 provides only the series store and the connector framework. Real data needs a chosen provider (plan section 8).',
     seriesPoints: (n: number) => `${n} points`, observing: 'Fetch data', latestValue: 'Latest value', asOf: 'Known as of', observedAt: 'Period', revision: (n: number) => `revision ${n}`, noAttribution: 'This series has no credit line yet.',
     hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research. The key is write-only and never shown again. The address is server configuration (environment), not entered here.', hubKeyName: 'hub-api-key', hubKeyHint: 'Newsman’s own Hub key. Paste it here; the value is never returned.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'The server has no HUB_BASE_URL, or the host is not in HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
+    secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', legalTitle: 'Legal-text sources', legalSub: 'Each source lists the terms we read and the date we checked them. A source whose terms were not read cannot be switched on.', legalBlocked: 'Not available', legalBlockedUnverified: 'Terms not checked', legalBlockedProhibited: 'Not permitted', legalTurnsOn: 'Follow this source', legalTurnsOff: 'Stop following', legalTerms: 'Terms', legalChecked: 'Checked', legalStale: 'The terms were checked a long time ago — read them again', legalNoChannel: 'No official access channel yet', legalReasonUnverified: 'The site’s terms of use could not be read, so this source is not followed.', legalReasonProhibited: 'The site’s terms do not allow automated retrieval.', valid_terms_unverified: 'The terms of use could not be read, so this source cannot be switched on.', valid_terms_prohibit_polling: 'The site’s terms do not allow automated retrieval.', valid_no_documented_channel: 'This source has no official access channel yet.', valid_region_disabled: 'This source’s region is off.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
     browse: 'Browse', browseAll: 'Everything visible', byTopic: 'Topics', byRegion: 'Regions', bySource: 'Sources', quickFilter: 'Quick filter', filterPlaceholder: 'Topic or source name…', clearFilter: 'Clear filter', showing: 'Showing', noMatch: 'Nothing matches', railLatest: 'Latest items', railAlerts: 'Recent alerts', railWatch: 'Following', seeAll: 'See all', emptyRail: 'Nothing yet', itemUnit: 'items', tabbarLabel: 'One-handed navigation', themeLabel: 'Reading theme',
   },
 } as const
@@ -548,7 +549,7 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -783,6 +784,49 @@ function SecretsManager({ t }: { t: Copy }) {
         <div className="btn-row catalog-form-actions"><button className="btn primary" disabled={busy || closed || !name || !value}>{busy ? t.saving : t.saveSecret}</button></div>
       </form>
     </div>
+  </section>
+}
+
+function LegalSourcesPanel({ t, lang }: { t: Copy; lang: Lang }) {
+  const [items, setItems] = useState<LegalSource[] | null>(null)
+  const [error, setError] = useState('')
+  const load = () => api<{ data: LegalSource[] }>('/api/admin/legal-sources').then((p) => setItems(p.data)).catch(() => setItems([]))
+  useEffect(() => { load() }, [])
+  const toggle = async (row: LegalSource) => {
+    setError('')
+    try {
+      await api(`/api/admin/legal-sources/${encodeURIComponent(row.code)}`, { method: 'PUT', body: JSON.stringify({ enabled: !row.enabled }) })
+      load()
+    } catch (err) {
+      // The server names the refusal (`terms_unverified`, `no_documented_channel`, …) and
+      // the copy table holds one human sentence per code, so no error text is invented here.
+      const code = (err as Error).message || ''
+      const known = code in t ? String((t as unknown as Record<string, string>)[code]) : ''
+      setError(known || t.loadError)
+    }
+  }
+  const date = (value: string) => value ? new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${value}T00:00:00`)) : ''
+  return <section className="legal-sources" aria-labelledby="legal-title">
+    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="legal-title">{t.legalTitle}</h2><p>{t.legalSub}</p></div></div>
+    {error && <div className="form-error" role="alert">{error}</div>}
+    {!items ? <p className="muted">{t.loading}</p> : items.length === 0 ? <p className="muted">{t.legalSub}</p> : <div className="catalog-list">{items.map((row) => <article className="catalog-entry" key={row.code}>
+      <div className="catalog-entry-main">
+        <strong>{lang === 'vi' ? row.name_vi : row.name_en}</strong>
+        <span>{row.region} · {row.licence}</span>
+        {row.block_reason === 'no_documented_channel' && <span className="legal-reason"><strong>{t.legalNoChannel}</strong> · {row.access_note}</span>}
+        {row.block_reason === 'terms_unverified' && <span className="legal-reason">{t.legalReasonUnverified}</span>}
+        {row.block_reason === 'terms_prohibit_polling' && <span className="legal-reason">{t.legalReasonProhibited}</span>}
+        <span className="catalog-health">{t.legalChecked}: {date(row.terms_checked_on)}{row.evidence_stale ? ` · ${t.legalStale}` : ''}</span>
+        {row.terms_quote && <details className="legal-terms"><summary>{t.legalTerms}</summary><blockquote>{row.terms_quote}</blockquote><a href={row.terms_url} target="_blank" rel="noopener noreferrer">{row.terms_url}</a></details>}
+      </div>
+      <div className="catalog-entry-actions">
+        {row.enabled
+          ? <button className="btn" onClick={() => toggle(row)}>{t.legalTurnsOff}</button>
+          : row.pollable && !row.block_reason
+            ? <button className="btn primary" onClick={() => toggle(row)}>{t.legalTurnsOn}</button>
+            : <span className="catalog-status inactive">{row.block_reason === 'no_documented_channel' ? t.legalNoChannel : row.block_reason === 'terms_prohibit_polling' ? t.legalBlockedProhibited : row.block_reason === 'terms_unverified' ? t.legalBlockedUnverified : t.legalBlocked}</span>}
+      </div>
+    </article>)}</div>}
   </section>
 }
 
