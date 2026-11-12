@@ -42,9 +42,15 @@ type HmacSha256 = Hmac<Sha256>;
 /// The `audience` the Hub signs for. Compiled in so a missing header cannot widen it.
 pub const DEFAULT_AUDIENCE: &str = "lnc-newsman";
 
-/// The one scope this app can grant. Every read tool requires it; there is no write
-/// scope to grant, because there is no write tool.
+/// Reading: articles, documents, tax, series, plus the notes and analyses other
+/// callers stored. Every read tool requires it.
 pub const READ_SCOPE: &str = "newsman:read";
+/// Writing: notes, analyses and article flags only. It grants nothing over the
+/// app's own configuration — sources, regions, connectors, secrets and alert
+/// delivery stay behind `/admin`.
+pub const WRITE_SCOPE: &str = "newsman:write";
+/// The scopes this build implements. A ceiling can only ever be narrowed to these.
+pub const ALL_SCOPES: [&str; 2] = [READ_SCOPE, WRITE_SCOPE];
 
 /// Names of the two sealed values in the existing secret store. They are ordinary
 /// secret slugs, so `/api/admin/secrets` already lists them without revealing them.
@@ -216,13 +222,13 @@ pub fn resolve(state: &SharedState) -> Resolved {
         .max_scopes
         .clone()
         .or_else(|| stored_setting(state, MAX_SCOPES_KEY).map(|value| split_scopes(&value)))
-        .unwrap_or_else(|| vec![READ_SCOPE.to_string()]);
+        .unwrap_or_else(|| ALL_SCOPES.iter().map(|s| s.to_string()).collect());
     let max_scopes: Vec<String> = requested
         .into_iter()
-        .filter(|scope| scope == READ_SCOPE)
+        .filter(|scope| ALL_SCOPES.contains(&scope.as_str()))
         .collect();
     let max_scopes = if max_scopes.is_empty() {
-        vec![READ_SCOPE.to_string()]
+        ALL_SCOPES.iter().map(|s| s.to_string()).collect()
     } else {
         max_scopes
     };
@@ -536,7 +542,7 @@ pub async fn admin_update(
         if scopes.iter().any(|scope| !valid_scope(scope)) {
             return crate::failure(StatusCode::BAD_REQUEST, "invalid_connector_scopes");
         }
-        if scopes.iter().any(|scope| scope != READ_SCOPE) {
+        if scopes.iter().any(|scope| !ALL_SCOPES.contains(&scope.as_str())) {
             // There is no write scope to grant, and silently dropping an unknown one
             // would make the ceiling look wider than it is.
             return crate::failure(StatusCode::BAD_REQUEST, "unsupported_connector_scope");
@@ -623,11 +629,19 @@ pub async fn require_mcp(
 /// so it keeps the access it had: it sees the same data in the human UI already, and
 /// the connector boundary is about what the *Hub* may do, not about narrowing a
 /// logged-in human.
+///
+/// A write tool requires the write scope **and** the read scope: writing a note on an
+/// article needs to see that article first, so the narrower grant is never enough on
+/// its own.
 pub fn scope_allows(caller: Option<&Caller>, tool: &str) -> bool {
-    match caller {
-        None => true,
-        Some(caller) => crate::mcp::tool_scope(tool)
-            .map(|scope| caller.has_scope(scope))
-            .unwrap_or(false),
+    let Some(caller) = caller else {
+        return true;
+    };
+    let Some(scope) = crate::mcp::tool_scope(tool) else {
+        return false;
+    };
+    if scope == WRITE_SCOPE {
+        return caller.has_scope(WRITE_SCOPE) && caller.has_scope(READ_SCOPE);
     }
+    caller.has_scope(scope)
 }

@@ -28,6 +28,7 @@ mod series;
 mod tax;
 mod telegram;
 mod themes;
+mod write;
 
 use axum::{
     Json, Router,
@@ -282,6 +283,10 @@ fn router(state: SharedState) -> Router {
             "/api/admin/connector",
             get(connector::admin_status).patch(connector::admin_update),
         )
+        // What agents wrote through the connector: the audit trail, so the owner can
+        // tell agent work from their own at a glance.
+        .route("/api/admin/connector/writes", get(agent_writes))
+        .route("/api/admin/connector/analyses", get(agent_analyses))
         .route("/api/admin/connectors", get(connectors::status_handler))
         .route(
             "/api/admin/connectors/{id}/run",
@@ -658,6 +663,24 @@ fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
         telegram_has_relay_token: has(telegram::SECRET_RELAY),
         telegram_has_bot_token: has(telegram::SECRET_BOT),
     })
+}
+/// Recent agent writes. Metadata only: client id, tool and record, never the note text,
+/// because the owner reads the record itself on the article it belongs to.
+async fn agent_writes(State(state): State<SharedState>) -> Response {
+    let limit = 100;
+    let db = state.db.lock().expect("database lock poisoned");
+    match write::write_log(&db, limit) {
+        Ok(rows) => Json(serde_json::json!({"data": rows})).into_response(),
+        Err(err) => internal_error(err),
+    }
+}
+/// Stored briefs and summaries with their author label, for the admin card.
+async fn agent_analyses(State(state): State<SharedState>) -> Response {
+    let db = state.db.lock().expect("database lock poisoned");
+    match write::analysis_list(&db, None, None, 50) {
+        Ok(rows) => Json(serde_json::json!({"data": rows})).into_response(),
+        Err(err) => internal_error(err),
+    }
 }
 async fn get_settings(State(state): State<SharedState>) -> Response {
     match settings_payload(&state) {

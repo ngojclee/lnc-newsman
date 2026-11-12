@@ -264,10 +264,12 @@ fn the_tool_list_has_no_write_tool_and_no_duplicate_name() {
             !name.starts_with("newsman__"),
             "{name} already carries the Hub namespace"
         );
-        for forbidden in ["create", "delete", "update", "set", "post", "write", "run"] {
+        // A write tool may exist, but only over the app's own analytic data. One that
+        // looks like it configures the app is the thing this test exists to stop.
+        for forbidden in ["source_", "connector", "secret", "collector", "alert"] {
             assert!(
                 !name.contains(forbidden),
-                "{name} looks like a write tool"
+                "{name} looks like a configuration tool"
             );
         }
     }
@@ -331,13 +333,23 @@ fn tools_list_is_filtered_by_the_callers_scopes() {
             .count(),
         all
     );
+    let read_count = tools()
+        .iter()
+        .filter(|tool| crate::connector::scope_allows(Some(&read), tool.name))
+        .count();
+    assert!(
+        read_count > 0 && read_count < all,
+        "the read scope reaches the read tools and none of the write ones: {read_count}/{all}"
+    );
     assert_eq!(
         tools()
             .iter()
-            .filter(|tool| crate::connector::scope_allows(Some(&read), tool.name))
+            .filter(|tool| {
+                crate::mcp::tool_scope(tool.name) == Some(crate::connector::READ_SCOPE)
+            })
             .count(),
-        all,
-        "the read scope reaches every tool there is"
+        read_count,
+        "the read scope is exactly the set of read tools"
     );
     assert_eq!(
         tools()

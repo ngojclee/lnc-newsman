@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::SharedState;
+use crate::connector::{ALL_SCOPES, READ_SCOPE, WRITE_SCOPE};
 use crate::mcp::{UNKNOWN_TOOL, tool_scope, tools};
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -210,9 +211,12 @@ fn a_correctly_signed_read_call_is_accepted() {
                 "documents",
                 "tax_calendar",
                 "series",
-                "observations"
+                "observations",
+                "notes",
+                "analyses",
+                "write_log"
             ],
-            "every read tool is advertised, with no prefix: the Hub adds the namespace"
+            "a read caller sees the read tools, with no prefix: the Hub adds the namespace.              No write tool is advertised to a read-only grant."
         );
         (list_status, list)
     });
@@ -406,13 +410,12 @@ fn a_replayed_nonce_is_forbidden() {
 #[test]
 fn a_scope_outside_the_ceiling_is_forbidden() {
     let state = state_with_connector();
-    // A write scope does not exist in this build; the Hub signing it must not make it
-    // real.
+    // A scope this build does not implement: the Hub signing it must not make it real.
     let sh = signed(
         SECRET,
         DEFAULT_AUDIENCE,
         "agent-argus",
-        &[READ_SCOPE, "newsman:write"],
+        &[READ_SCOPE, "newsman:admin"],
         "nonce-extra-scope-00000000001",
         now(),
         None,
@@ -473,12 +476,30 @@ fn an_unknown_tool_answers_the_same_as_an_unauthorized_one() {
     assert_eq!(body["error"]["message"], UNKNOWN_TOOL);
 }
 
+/// Every published tool must declare exactly one scope, and the two scopes must be the
+/// only ones a ceiling can hold. A tool with no entry in the table would be unreachable
+/// by design, which is easy to mistake for "no tool" — so it fails here instead.
 #[test]
-fn there_is_no_write_tool_to_grant() {
-    assert!(
-        tools().iter().all(|tool| tool_scope(tool.name) == Some(READ_SCOPE)),
-        "every tool is a read; a write tool must add its own scope before shipping"
-    );
+fn every_tool_declares_a_known_scope() {
+    for tool in tools() {
+        let scope = tool_scope(tool.name).unwrap_or_else(|| panic!("{} has no scope", tool.name));
+        assert!(
+            ALL_SCOPES.contains(&scope),
+            "{} declares {scope}, which is not a scope this build implements",
+            tool.name
+        );
+    }
+    // The write tools are exactly the ones this app may let an agent change; none of
+    // them is named for configuration.
+    for tool in tools().iter().filter(|tool| tool_scope(tool.name) == Some(WRITE_SCOPE)) {
+        for forbidden in ["source", "region", "connector", "secret", "collector", "alert"] {
+            assert!(
+                !tool.name.contains(forbidden),
+                "{} looks like a configuration write, which this boundary must not grant",
+                tool.name
+            );
+        }
+    }
 }
 
 // ---------- the reader's existing credentials still work ----------
@@ -499,7 +520,11 @@ fn a_reader_api_key_still_works_without_any_delegation() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (status, body) = runtime.block_on(async move { send(app, request).await });
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(names(&body).len(), 7, "a reader key sees every tool");
+    assert_eq!(
+        names(&body).len(),
+        tools().len(),
+        "a reader key sees every tool, read and write alike"
+    );
 }
 
 #[test]
@@ -555,7 +580,10 @@ fn the_audience_falls_back_to_the_compiled_default() {
     assert_eq!(resolved.audience, DEFAULT_AUDIENCE);
     assert_eq!(resolved.audience_source, Source::Unset);
     // And the ceiling is the single read scope, never wider.
-    assert_eq!(resolved.max_scopes, vec![READ_SCOPE.to_string()]);
+    assert_eq!(
+        resolved.max_scopes,
+        ALL_SCOPES.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -602,10 +630,23 @@ fn an_unpaired_connector_refuses_every_hub_call() {
 /// person is watching and the mistake should be visible.
 #[test]
 fn a_nonsense_env_ceiling_narrows_to_the_real_scope() {
-    for ceiling in [
-        vec!["newsman:write".to_string(), "fleet:read".to_string()],
-        vec![READ_SCOPE.to_string(), "other:read".to_string()],
-        Vec::new(),
+    for (ceiling, expected) in [
+        (
+            vec!["fleet:read".to_string()],
+            ALL_SCOPES.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        ),
+        (
+            vec!["newsman:write".to_string(), "fleet:read".to_string()],
+            vec![WRITE_SCOPE.to_string()],
+        ),
+        (
+            vec![READ_SCOPE.to_string(), "other:read".to_string()],
+            vec![READ_SCOPE.to_string()],
+        ),
+        (
+            Vec::new(),
+            ALL_SCOPES.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        ),
     ] {
         let mut state = state_with_connector();
         std::sync::Arc::get_mut(&mut state)
@@ -614,8 +655,8 @@ fn a_nonsense_env_ceiling_narrows_to_the_real_scope() {
             .max_scopes = Some(ceiling.clone());
         assert_eq!(
             resolve(&state).max_scopes,
-            vec![READ_SCOPE.to_string()],
-            "{ceiling:?} must narrow to the one scope this build implements"
+            expected,
+            "{ceiling:?} must narrow to the scopes this build implements"
         );
     }
 }
@@ -662,7 +703,7 @@ fn the_admin_card_refuses_what_it_cannot_honour() {
     let state = state_with_connector();
     for (body, code) in [
         (
-            serde_json::json!({"max_scopes": "newsman:write"}),
+            serde_json::json!({"max_scopes": "newsman:admin"}),
             "unsupported_connector_scope",
         ),
         (

@@ -38,6 +38,8 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | PUT | `/api/admin/secrets/{name}` | `{ "value": "..." }` — write-only; the value is encrypted immediately and cannot be read back |
 | DELETE | `/api/admin/secrets/{name}` | Remove a secret |
 | POST | `/api/admin/secrets/rewrap` | Re-encrypt every secret under the current key with a new nonce (rotation). Returns `rewrapped`; 409 `secret_rewrap_failed` and **no changes** if any row cannot be opened |
+| GET | `/api/admin/connector/writes` | Recent agent writes through the connector: `at`, `client_id`, `app_id`, `tool`, `record_kind`, `record_id`, `outcome`, `note`. Metadata only — no note text |
+| GET | `/api/admin/connector/analyses` | Stored briefs/summaries with their `author` label, newest first |
 | GET | `/api/admin/connector` | Business MCP Hub connector card: `enabled`, `audience`, `max_scopes`, and the **source** of each value (`env`/`admin`/`unset`) — never a value |
 | PATCH | `/api/admin/connector` | Partial JSON `audience`, `max_scopes`; a `null` restores the built-in default. 400 `invalid_connector_audience` / `invalid_connector_scopes` / `unsupported_connector_scope`. The bearer and the delegation secret are **not** accepted here — they are secrets, written through `PUT /api/admin/secrets/{name}` |
 | GET | `/api/admin/connectors` | Connector id, provider, region, enabled, health, `last_error`, run times, `requests_today`/`daily_quota`, `requests_last_run`, `needs_secret`. No secrets |
@@ -187,9 +189,11 @@ Audience defaults to `lnc-newsman` (`CONNECTOR_AUDIENCE` or the admin card). A n
 
 Methods: `initialize` (protocol `2025-06-18`, `serverInfo.name` = `lnc-newsman`), `ping`, `tools/list`, `tools/call`. A JSON-RPC batch is answered in order. An unknown method returns `-32601`. **An unknown tool and a tool the caller has no scope for return the same `-32601` with the same message** ("Unknown or unauthorized MCP tool"), and `tools/list` is filtered by the caller's scopes, so probing the namespace yields nothing. A bad tool argument is reported **inside** the result as `isError: true`, so a client can show the message without treating it as a transport failure.
 
-Every tool is read-only and answers through the same function the matching REST endpoint calls, so it can never expose a row REST hides. A tool that needs provider or phase data that does not exist yet is **not listed** — a missing tool is better than one answering "no data" for months.
+Every tool answers through the same function the matching REST endpoint calls, so it can never expose a row REST hides. A tool that needs provider or phase data that does not exist yet is **not listed** — a missing tool is better than one answering "no data" for months.
 
 **Tool names carry no namespace.** The Business MCP Hub prepends its own, so an agent reaches these as `newsman__regions`; advertising `newsman__regions` upstream would produce `newsman__newsman__regions`. A client written against v0.4.3 that still sends `newsman__<tool>` is accepted, because the prefix is stripped before lookup.
+
+### Read tools — scope `newsman:read`
 
 | Tool | Arguments | Same data as |
 |---|---|---|
@@ -200,8 +204,35 @@ Every tool is read-only and answers through the same function the matching REST 
 | `tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
 | `series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |
 | `observations` | `code` (required), `limit?` 1–200 | `GET /api/v1/series/{code}/observations` |
+| `notes` | `article_id` or `document_id`, `limit?` 1–100 | — (`GET /api/v1/articles` then the note list) |
+| `analyses` | `topic?`, `region?`, `limit?` 1–100 | — |
+| `write_log` | `limit?` 1–200 | — |
 
-Still to come with their phases: `market_snapshot` (needs live provider data), `region_brief` (P6) and a write surface (none is planned — administration stays on the session-authenticated web UI).
+### Write tools — scope `newsman:write` (also needs `newsman:read`)
+
+These write **only** the app's own analytic data. None of them can reach a source, a region, a connector, a secret, the collector switch or alert delivery — that stays behind `/admin` and a signed-in owner session.
+
+| Tool | Arguments | Effect |
+|---|---|---|
+| `note_create` | `body` (≤4000), exactly one of `article_id` / `document_id` | Adds a note; the author is the delegated client id |
+| `note_update` | `id`, `body` | Replaces the text of a note **you wrote** |
+| `note_delete` | `id` | Deletes a note **you wrote** |
+| `analysis_create` | `title` (≤300), `body` (≤20000), `kind?` (`brief`/`summary`), `topic_slug?`, `region_code?`, `source_article_ids?` (≤200) | Stores a brief or summary |
+| `analysis_update` | `id`, any of `title` / `body` / `source_article_ids` | Changes **your own** brief |
+| `article_flag` | `article_id`, `label` (≤60) | Marks an article; repeating a label is idempotent |
+
+Rules that hold for every write tool:
+
+- **The author is the verified delegation**, never an argument. No tool has an `author` field, and an **undeclared argument is refused** (`isError` with `unknown argument: author`) rather than ignored — `additionalProperties: false` alone is a note to the client, so the server enforces it. This is what stops an agent believing it set an author it did not.
+- **Ownership is enforced on update and delete.** A note or brief written by the owner in the web UI has no author and is not reachable through this boundary; one written by another client is refused too.
+- **Every write is appended to `newsman_write_log`** (time, client id, app id, tool, record kind, record id) and is readable through `write_log`. No tool can insert into or alter that table except the write path itself.
+- **Every id is checked against what the app already shows.** A note needs an existing article or document; a cited article id must be stored; a brief cannot name a disabled region or topic.
+- **Article text is data, not instruction.** Text stored from a feed is quoted into a summary and never interpreted; the `initialize` instructions say so to the model.
+- Lengths and counts are bounded (`too_long`, `too_many_sources`, `invalid_sources`), and a malformed citation list is refused rather than silently truncated.
+
+**An unknown tool and a tool the caller has no scope for answer identically** (`-32601`, "Unknown or unauthorized MCP tool"), and `tools/list` is filtered by the caller's scopes, so probing the namespace yields nothing.
+
+Still to come with their phases: `market_snapshot` (needs live provider data) and `region_brief` (P6).
 
 ## Secrets and connectors (P2 foundation)
 

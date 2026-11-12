@@ -106,3 +106,34 @@ fn the_status_flag_and_the_mcp_section_agree_with_the_router() {
         DOCS.contains("POST /mcp") || DOCS.contains("`POST /mcp`")
     );
 }
+
+/// Every MCP tool must appear in the docs, and the docs must not name a tool that no
+/// longer exists. The route check above covers HTTP paths; this covers the tool
+/// catalogue, which is what an agent actually calls.
+#[test]
+fn every_mcp_tool_is_documented() {
+    for tool in crate::mcp::tools() {
+        assert!(
+            DOCS.contains(tool.name),
+            "tool `{}` is published but never documented",
+            tool.name
+        );
+    }
+    // A short, unambiguous marker per tool: a name in a table cell. Anything left over
+    // means the docs describe a tool that is gone.
+    for documented in [
+        "note_create",
+        "note_update",
+        "note_delete",
+        "analysis_create",
+        "analysis_update",
+        "article_flag",
+        "analyses",
+        "write_log",
+    ] {
+        assert!(
+            crate::mcp::tools().iter().any(|tool| tool.name == documented),
+            "docs name `{documented}`, which is not a published tool"
+        );
+    }
+}

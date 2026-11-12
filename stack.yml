@@ -16,7 +16,7 @@
 #   CONNECTOR_BEARER=<generated>  Business MCP Hub connector token (env_or_cfg)
 #   DELEGATION_SECRET=<generated> Hub delegation HMAC secret (env_or_cfg)
 #   CONNECTOR_AUDIENCE=lnc-newsman
-#   CONNECTOR_MAX_SCOPES=newsman:read
+#   CONNECTOR_MAX_SCOPES=newsman:read,newsman:write
 #
 # Collector stays off: no source is enabled by the image, and the scheduler only runs
 # when an admin turns it on in Settings.
