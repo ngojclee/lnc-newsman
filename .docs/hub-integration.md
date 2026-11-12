@@ -95,3 +95,86 @@ host vào `HUB_ALLOWED_HOSTS`. Nếu `provider_timeout`: tăng `HUB_TIMEOUT_SECO
   lớp bảo mật hay hạn mức.
 - Chưa đối chiếu định dạng trả về của `/agents/{id}/run` (`output` hay `text`); connector chấp
   nhận cả hai và từ chối nếu không có nội dung.
+
+---
+
+# Phần ngược lại: đưa `/mcp` của Newsman lên Business MCP Hub (v0.4.4)
+
+Chiều này khác hoàn toàn chiều trên. Trên đây Newsman **gọi** Hub; dưới đây **Hub gọi
+vào** `/mcp` của Newsman. Hub là MCP-native: nó mở session MCP tới `/mcp` của app và
+proxy `tools/call`, nên phía Newsman chỉ cần một **ranh giới xác thực + scope**, không
+phải thêm API.
+
+## 1. Tạo bản ghi trên Hub (chủ dự án)
+
+`POST /admin/api/connectors` với token `BUSINESS_MCP_ADMIN_TOKEN`:
+
+| Trường | Giá trị |
+|---|---|
+| `id` | `lnc-newsman` |
+| `display_name` | `LNC Newsman` |
+| `namespace` | `newsman` |
+| `mcp_url` | `https://newsman.lengoc.me/mcp` |
+| `health_url` | `https://newsman.lengoc.me/health` |
+| `audience` | `lnc-newsman` |
+| `scopes` | `["newsman:read"]` |
+| `enabled` | `false` |
+
+Bản ghi được tạo ở trạng thái **tắt** và tự động ghép cặp. Sau đó
+`POST /admin/api/connectors/lnc-newsman/pairing` trả `connector_token` +
+`delegation_secret` **một lần duy nhất** — hai giá trị này không bao giờ được in ra
+chat hay commit.
+
+## 2. Đặt hai giá trị đó vào Newsman — chọn một trong hai
+
+**Cách A — Portainer env (deploy-time).** Stack 108 → Environment variables:
+
+```env
+CONNECTOR_BEARER=<connector_token>
+DELEGATION_SECRET=<delegation_secret>
+```
+
+Redeploy để container nhận env mới.
+
+**Cách B — `/admin` của Newsman (không cần redeploy).** Cài đặt → *Khóa nhà cung cấp*,
+lưu hai tên `connector-bearer` và `delegation-secret`. Chúng vào kho mã hóa sẵn có
+(`LNC_MASTER_KEY`), và có hiệu lực **ngay** trên tiến trình đang chạy.
+
+Quy tắc `env_or_cfg`: **env thắng** khi có giá trị; env trống thì dùng giá trị trong
+`/admin`. Vì vậy có thể ghép nối ở `/admin` trước rồi chuyển sang env sau mà không phải
+xoá gì. Nếu để cả hai trống, connector **chưa ghép nối** và mọi call trả 401 — cố ý
+không phân biệt được với "sai khóa".
+
+## 3. Bật và nghiệm thu
+
+1. `POST /admin/api/connectors/lnc-newsman/test` → mong `{status:"ok",
+   mcp_initialize:"ok", tool_count:7}`.
+2. `PUT /admin/api/connectors/lnc-newsman/state` body `{"enabled":true}` (PUT, không POST).
+3. Thử thật qua Hub bằng một agent tạm có grant `newsman:read`, gọi
+   `newsman__latest_articles`; xong thì `POST /admin/api/clients/{id}/revoke`.
+
+## 4. Vì sao tên tool trên Hub là `newsman__latest_articles` và trên `/mcp` là `latest_articles`
+
+Hub tự thêm namespace. Vì vậy `/mcp` của Newsman công bố **tên trần**; nếu công bố
+`newsman__latest_articles` thì agent sẽ thấy `newsman__newsman__latest_articles`. Tên có
+tiền tố vẫn được **chấp nhận** khi gọi (strip trước khi tra) để client viết cho 0.4.3
+không gãy.
+
+## 5. Những gì phía Newsman từ chối và mã lỗi
+
+| Tình huống | HTTP | `error` |
+|---|---|---|
+| Không có credential | 401 | `unauthorized` |
+| Có bearer connector nhưng sai/connector chưa ghép nối | 401 | `connector_auth_required` |
+| Thiếu header delegation, sai chữ ký, sai audience | 403 | `delegation_denied` |
+| Timestamp lệch quá 90 s | 403 | `delegation_denied` |
+| Nonce đã dùng trong 300 s | 403 | `delegation_denied` |
+| Scope ngoài trần (`newsman:read`) | 403 | `delegation_denied` |
+| Tool không tồn tại **hoặc** thiếu scope | 200 (JSON-RPC) | `-32601` + `Unknown or unauthorized MCP tool` |
+
+Chỉ có **một** scope và **không có** tool ghi; `CONNECTOR_MAX_SCOPES` từ chối mọi giá trị
+khác thay vì âm thầm mở rộng.
+
+`POST /mcp` được miễn header `X-Requested-With` khi request mang bearer connector (Hub
+không gửi được header đó, và request mang bearer không có quyền cookie để mượn). Mọi
+route khác giữ nguyên CSRF.
