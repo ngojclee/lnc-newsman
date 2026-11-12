@@ -205,6 +205,17 @@ Two genuine bugs surfaced only because 100 real items arrived, and both are fixe
 - **Every ordinary capitalised word was labelled a stock ticker.** Entity extraction uppercased the title before matching, so a Title-Case headline turned every word into an all-caps token: all 100 articles carried `TICKER:LAW`, 97 carried `TICKER:ACT`, and 147 distinct "entities" were mostly English function words. Two rules replace the guesswork: a symbol must be **genuinely capitalised in the source** (`TICKER:AAPL` in "lifts AAPL" survives; "Public" and "Rural" do not), and a title written **entirely** in capitals says nothing about which words are symbols, so it yields no tickers at all. Against the same 100 titles the noise fell from ~100 rows to 12, and those 12 are real acronyms inside statute names (`FISA`, `LACA`, `GI`, `VA`, `ROAD`) plus `ORG:` matches — only Roman numerals (`Title VII`) were still wrong, and those are now excluded. The long blocklist that first looked necessary was cut back: it is no longer a list of English words, only of what stays ambiguous when genuinely capitalised.
 - **`reclassify_all` could not undo its own work.** Its doc comment claimed it was safe to repeat, but `store` only upserts, so a rule change left the old labels in place — the 100 articles would have kept `TICKER:LAW` forever. It now clears that article's rule labels before re-applying them. A `human` label is still never touched, which a test asserts alongside the removal.
 - **220 tests** pass, clippy `-D warnings` clean. `cargo fmt --check` still reports 15 diffs in `alerts.rs`, `db.rs`, `legal.rs`, `legal_tests.rs`, `main.rs`, `telegram.rs`, `telegram_tests.rs` — all of them **pre-existing** (they reproduce with this change stashed), so they were left alone rather than mixed into this fix.
+- **Deployed and the stored labels were corrected on production.** GitOps redeployed `acd1275` (`/api/app-info` = 0.4.3, container `4aed1c083cbd` healthy), then `POST /api/admin/classify/reclassify` returned `labels_written: 32`. Measured on the 100 stored articles, before and after:
+
+  | | before | after |
+  |---|---|---|
+  | distinct entities | 147 | **10** |
+  | articles carrying an entity | 100 | **12** |
+  | `TICKER:LAW` | 100 | **0** |
+  | `TICKER:ACT` | 97 | **0** |
+
+  What survives are genuine statute acronyms (`FISA`, `LACA`, `GI`, `VA`, `ROAD`, `FAST`, `VETS`, `ALS`) and two `ORG:` matches. Topics are unchanged (`politics` 100/100) and every article keeps its original `govinfo.gov/app/details/...` link.
+- **Operational note:** the redeploy looked wedged for over an hour — `PUT /git/redeploy` and `POST /stop` both returned 409 "Stack deployment is already in progress", `lastSyncDate` was 0 on two workflows, and no compiler had run for forty minutes. It recovered on its own once that sync cycle completed; **Portainer was not restarted and nothing was torn down.** `POST /api/admin/classify/reclassify` is the way to apply a rule change to articles already stored — fetching alone would never have fixed them.
 
 ## Plan-quality gate (cortex_plan_quality)
 

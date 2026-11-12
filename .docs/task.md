@@ -219,6 +219,17 @@ Chủ dự án duyệt bật govinfo. Đã làm đúng thứ tự và **hoàn l�
   - **Mọi từ viết hoa đều thành ticker.** Hàm tách thực thể đổi tiêu đề sang chữ hoa trước khi so, nên tiêu đề Title Case biến mọi từ thành token in hoa: cả 100 bài đều có `TICKER:LAW`, 97 bài có `TICKER:ACT`, 147 "thực thể" phần lớn là hư từ tiếng Anh. Nay: ký hiệu phải **viết hoa ngay trong nguồn** (`TICKER:AAPL` trong "lifts AAPL" vẫn còn; "Public", "Rural" thì không), và tiêu đề **viết hoa toàn bộ** thì không suy ra ticker nào. Trên đúng 100 tiêu đề đó, rác giảm từ ~100 dòng xuống 12, và 12 dòng đó là acronym thật trong tên luật (`FISA`, `LACA`, `GI`, `VA`, `ROAD`) cộng vài `ORG:` — chỉ còn số La Mã (`Title VII`) là sai, đã loại nốt.
   - **`reclassify_all` không thể hoàn tác chính nó.** Chú thích ghi "safe to repeat" nhưng `store` chỉ upsert, nên đổi luật thì nhãn cũ nằm lại mãi. Nay nó xoá nhãn `rule` của bài trước khi gán lại; nhãn `human` vẫn không bị đụng (có test).
 - [x] **220 test xanh**, clippy `-D warnings` sạch. `cargo fmt --check` còn 15 diff ở `alerts.rs`/`db.rs`/`legal.rs`/`legal_tests.rs`/`main.rs`/`telegram.rs`/`telegram_tests.rs` — đều **có từ trước** (tái hiện khi stash thay đổi này), nên để nguyên thay vì trộn vào bản sửa.
+- [x] **Đã deploy 0.4.3 và dọn nhãn thật trên production.** `/api/app-info` = 0.4.3, container `4aed1c083cbd` healthy. `POST /api/admin/classify/reclassify` → `labels_written: 32`. Đo trên 100 bài đã lưu:
+
+  | | trước | sau |
+  |---|---|---|
+  | thực thể khác nhau | 147 | **10** |
+  | bài còn thực thể | 100 | **12** |
+  | `TICKER:LAW` | 100 | **0** |
+  | `TICKER:ACT` | 97 | **0** |
+
+  Còn lại là acronym thật trong tên luật (`FISA`, `LACA`, `GI`, `VA`, `ROAD`, `FAST`, `VETS`, `ALS`) và 2 `ORG:`. Chủ đề không đổi (`politics` 100/100), link gốc giữ nguyên.
+- [x] Ghi chú vận hành: redeploy trông như kẹt hơn một giờ (`git/redeploy` và `stop` đều 409, `lastSyncDate` = 0 ở hai workflow, không còn tiến trình biên dịch nào chạy). Nó **tự hồi phục** khi vòng sync đó xong — không restart Portainer, không xoá gì. Muốn áp đổi luật lên bài đã lưu thì phải chạy `POST /api/admin/classify/reclassify`; chỉ fetch lại thì không bao giờ sửa được nhãn cũ.
 - [ ] Còn lại của P8: Légifrance chờ khóa PISTE; EUR-Lex và vbpl.vn chờ đọc được điều khoản của trang.
 
 ## Rà soát giao diện cuối (checklist dùng chung, mục U)
