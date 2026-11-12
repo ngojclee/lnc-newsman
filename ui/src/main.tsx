@@ -12,7 +12,13 @@ type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: st
 type SourceFacet = { slug: string; name: string; tier: string; region: string; articles: number }
 type Stats = { collector_enabled: boolean; articles_total: number; articles_24h: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
 type Dashboard = { topics: Topic[]; sources: SourceFacet[]; stats: Stats }
-type Settings = { version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean }
+type Settings = {
+  version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean;
+  telegram_mode: 'relay' | 'direct' | 'off'; telegram_mode_stored: 'relay' | 'direct' | 'off'; telegram_env_override: boolean;
+  telegram_ready: boolean; telegram_reason?: string; telegram_chat_id: number | null; telegram_alerts_topic_id: number | null;
+  telegram_has_relay_token: boolean; telegram_has_bot_token: boolean
+}
+type TelegramStatus = { ready: boolean; reason?: string; queue: { pending: number; sending: number; sent: number; failed: number } }
 type Labels = { topics: string[]; entities: string[] }
 type Article = { id: number; title: string; url: string; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string; labels?: Labels }
 type AlertRule = { id: number; slug: string; label_vi: string; label_en: string; enabled: boolean; match_kind: string; match_value: string; level: string; cooldown_seconds: number; quiet_from: string; quiet_to: string; timezone: string; channels: string; last_fired_at: number | null }
@@ -42,10 +48,10 @@ const copy = {
     briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật, xếp theo thời gian. Mỗi tin dẫn về bài gốc; Newsman chỉ lưu tiêu đề và đường dẫn.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập tin tự động',
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
-    alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật. Không gửi Telegram/email ở giai đoạn này.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Chỉ kênh trong ứng dụng đã hoạt động; Telegram/email/webhook thuộc bước sau.', entities: 'Thực thể',
+    alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật; luật có thể gửi thêm vào Telegram nếu kênh đó đang bật.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Kênh trong ứng dụng luôn hoạt động. Telegram chỉ nhận thông báo khi đã bật và cấu hình xong ở khối bên dưới; email/webhook thuộc bước sau.', entities: 'Thực thể',
     changeTheme: 'Đổi nền đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
     settingsTitle: 'Cài đặt hiển thị', settingsSub: 'Đặt mặc định cho lần đầu mở ứng dụng. Thiết lập trên trình duyệt hiện tại sẽ được ưu tiên.', language: 'Ngôn ngữ mặc định', readerMode: 'Nền đọc mặc định', save: 'Lưu mặc định', saving: 'Đang lưu…', savedToast: 'Đã lưu cài đặt', admin: 'Quản trị', signOut: 'Đăng xuất',
-    emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
+    emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', tgTitle: 'Kênh Telegram', tgSub: 'Nhận cảnh báo qua Telegram của fleet hoặc bot riêng. App không lưu token hiển thị lại được — chỉ ghi đè.', tgMode: 'Đường gửi', tgRelay: 'Qua relay telegram.lengoc.me', tgDirect: 'Bot API trực tiếp', tgOff: 'Tắt', tgChatId: 'Chat / group id', tgTopic: 'Topic riêng cho cảnh báo (tuỳ chọn)', tgSave: 'Lưu cấu hình', tgReady: 'Sẵn sàng gửi', tgNotReady: 'Chưa gửi được', tgEnvOverride: 'Đang bị ghi đè bởi biến môi trường TELEGRAM_MODE', tgRelayToken: 'Đã có relay token', tgBotToken: 'Đã có bot token', tgQueue: 'Hàng đợi', tgPending: 'chờ', tgSent: 'đã gửi', tgFailed: 'lỗi', tgFlushNow: 'Gửi ngay', tgFlushed: (n: number) => `Đã gửi ${n} cảnh báo`, settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
     region: 'Vùng', allRegions: 'Mọi vùng đang bật', regionsTitle: 'Vùng và region pack', regionsSub: 'Bật vùng để job quét và trang đọc dùng vùng đó cùng các vùng cha. Vùng mới phát hiện từ thư mục pack luôn ở trạng thái tắt.',
     reloadRegions: 'Nạp lại vùng', reloading: 'Đang nạp…', packIssues: 'Lỗi pack', packClean: 'Không có lỗi pack.', packSummary: (r: number, s: number) => `${r} vùng, ${s} nguồn từ pack`, packNever: 'Chưa nạp pack', packLast: 'Lần nạp gần nhất',
     regionTree: 'Cây vùng', regionEnable: 'Bật hoặc tắt vùng', regionInherit: 'gồm vùng cha', noRegions: 'Chưa có vùng nào.', regionError: 'Không đổi được vùng. Kiểm tra vùng cha trước.',
@@ -65,10 +71,10 @@ const copy = {
     briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources, newest first. Every item links to the original; Newsman stores only titles and links.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Automatic collection',
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
-    alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule. No Telegram/email in this phase.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'Only the in-app channel works; Telegram/email/webhook come later.', entities: 'Entities',
+    alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule; a rule can also post to Telegram while that channel is on.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'The in-app channel always works. Telegram receives alerts only once it is switched on and fully configured below; email and webhooks come later.', entities: 'Entities',
     changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
     settingsTitle: 'Display settings', settingsSub: 'Set defaults for first-time visitors. This browser’s own preferences take precedence.', language: 'Default language', readerMode: 'Default reading mode', save: 'Save defaults', saving: 'Saving…', savedToast: 'Settings saved', admin: 'Admin', signOut: 'Sign out',
-    emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
+    emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', tgTitle: 'Telegram channel', tgSub: 'Deliver alerts through the fleet Telegram relay or a bot of our own. Tokens are write-only: they can be replaced, never read back.', tgMode: 'Delivery path', tgRelay: 'Via relay telegram.lengoc.me', tgDirect: 'Direct Bot API', tgOff: 'Off', tgChatId: 'Chat / group id', tgTopic: 'Topic reserved for alerts (optional)', tgSave: 'Save channel', tgReady: 'Ready to send', tgNotReady: 'Not sending yet', tgEnvOverride: 'Overridden by the TELEGRAM_MODE environment variable', tgRelayToken: 'Relay token stored', tgBotToken: 'Bot token stored', tgQueue: 'Queue', tgPending: 'pending', tgSent: 'sent', tgFailed: 'failed', tgFlushNow: 'Send now', tgFlushed: (n: number) => `Sent ${n} alerts`, settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
     region: 'Region', allRegions: 'All enabled regions', regionsTitle: 'Regions and region packs', regionsSub: 'Enable a region so jobs and the reader use it together with its parent regions. Regions discovered from the pack directory always start disabled.',
     reloadRegions: 'Reload regions', reloading: 'Reloading…', packIssues: 'Pack issues', packClean: 'No pack issues.', packSummary: (r: number, s: number) => `${r} regions, ${s} sources from packs`, packNever: 'Pack not loaded yet', packLast: 'Last load',
     regionTree: 'Region tree', regionEnable: 'Turn the region on or off', regionInherit: 'includes parents', noRegions: 'No regions yet.', regionError: 'Could not change the region. Check the parent region first.',
@@ -542,7 +548,7 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -673,6 +679,61 @@ function HubManager({ t }: { t: Copy }) {
       <div className="btn-row catalog-form-actions">
         <button className="btn primary" disabled={busy || !key}>{busy ? t.saving : t.saveSecret}</button>
         <button type="button" className="btn secondary" disabled={busy || !status?.configured} onClick={() => void runCheck()}>{busy ? t.hubChecking : t.hubCheck}</button>
+      </div>
+    </form>
+  </section>
+}
+
+function TelegramPanel({ t }: { t: Copy }) {
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [status, setStatus] = useState<TelegramStatus | null>(null)
+  const [mode, setMode] = useState<'relay' | 'direct' | 'off'>('off')
+  const [chatId, setChatId] = useState('')
+  const [topicId, setTopicId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(false)
+  const [notice, setNotice] = useState('')
+  const load = async () => {
+    try {
+      const [next, health] = await Promise.all([api<Settings>('/api/settings'), api<TelegramStatus>('/api/admin/telegram')])
+      setSettings(next); setStatus(health); setMode(next.telegram_mode_stored)
+      setChatId(next.telegram_chat_id === null ? '' : String(next.telegram_chat_id))
+      setTopicId(next.telegram_alerts_topic_id === null ? '' : String(next.telegram_alerts_topic_id))
+      setError(false)
+    } catch { setError(true) }
+  }
+  useEffect(() => { void load() }, [])
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(false); setNotice('')
+    try {
+      await api<Settings>('/api/settings', { method: 'PATCH', body: JSON.stringify({ telegram_mode: mode, telegram_chat_id: chatId.trim(), telegram_alerts_topic_id: topicId.trim() }) })
+      setNotice(t.savedToast); await load()
+    } catch { setError(true) } finally { setBusy(false) }
+  }
+  const flush = async () => {
+    setBusy(true); setError(false); setNotice('')
+    try {
+      const result = await api<{ sent: number }>('/api/admin/telegram/flush', { method: 'POST' })
+      setNotice(t.tgFlushed(result.sent)); await load()
+    } catch { setError(true) } finally { setBusy(false) }
+  }
+  if (!settings) return <div role={error ? 'alert' : 'status'} className="loading-inline">{error ? t.settingsError : t.loading}</div>
+  const ready = settings.telegram_ready
+  return <section className="telegram-admin" aria-labelledby="telegram-title">
+    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="telegram-title">{t.tgTitle}</h2><p>{t.tgSub}</p></div>
+      <span className={ready ? 'save-state' : 'muted'} role="status">{ready ? `✓ ${t.tgReady}` : `${t.tgNotReady}${settings.telegram_reason ? ` · ${settings.telegram_reason}` : ''}`}</span></div>
+    {settings.telegram_env_override && <p className="catalog-notice" role="status">{t.tgEnvOverride}</p>}
+    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
+    {notice && <div className="save-state" role="status">✓ {notice}</div>}
+    <form className="catalog-form" onSubmit={save} autoComplete="off">
+      <Select label={t.tgMode} value={mode} options={[{ value: 'off', label: t.tgOff }, { value: 'relay', label: t.tgRelay }, { value: 'direct', label: t.tgDirect }]} onChange={(value) => setMode(value as 'relay' | 'direct' | 'off')} />
+      <label className="field"><span>{t.tgChatId}</span><input inputMode="numeric" value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="-1001234567890" /></label>
+      <label className="field"><span>{t.tgTopic}</span><input inputMode="numeric" value={topicId} onChange={(e) => setTopicId(e.target.value)} placeholder="42" /></label>
+      <p className="muted">{settings.telegram_has_relay_token ? `✓ ${t.tgRelayToken}` : `— ${t.tgRelayToken}`} · {settings.telegram_has_bot_token ? `✓ ${t.tgBotToken}` : `— ${t.tgBotToken}`}</p>
+      {status && <p className="muted">{t.tgQueue}: {status.queue.pending} {t.tgPending} · {status.queue.sending} · {status.queue.sent} {t.tgSent} · {status.queue.failed} {t.tgFailed}</p>}
+      <div className="btn-row catalog-form-actions">
+        <button className="btn primary" disabled={busy}>{busy ? t.saving : t.tgSave}</button>
+        <button type="button" className="btn secondary" disabled={busy || !ready} onClick={() => void flush()}>{t.tgFlushNow}</button>
       </div>
     </form>
   </section>

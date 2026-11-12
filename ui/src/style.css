@@ -403,7 +403,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
    (side-shelves / side-group / side-item). Phones never render it: below
    900px the sidebar is hidden and the tab bar does the navigating.
    ===================================================================== */
-.side-shelves { display: grid; gap: 6px; margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+/* `align-content: start` matters: the panel is a stretched grid inside the sidebar's
+   flex column, so the default `stretch` divides its spare height across every row and
+   inflates the filter box and each shelf row. Rows stay at their natural height. */
+.side-shelves { display: grid; align-content: start; gap: 6px; margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .side-filter { display: grid; gap: 4px; margin-bottom: 6px; }
 .side-filter .field-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .side-filter input { padding: 8px 10px; border-radius: 10px; font-size: 12.5px; }

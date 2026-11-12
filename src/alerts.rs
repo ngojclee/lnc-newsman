@@ -12,8 +12,9 @@
 //!   "lost"*: the sweep records the skip and never marks the article as delivered, so it
 //!   fires after the window ends.
 //!
-//! No network is involved. Telegram, email and webhooks are declared as future channels
-//! and never sent from here; the only channel implemented is the in-app inbox.
+//! The in-app inbox is written synchronously here. Telegram is *queued* here and sent by
+//! [`crate::telegram::flush`] once the database lock is released, so network I/O never
+//! runs under the lock; email and webhooks are still declared but unimplemented.
 
 use crate::{SharedState, db, internal_error};
 use axum::{
@@ -26,10 +27,20 @@ use rusqlite::{OptionalExtension, named_params, params};
 use serde::{Deserialize, Serialize};
 
 pub const CHANNEL_IN_APP: &str = "in-app";
-/// Channels named by the plan but not implemented in this phase. Kept in one place so
-/// the API can reject them explicitly instead of silently accepting a channel nothing
-/// delivers to.
-pub const UNIMPLEMENTED_CHANNELS: &[&str] = &["telegram", "email", "webhook", "imap", "slack"];
+/// Channels named by the plan but not implemented yet. `telegram` is *not* here: it is
+/// implemented and accepted while `telegram_mode` is on (see [`crate::telegram`]).
+pub const UNIMPLEMENTED_CHANNELS: &[&str] = &["email", "webhook", "imap", "slack"];
+
+/// Channels a rule may name right now: the in-app inbox always, plus Telegram while it
+/// is switched on (mode `relay` or `direct`). Returned to the admin surface so the UI
+/// offers exactly what works.
+pub fn available_channels(telegram_on: bool) -> Vec<&'static str> {
+    let mut channels = vec![CHANNEL_IN_APP];
+    if telegram_on {
+        channels.push(crate::telegram::CHANNEL);
+    }
+    channels
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Rule {
@@ -207,11 +218,13 @@ pub fn matching_articles(
     rows.collect()
 }
 
-/// Run every enabled rule once. Returns how many notifications were created and how
-/// many (rule, article) pairs were skipped this pass, keyed by reason.
-pub fn sweep(db: &db::Database, now: i64) -> anyhow::Result<(usize, Vec<(String, i64)>)> {
+/// Run every enabled rule once. Returns how many notifications were created, how many
+/// (rule, article) pairs were skipped this pass keyed by reason, and which deliveries
+/// ask for Telegram (`true`) — those are queued once the caller owns the network step.
+pub fn sweep(db: &db::Database, now: i64) -> anyhow::Result<SweepOutcome> {
     let all = rules(db)?;
     let mut created = 0usize;
+    let mut pushed: Vec<(i64, bool)> = Vec::new();
     let mut skips: std::collections::BTreeMap<String, i64> = Default::default();
     for mut rule in all {
         if !rule.enabled {
@@ -236,11 +249,17 @@ pub fn sweep(db: &db::Database, now: i64) -> anyhow::Result<(usize, Vec<(String,
                 .unwrap_or(false);
             match decide(&rule, now, quiet, delivered) {
                 Outcome::Fire => {
+                    let wants_telegram = rule
+                        .channels
+                        .split(',')
+                        .map(str::trim)
+                        .any(|channel| channel == crate::telegram::CHANNEL);
                     db.conn.execute(
                         "INSERT INTO alert_deliveries(rule_id,article_id,level,channel,title,body,created_at)
                          VALUES (?1,?2,?3,?4,?5,?6,?7)",
                         params![rule.id, article_id, rule.level, CHANNEL_IN_APP, title, url, now],
                     )?;
+                    pushed.push((db.conn.last_insert_rowid(), wants_telegram));
                     db.conn.execute(
                         "UPDATE alert_rules SET last_fired_at=?2, updated_at=CURRENT_TIMESTAMP WHERE id=?1",
                         params![rule.id, now],
@@ -265,7 +284,17 @@ pub fn sweep(db: &db::Database, now: i64) -> anyhow::Result<(usize, Vec<(String,
             }
         }
     }
-    Ok((created, skips.into_iter().collect()))
+    Ok((created, skips.into_iter().collect(), pushed))
+}
+
+/// What one sweep produced: how many notifications were written, why the rest were
+/// skipped, and which deliveries ask for Telegram (delivery id, wants it).
+pub type SweepOutcome = (usize, Vec<(String, i64)>, Vec<(i64, bool)>);
+
+/// Queue one delivery for Telegram. Sending happens later, outside the database lock,
+/// so the sweep only writes this row. Returns true when a row was queued.
+pub fn queue_telegram(db: &db::Database, delivery_id: i64, now: i64) -> bool {
+    crate::telegram::enqueue(db, delivery_id, now).is_ok()
 }
 
 pub fn inbox(db: &db::Database, unread_only: bool, limit: i64) -> rusqlite::Result<Vec<Delivery>> {
@@ -357,8 +386,9 @@ fn default_channels() -> String {
 }
 
 /// Validation is separate from storage so the API can answer with a precise code and
-/// the tests can call it directly without a database.
-pub fn validate(input: &RuleInput) -> Result<(), &'static str> {
+/// the tests can call it directly without a database. `telegram_ok` says whether
+/// Telegram is switched on, which is what decides if the `telegram` channel exists.
+pub fn validate(input: &RuleInput, telegram_ok: bool) -> Result<(), &'static str> {
     if input.slug.trim().is_empty() || input.slug.len() > 60 {
         return Err("invalid_slug");
     }
@@ -402,15 +432,18 @@ pub fn validate(input: &RuleInput) -> Result<(), &'static str> {
     if input.timezone.parse::<chrono_tz::Tz>().is_err() {
         return Err("invalid_timezone");
     }
-    // Only the in-app channel exists. A stored channel nothing delivers to would look
-    // like a working notification while sending nothing, so it is refused outright.
+    // Only channels that can actually deliver are accepted. A stored channel nothing
+    // sends to would look like a working notification while sending nothing, so it is
+    // refused outright; `telegram_ok` is true exactly while Telegram is switched on.
     for channel in input
         .channels
         .split(',')
         .map(str::trim)
         .filter(|c| !c.is_empty())
     {
-        if channel != CHANNEL_IN_APP {
+        let known = channel == CHANNEL_IN_APP
+            || (channel == crate::telegram::CHANNEL && telegram_ok);
+        if !known {
             return Err("channel_not_implemented");
         }
     }
@@ -456,11 +489,23 @@ pub fn set_enabled(db: &db::Database, slug: &str, enabled: bool) -> rusqlite::Re
 
 /// How often the background sweep looks for new matches.
 pub const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(120);
+/// How often queued Telegram alerts are flushed. Shorter than the sweep so a queued
+/// alert leaves within a minute of being created.
+pub const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Start the background sweep once. Every firing is still guarded by the delivery
 /// UNIQUE row and the cooldown, so an interval that runs while nothing changed writes
 /// nothing. This reads the database only; it never opens a connection.
 pub fn spawn_sweeper(state: crate::SharedState) {
+    // The flusher runs on its own clock so a queued alert leaves within `FLUSH_EVERY`
+    // of being created, instead of waiting for the next two-minute sweep.
+    let flushing = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(FLUSH_EVERY).await;
+            crate::telegram::flush(flushing.clone()).await;
+        }
+    });
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(SWEEP_EVERY).await;
@@ -473,7 +518,20 @@ pub fn spawn_sweeper(state: crate::SharedState) {
                     Ok(db) => db,
                     Err(_) => continue,
                 };
-                sweep(&db, now)
+                sweep(&db, now).map(|(created, skips, pushed)| {
+                    // Queueing is a local write; the send itself stays outside the lock.
+                    let telegram_ok = crate::telegram::can_send(
+                        &db,
+                        state.secrets.as_ref(),
+                        &state.telegram,
+                    );
+                    if telegram_ok {
+                        for (id, _) in pushed.iter().filter(|(_, wants)| *wants) {
+                            queue_telegram(&db, *id, now);
+                        }
+                    }
+                    (created, skips)
+                })
             };
             match outcome {
                 Ok((created, _)) if created > 0 => {
@@ -538,10 +596,11 @@ pub async fn read_all(State(state): State<SharedState>) -> Response {
 
 pub async fn list_rules(State(state): State<SharedState>) -> Response {
     let db = state.db.lock().expect("database lock poisoned");
+    let telegram_on = crate::telegram::is_on(&db, &state.telegram);
     match rules(&db) {
         Ok(data) => Json(serde_json::json!({
             "data": data,
-            "channels": [CHANNEL_IN_APP],
+            "channels": available_channels(telegram_on),
             "unimplemented_channels": UNIMPLEMENTED_CHANNELS,
         }))
         .into_response(),
@@ -550,10 +609,11 @@ pub async fn list_rules(State(state): State<SharedState>) -> Response {
 }
 
 pub async fn put_rule(State(state): State<SharedState>, Json(input): Json<RuleInput>) -> Response {
-    if let Err(code) = validate(&input) {
+    let db = state.db.lock().expect("database lock poisoned");
+    let telegram_on = crate::telegram::is_on(&db, &state.telegram);
+    if let Err(code) = validate(&input, telegram_on) {
         return crate::failure(axum::http::StatusCode::BAD_REQUEST, code);
     }
-    let db = state.db.lock().expect("database lock poisoned");
     match upsert(&db, &input) {
         Ok(()) => Json(serde_json::json!({"ok": true, "slug": input.slug.trim()})).into_response(),
         Err(err) => internal_error(err),
@@ -579,20 +639,41 @@ pub async fn toggle_rule(
 }
 
 /// Manual sweep. The scheduler-free equivalent of "check now"; the same function the
-/// background interval will call once P7 turns it on.
+/// background interval calls, plus the Telegram queue it leaves behind.
 pub async fn run_sweep(State(state): State<SharedState>) -> Response {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let db = state.db.lock().expect("database lock poisoned");
-    match sweep(&db, now) {
-        Ok((created, skips)) => Json(serde_json::json!({
-            "ok": true,
-            "created": created,
-            "skipped": skips.into_iter().map(|(reason, count)| serde_json::json!({"reason": reason, "count": count})).collect::<Vec<_>>(),
-        }))
-        .into_response(),
+    let outcome = {
+        let db = state.db.lock().expect("database lock poisoned");
+        sweep(&db, now).map(|(created, skips, pushed)| {
+            let telegram_ok =
+                crate::telegram::can_send(&db, state.secrets.as_ref(), &state.telegram);
+            let mut queued = 0usize;
+            if telegram_ok {
+                for (id, _) in pushed.iter().filter(|(_, wants)| *wants) {
+                    if queue_telegram(&db, *id, now) {
+                        queued += 1;
+                    }
+                }
+            }
+            (created, skips, queued)
+        })
+    };
+    match outcome {
+        Ok((created, skips, queued)) => {
+            let flushed = crate::telegram::flush(state.clone()).await;
+            Json(serde_json::json!({
+                "ok": true,
+                "created": created,
+                "queued_telegram": queued,
+                "telegram_sent": flushed.sent,
+                "telegram_failed": flushed.failed,
+                "skipped": skips.into_iter().map(|(reason, count)| serde_json::json!({"reason": reason, "count": count})).collect::<Vec<_>>(),
+            }))
+            .into_response()
+        }
         Err(err) => internal_error(err),
     }
 }
@@ -698,21 +779,21 @@ mod tests {
             timezone: "UTC".into(),
             channels: "in-app".into(),
         };
-        assert_eq!(validate(&input), Ok(()));
+        assert_eq!(validate(&input, false), Ok(()));
         input.channels = "telegram".into();
-        assert_eq!(validate(&input), Err("channel_not_implemented"));
+        assert_eq!(validate(&input, false), Err("channel_not_implemented"));
         input.channels = "in-app".into();
         input.match_kind = "sql".into();
-        assert_eq!(validate(&input), Err("invalid_match_kind"));
+        assert_eq!(validate(&input, false), Err("invalid_match_kind"));
         input.match_kind = "entity".into();
         input.quiet_from = "22:00".into();
-        assert_eq!(validate(&input), Err("quiet_needs_both_bounds"));
+        assert_eq!(validate(&input, false), Err("quiet_needs_both_bounds"));
         input.quiet_to = "07:00".into();
-        assert_eq!(validate(&input), Ok(()));
+        assert_eq!(validate(&input, false), Ok(()));
         input.timezone = "Mars/Base".into();
-        assert_eq!(validate(&input), Err("invalid_timezone"));
+        assert_eq!(validate(&input, false), Err("invalid_timezone"));
         input.timezone = "UTC".into();
         input.slug = "BTC Room".into();
-        assert_eq!(validate(&input), Err("invalid_slug"));
+        assert_eq!(validate(&input, false), Err("invalid_slug"));
     }
 }

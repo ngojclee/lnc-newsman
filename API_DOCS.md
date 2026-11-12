@@ -119,12 +119,33 @@ Session only — an alert inbox is per person, so a read-only API key cannot rea
 | GET | `/api/alerts` | Inbox, newest first. Query: `unread=1` to narrow, `limit` 1–200. Answers `{ data, unread }` |
 | POST | `/api/alerts/{id}/read` | Marks one delivery read; answers `{"changed": boolean}` |
 | POST | `/api/alerts/read-all` | Marks every unread delivery read; answers `{"changed": n}` |
-| GET | `/api/admin/alerts/rules` | Every rule, enabled or not, plus the channel list this build can deliver |
-| POST | `/api/admin/alerts/rules` | Upserts a rule. A channel other than `in-app` is refused with 400 `channel_not_implemented` |
+| GET | `/api/admin/alerts/rules` | Every rule, enabled or not, plus the channels a rule may name right now: `in-app` always, `telegram` while `telegram_mode` is not `off` |
+| POST | `/api/admin/alerts/rules` | Upserts a rule. A channel that is not implemented, or `telegram` while it is switched off, is refused with 400 `channel_not_implemented`. Declaring `telegram` does **not** require its secret to exist yet — a missing destination shows as `reason` on `/api/admin/telegram` and as queued rows |
 | PUT | `/api/admin/alerts/rules/{slug}` | `{ "enabled": boolean }` |
-| POST | `/api/admin/alerts/sweep` | Runs one sweep now; answers `{ created, skips }` |
+| POST | `/api/admin/alerts/sweep` | Runs one sweep now; answers `{ created, queued_telegram, telegram_sent, telegram_failed, skipped }` |
 
 A delivery is written at most once per (rule, article) — enforced by a UNIQUE row, not by sweep bookkeeping. Quiet-hour skips are logged and **do not** consume the event, so it fires after the window. Matching reuses the reader's enabled-region and enabled-topic predicates.
+
+## Telegram channel (P7)
+
+Two ways to send, chosen by `telegram_mode`: `relay` (the fleet gateway at `https://telegram.lengoc.me`, bot configured there; this app holds only a relay token) or `direct` (the canonical Bot API with our own bot token). `off` is the default. `TELEGRAM_MODE` in the environment overrides the stored setting; otherwise the one set in settings applies.
+
+| Setting / secret | Meaning |
+|---|---|
+| `telegram_mode` | `relay` \| `direct` \| `off` (settings, or `TELEGRAM_MODE` env) |
+| `telegram_chat_id` | Group id, negative for a supergroup (settings) |
+| `telegram_alerts_topic_id` | Optional forum topic for alerts; empty sends to General |
+| `TELEGRAM_RELAY_BASE_URL` | Relay base, default `https://telegram.lengoc.me`; https only |
+| `TELEGRAM_ALLOWED_HOSTS` | Extra hosts allowed to resolve to a private address, comma-separated |
+| secret `telegram-relay-token` | Relay API key, write-only via `/api/admin/secrets` |
+| secret `telegram-bot-token` | Bot API token (direct mode), write-only |
+
+Sending never runs while the database lock is held: the sweep queues one row per delivery in `alert_telegram_outbox` and a 30-second flusher claims it (`pending` → `sending`) before calling out, so a delivery can be sent at most once and a row stranded by a crash is reclaimed after 300 seconds. The message is the article title and its link — the same thing the in-app inbox shows.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/admin/telegram` | Resolved mode, relay host check, `chat_id`, whether each secret is stored, `ready` + `reason`, and queue counts. Never returns a secret |
+| POST | `/api/admin/telegram/flush` | Sends everything queued now; answers `{ ok, sent, failed, skipped }` (the same payload the background flusher uses) |
 
 ## MCP endpoint (P8, offline part)
 

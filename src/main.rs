@@ -24,6 +24,7 @@ mod regions;
 mod secrets;
 mod series;
 mod tax;
+mod telegram;
 mod themes;
 
 use axum::{
@@ -67,6 +68,8 @@ struct AppState {
     llm: llm::LlmConfig,
     /// Hub/OpenAI-compatible provider layer (P5/P6): base URL, allowlist, model aliases.
     hub: hub::ProviderConfig,
+    /// Telegram alert delivery: relay or direct, plus the hosts allowed to be private.
+    telegram: telegram::TelegramConfig,
     /// Admin switch for the LLM layer. Off means "rules only", which always works.
     llm_enabled: bool,
     pack: Mutex<regions::PackStatus>,
@@ -91,6 +94,7 @@ impl AppState {
                 model: "mock".into(),
             },
             hub: hub::ProviderConfig::default(),
+            telegram: telegram::TelegramConfig::default(),
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),
@@ -111,13 +115,39 @@ struct SettingsResponse {
     language: String,
     default_reader_mode: String,
     collector_enabled: bool,
+    /// Effective mode (env override applied) and the mode the admin stored.
+    telegram_mode: &'static str,
+    telegram_mode_stored: &'static str,
+    telegram_env_override: bool,
+    telegram_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telegram_reason: Option<&'static str>,
+    telegram_chat_id: Option<i64>,
+    telegram_alerts_topic_id: Option<i64>,
+    telegram_has_relay_token: bool,
+    telegram_has_bot_token: bool,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct SettingsPatch {
     language: Option<String>,
     default_reader_mode: Option<String>,
     collector_enabled: Option<bool>,
+    // Telegram fields are listed here rather than flattened: `deny_unknown_fields`
+    // stops working once a struct flattens another, and a typo must be an error.
+    telegram_mode: Option<String>,
+    telegram_chat_id: Option<String>,
+    telegram_alerts_topic_id: Option<String>,
+}
+
+impl SettingsPatch {
+    fn telegram(&self) -> telegram::TelegramSettingsPatch {
+        telegram::TelegramSettingsPatch {
+            telegram_mode: self.telegram_mode.clone(),
+            telegram_chat_id: self.telegram_chat_id.clone(),
+            telegram_alerts_topic_id: self.telegram_alerts_topic_id.clone(),
+        }
+    }
 }
 #[derive(Deserialize)]
 struct DashboardQuery {
@@ -148,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
     app_state.connector_config = connectors::ConnectorConfig::from_env();
     app_state.llm = llm::LlmConfig::from_env();
     app_state.hub = hub::ProviderConfig::from_env();
+    app_state.telegram = telegram::TelegramConfig::from_env();
     if app_state.secrets.is_none() {
         tracing::info!("LNC_MASTER_KEY is not set; the provider secret store stays closed");
     }
@@ -214,6 +245,8 @@ fn router(state: SharedState) -> Router {
             axum::routing::put(alerts::toggle_rule),
         )
         .route("/api/admin/alerts/sweep", post(alerts::run_sweep))
+        .route("/api/admin/telegram", get(telegram::status))
+        .route("/api/admin/telegram/flush", post(telegram::flush_handler))
         .route("/api/admin/llm", get(llm::status).patch(llm::set_enabled))
         .route("/api/admin/provider", get(hub::status))
         .route("/api/admin/provider/check", post(hub::check))
@@ -554,6 +587,11 @@ async fn api_status(State(state): State<SharedState>) -> Json<serde_json::Value>
 }
 fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
     let db = state.db.lock().expect("database lock poisoned");
+    let resolved = telegram::endpoint(&db, state.secrets.as_ref(), &state.telegram);
+    let has = |name: &str| match state.secrets.as_ref() {
+        Some(vault) => secrets::get(&db, vault, name).is_ok(),
+        None => false,
+    };
     Ok(SettingsResponse {
         version: state.cfg.version,
         language: db.get_setting("language")?.unwrap_or_else(|| "vi".into()),
@@ -561,6 +599,19 @@ fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
             .get_setting("default_reader_mode")?
             .unwrap_or_else(|| "paper".into()),
         collector_enabled: collector::collector_enabled(&db),
+        telegram_mode: telegram::effective_mode(&db, &state.telegram).as_str(),
+        telegram_mode_stored: telegram::stored_mode(&db).as_str(),
+        telegram_env_override: state.telegram.mode.is_some(),
+        telegram_ready: resolved.is_ok(),
+        telegram_reason: resolved.err(),
+        telegram_chat_id: db
+            .get_setting(telegram::CHAT_ID_KEY)?
+            .and_then(|value| value.trim().parse::<i64>().ok()),
+        telegram_alerts_topic_id: db
+            .get_setting(telegram::TOPIC_ID_KEY)?
+            .and_then(|value| value.trim().parse::<i64>().ok()),
+        telegram_has_relay_token: has(telegram::SECRET_RELAY),
+        telegram_has_bot_token: has(telegram::SECRET_BOT),
     })
 }
 async fn get_settings(State(state): State<SharedState>) -> Response {
@@ -594,11 +645,26 @@ async fn patch_settings(
     if let Some(enabled) = patch.collector_enabled {
         writes.push(("collector_enabled", if enabled { "true" } else { "false" }));
     }
+    // Telegram fields are validated together, so a bad chat id cannot leave the mode
+    // changed with no destination. Nothing is written unless the whole patch is valid.
+    let telegram_writes = match telegram::settings_writes(&patch.telegram()) {
+        Ok(writes) => writes,
+        Err(code) => return failure(StatusCode::BAD_REQUEST, code),
+    };
+    let mut owned: Vec<(&str, String)> = writes
+        .iter()
+        .map(|(key, value)| (*key, (*value).to_string()))
+        .collect();
+    owned.extend(telegram_writes);
+    let owned_refs: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
     let result = state
         .db
         .lock()
         .expect("database lock poisoned")
-        .set_settings(&writes);
+        .set_settings(&owned_refs);
     if let Err(err) = result {
         return internal_error(err);
     }
@@ -687,6 +753,7 @@ mod tests {
                 model: "mock".into(),
             },
             hub: hub::ProviderConfig::default(),
+            telegram: telegram::TelegramConfig::default(),
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),

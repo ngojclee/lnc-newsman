@@ -74,7 +74,7 @@ fn save(db: &crate::db::Database, slug: &str, kind: &str, value: &str, quiet: (&
         timezone: "UTC".into(),
         channels: "in-app".into(),
     };
-    validate(&input).expect("valid rule");
+    validate(&input, false).expect("valid rule");
     upsert(db, &input).unwrap();
 }
 
@@ -84,10 +84,10 @@ fn one_event_delivers_once_no_matter_how_often_the_sweep_runs() {
     seed_article(&db, "btc jumps", "crypto", Some("BTC"));
     save(&db, "btc", "entity", "BTC", ("", ""));
 
-    let (created, _) = sweep(&db, 1_000).unwrap();
+    let (created, _, _) = sweep(&db, 1_000).unwrap();
     assert_eq!(created, 1, "the matching article delivers once");
     for now in [2_000, 5_000, 90_000] {
-        let (again, _) = sweep(&db, now).unwrap();
+        let (again, _, _) = sweep(&db, now).unwrap();
         assert_eq!(again, 0, "sweeping again at {now} must not deliver twice");
     }
     assert_eq!(inbox(&db, false, 10).unwrap().len(), 1);
@@ -102,14 +102,14 @@ fn a_second_matching_event_waits_for_the_cooldown() {
 
     seed_article(&db, "second", "crypto", Some("BTC"));
     // 100 s later: inside the 600 s cooldown, so the new article is skipped, not lost.
-    let (created, skips) = sweep(&db, 1_100).unwrap();
+    let (created, skips, _) = sweep(&db, 1_100).unwrap();
     assert_eq!(created, 0);
     assert!(
         skips.contains(&("cooldown".to_string(), 1)),
         "skips: {skips:?}"
     );
     // After the window the same article fires.
-    let (created, _) = sweep(&db, 1_700).unwrap();
+    let (created, _, _) = sweep(&db, 1_700).unwrap();
     assert_eq!(created, 1);
     assert_eq!(inbox(&db, false, 10).unwrap().len(), 2);
 }
@@ -121,14 +121,14 @@ fn quiet_hours_leave_the_event_for_after_the_window() {
     // Quiet 22:00-07:00 UTC. 23:00 UTC is inside it.
     save(&db, "btc", "entity", "BTC", ("22:00", "07:00"));
     let late = 23 * 3600;
-    let (created, skips) = sweep(&db, late).unwrap();
+    let (created, skips, _) = sweep(&db, late).unwrap();
     assert_eq!(created, 0);
     assert!(
         skips.contains(&("quiet_hours".to_string(), 1)),
         "skips: {skips:?}"
     );
     // 08:00 UTC the next day is outside the window: the same article now delivers.
-    let (created, _) = sweep(&db, 8 * 3600).unwrap();
+    let (created, _, _) = sweep(&db, 8 * 3600).unwrap();
     assert_eq!(created, 1, "a quiet skip must not consume the event");
     assert_eq!(unread_count(&db).unwrap(), 1);
 }
@@ -168,7 +168,7 @@ fn keyword_and_topic_rules_only_match_their_own_subject() {
     seed_article(&db, "Bitcoin breaks a record", "crypto", None);
     seed_article(&db, "Wheat prices fall", "macro", None);
     save(&db, "kw", "keyword", "bitcoin", ("", ""));
-    let (created, _) = sweep(&db, 1_000).unwrap();
+    let (created, _, _) = sweep(&db, 1_000).unwrap();
     assert_eq!(
         created, 1,
         "only the Bitcoin title matches the keyword rule"
@@ -188,7 +188,7 @@ fn the_skip_log_explains_why_nothing_was_sent() {
     let db = db();
     seed_article(&db, "held back", "crypto", Some("BTC"));
     save(&db, "btc", "entity", "BTC", ("22:00", "07:00"));
-    let (_, _) = sweep(&db, 23 * 3600).unwrap();
+    let (_, _, _) = sweep(&db, 23 * 3600).unwrap();
     let (rule, article, reason): (String, String, String) = db
         .conn
         .query_row(
@@ -203,7 +203,7 @@ fn the_skip_log_explains_why_nothing_was_sent() {
         ("btc", "held back", "quiet_hours")
     );
     // A successful delivery clears the stale skip row for that pair.
-    let (created, _) = sweep(&db, 8 * 3600).unwrap();
+    let (created, _, _) = sweep(&db, 8 * 3600).unwrap();
     assert_eq!(created, 1);
     let left: i64 = db
         .conn
