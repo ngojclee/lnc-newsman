@@ -169,6 +169,19 @@ Owner's decision: let an outside agent write analyses and notes through the Busi
 - **Tests: 254** (11 write tests + 1 argument test), clippy `-D warnings` clean, UI build clean. Measured over real HTTP: no scope → `-32601`, with scope → note stored and attributed to the client id, forged author → refused, bad citation → refused, audit row present, reader API key path unchanged.
 - Migration **18** is additive only (four `CREATE TABLE`, no `DROP`, no `DELETE`); verified applying cleanly on a fresh database before deploying.
 
+## 0.5.0 deployed and verified (2026-11-12)
+
+Live at `newsman.lengoc.me`: `/api/app-info` 0.5.0, container `2d0802e6f125` healthy, stack 108 `up`, GitOps workflow `healthy`. Verified against production, not the local build:
+
+- `tools/list` with a reader key returns **16 tools** with bare names (7 read, 3 new read, 6 write);
+- no credential → 401 `unauthorized`; a Hub-shaped call before pairing → 401 `connector_auth_required`; an undeclared argument → `isError` with `unknown argument: limit`;
+- `/api/admin/connector`, `/api/admin/connector/writes`, `/api/admin/connector/analyses` all 200 — **migration 18 applied** to the production database.
+
+**Two things this deploy caught, both worth remembering:**
+
+1. `stack.yml` still defaulted `CONNECTOR_MAX_SCOPES` to `newsman:read`. The code granted writes while the deployed connector advertised a read-only ceiling — a ceiling that disagreed with the owner's decision, and quietly. Fixed in `c6995e2`; the compose default is now both scopes, and a deployment that wants read-only sets the env.
+2. A build of the whole Rust release takes **~15 minutes** on this NAS, and `AutoUpdate.Interval: 1m` means **every push to `main` starts one**. Commit in batches; a handful of small docs commits will occupy the queue for the better part of an hour and delay anything else building on the same daemon.
+
 ## Infinite scroll (2026-11-12, v0.5.0)
 
 Owner's request: drop the "Xem thêm" button and load the next page when the list reaches the bottom.
