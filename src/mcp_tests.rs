@@ -272,3 +272,36 @@ fn the_tool_list_has_no_write_tool_and_no_duplicate_name() {
         }
     }
 }
+
+/// The Hub's client sends `notifications/initialized` (no `id`) and treats 202 as
+/// "delivered, nothing to read". Answering with a JSON-RPC object would put a stray
+/// response on the stream — and the MCP spec forbids answering a notification at all.
+#[tokio::test]
+async fn a_notification_is_accepted_without_a_body() {
+    let app = crate::router(state());
+    for body in [
+        serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        serde_json::json!([{"jsonrpc":"2.0","method":"notifications/initialized"}]),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(header::HOST, "newsman.test")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-requested-with", "XMLHttpRequest")
+                    .header(header::AUTHORIZATION, "Bearer test-api-key")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::ACCEPTED,
+            "a notification must not be answered: {body}"
+        );
+    }
+}

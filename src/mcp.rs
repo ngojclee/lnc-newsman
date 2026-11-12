@@ -150,15 +150,6 @@ fn tool_descriptors(caller: Option<&Caller>) -> Value {
     )
 }
 
-fn rpc_error(request_id: Value, code: i64, message: &str) -> Response {
-    // JSON-RPC-level failures still answer HTTP 200; that is what clients expect.
-    Json(json!({
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": code, "message": message}
-    }))
-    .into_response()
-}
 
 /// A tool failure. It travels inside the result (`isError: true`) so a client can show
 /// the message without treating the whole call as a transport failure.
@@ -316,14 +307,27 @@ pub async fn handle(
     let caller = caller.map(|axum::Extension(caller)| caller);
     // A batch is accepted and answered in order; MCP clients may send one.
     if let Value::Array(calls) = body {
-        if calls.is_empty() {
-            return rpc_error(Value::Null, -32600, "empty batch");
-        }
+        // Notifications carry no `id` and must not be answered, so a batch may end up
+        // with nothing to say back.
         let answers: Vec<Value> = calls
             .into_iter()
+            .filter(|call| call.get("id").is_some())
             .map(|call| single(&state, caller.as_ref(), call))
             .collect();
+        if answers.is_empty() {
+            return StatusCode::ACCEPTED.into_response();
+        }
         return Json(Value::Array(answers)).into_response();
+    }
+    if body.get("id").is_none() {
+        // A notification (the Hub's `notifications/initialized` is one). The MCP
+        // specification says the server MUST NOT answer it, and the Hub's client
+        // treats 202 as "delivered, nothing to read". Answering with a JSON-RPC
+        // object here would put a stray response on the stream.
+        let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+        if !method.is_empty() {
+            return StatusCode::ACCEPTED.into_response();
+        }
     }
     let answer = single(&state, caller.as_ref(), body);
     Json(answer).into_response()
