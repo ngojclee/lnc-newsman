@@ -129,3 +129,29 @@ defenderutil -s start_docker_daemon && defenderutil -a
 1. **`defenderd` socket chết** — ✅ ĐÃ GIẢI QUYẾT (restart, socket sống). Nhưng auto-sync per-create **không tồn tại theo thiết kế** → chỉ có message/apply mới sync → phải chạy `-s`/`-a` sau mỗi lần tạo network, hoặc đề xuất owner: cron/watchdog so `docker network ls` vs `Postrouting`, hoặc ticket ASUSTOR.
 2. `/dev/std*` symlinks thiếu → dockerd gọi nft lỗi (cosmetic).
 3. `defenderutil -s`/`stop`/`restart`/`stop_docker_daemon` message semantics — chưa map hết (`stop` flush firewall — tránh).
+
+## SOP vận hành — chạy sau MỖI lần tạo stack/network mới (bắt buộc)
+
+Áp dụng cho mọi app deploy trên NAS Saigon (10.20.2.1 / `portainer-nas-vn`, endpoint 2). Nguyên nhân: `dockerd` chạy `--iptables=false`, toàn bộ rule masquerade/forward do `defenderd` render, và nó **không** watch docker events.
+
+1. Sau khi stack mới lên (container đã `running`, đã lấy được IP bridge riêng):
+   ```
+   docker network ls                      # ghi lại subnet mới
+   defenderutil -s start_docker_daemon    # trigger render (~6s)
+   ```
+2. Kiểm ngay trong container vừa tạo:
+   ```
+   docker exec <container> timeout 8 wget -qO /dev/null https://www.govinfo.gov/rss/plaw.xml && echo OK || echo FAIL
+   ```
+   Fail = subnet chưa có rule. Đừng chẩn đoán tiếp bằng MTR/MTU; đây gần như luôn là rule thiếu.
+3. Xác nhận rule đã sinh:
+   ```
+   nft list chain ip Asustor_Firewall_V4 Postrouting | grep <subnet>
+   ```
+4. **Không dùng** `S99defenderd stop|restart` — `do_stop` gọi `defenderutil -R` và **flush toàn bộ firewall** (mất hết rule, mất egress mọi stack). Muốn restart daemon thì `kill -TERM <pid>` rồi `S99defenderd start`, chờ 30–60 s cho socket.
+
+Bằng chứng áp dụng thật (12/11/2026): sau khi NAS khôi phục 17 rule, `lnc-newsman` (172.31.0.2) lấy được `plaw.xml` **200, 131 833 byte**, rồi lượt fetch govinfo lưu **100 item** trong 578 ms so với 10 575 ms timeout trước đó.
+
+## Đã dùng để làm gì (không chỉ là sự cố)
+
+Sự cố này chặn đúng việc bật govinfo (P8). Sau khi egress thông: bật `us` → bật `govinfo` → `POST /api/admin/sources/6/fetch` → `items_new: 100`. Xem `.docs/PROJECT_STATUS.md` mục "Govinfo live, and two real labelling bugs it exposed" để biết hai lỗi gán nhãn mà 100 bài thật đó làm lộ ra.
