@@ -164,12 +164,13 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "notes",
-            description: "Notes stored on one article or official document, newest first. Notes written by an agent carry its client id as `author`; the owner's own notes have none.",
+            description: "Notes stored on one article, official document or analysis, newest first. Notes written by an agent carry its client id as `author`; the owner's own notes have none.",
             input: json!({
                 "type": "object",
                 "properties": {
                     "article_id": {"type": "integer", "minimum": 1},
                     "document_id": {"type": "integer", "minimum": 1},
+                    "analysis_id": {"type": "integer", "minimum": 1},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
                 },
                 "additionalProperties": false
@@ -177,12 +178,13 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "analyses",
-            description: "Stored briefs and summaries, newest first, with the article ids each one cites and the author's client id.",
+            description: "Stored briefs and summaries, newest first, with the article ids each one cites, the author's client id, and a `stable_key` that does not change across edits (use it as a file name). `updated_since` returns only what changed after that moment, for an incremental pull.",
             input: json!({
                 "type": "object",
                 "properties": {
                     "topic": {"type": "string"},
                     "region": {"type": "string"},
+                    "updated_since": {"type": ["string", "integer"], "description": "ISO date (YYYY-MM-DD, or a full RFC 3339 timestamp) or Unix seconds. A bare date means from the start of that day in UTC. Returns only analyses updated strictly after it."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
                 },
                 "additionalProperties": false
@@ -199,12 +201,13 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "note_create",
-            description: "Add a note to one stored article or official document. Provide exactly one of article_id or document_id. The author is your delegated client id, set by the Hub — not an argument.",
+            description: "Add a note to one stored article, official document or analysis. Provide exactly one of article_id, document_id or analysis_id. The author is your delegated client id, set by the Hub — not an argument.",
             input: json!({
                 "type": "object",
                 "properties": {
                     "article_id": {"type": "integer", "minimum": 1},
                     "document_id": {"type": "integer", "minimum": 1},
+                    "analysis_id": {"type": "integer", "minimum": 1, "description": "Attach feedback to a stored analysis; the analysis itself is never modified."},
                     "body": {"type": "string", "description": "Note text, at most 4000 characters."}
                 },
                 "required": ["body"],
@@ -488,8 +491,15 @@ fn dispatch(
         "notes" => {
             let article = int_arg_opt(arguments, "article_id")?;
             let document = int_arg_opt(arguments, "document_id")?;
-            if article.is_none() && document.is_none() {
-                return Err("provide exactly one of `article_id` or `document_id`".into());
+            let analysis = int_arg_opt(arguments, "analysis_id")?;
+            let present = [article.is_some(), document.is_some(), analysis.is_some()]
+                .into_iter()
+                .filter(|value| *value)
+                .count();
+            if present != 1 {
+                return Err(
+                    "provide exactly one of `article_id`, `document_id` or `analysis_id`".into(),
+                );
             }
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
             // A note list is more useful with the flags on the same article, and the
@@ -498,7 +508,7 @@ fn dispatch(
                 Some(id) => crate::write::flags_for(&db, id).map_err(|err| err.to_string())?,
                 None => Vec::new(),
             };
-            crate::write::notes_for(&db, article, document, limit)
+            crate::write::notes_for(&db, article, document, analysis, limit)
                 .map(|data| json!({"data": data, "flags": flags}))
                 .map_err(|err| err.to_string())
         }
@@ -506,12 +516,21 @@ fn dispatch(
             let topic = string_arg(arguments, "topic");
             let region = string_arg(arguments, "region");
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
+            // The caller passes an ISO date (`2026-11-12` or a full timestamp); stored
+            // rows use Unix seconds, so the date is converted here. A bare date means
+            // "from the start of that day in UTC", which is what a date-only filter
+            // should mean and is stated in the tool description. A Unix integer is also
+            // accepted so a caller that already holds one need not format it.
+            let updated_since = match arguments.get("updated_since") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(parse_updated_since(value)?),
+            };
             if let Some(code) = region.as_deref()
                 && !matches!(crate::regions::region_enabled(&db, code), Ok(true))
             {
                 return Err(format!("region `{code}` is not enabled"));
             }
-            crate::write::analysis_list(&db, topic.as_deref(), region.as_deref(), limit)
+            crate::write::analysis_list(&db, topic.as_deref(), region.as_deref(), updated_since, limit)
                 .map(|data| json!({"data": data}))
                 .map_err(|err| err.to_string())
         }
@@ -541,6 +560,34 @@ fn dispatch(
         }
         other => Err(format!("unknown tool `{other}`")),
     }
+}
+
+/// Turn an `updated_since` argument into Unix seconds. Accepts an ISO date, a full
+/// RFC 3339 timestamp, or an integer of seconds. A date-only value means the start of
+/// that day in UTC; refusing anything else is better than silently ignoring the filter,
+/// which would return everything while the caller believed it had a delta.
+fn parse_updated_since(value: &Value) -> Result<i64, String> {
+    if let Some(seconds) = value.as_i64() {
+        return if seconds >= 0 {
+            Ok(seconds)
+        } else {
+            Err("`updated_since` must not be before 1970".into())
+        };
+    }
+    let text = value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or("`updated_since` must be an ISO date or Unix seconds")?;
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        && let Some(midnight) = date.and_hms_opt(0, 0, 0)
+    {
+        return Ok(midnight.and_utc().timestamp());
+    }
+    if let Ok(stamp) = chrono::DateTime::parse_from_rfc3339(text) {
+        return Ok(stamp.timestamp());
+    }
+    Err("`updated_since` must be an ISO date (YYYY-MM-DD) or Unix seconds".into())
 }
 
 /// An optional positive integer argument, rejecting a zero or a negative id rather than

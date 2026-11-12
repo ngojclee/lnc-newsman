@@ -441,10 +441,10 @@ fn notes_and_analyses_are_readable_with_the_author_label() {
     )
     .unwrap();
     let db = state.db.lock().unwrap();
-    let notes = notes_for(&db, Some(1), None, 10).unwrap();
+    let notes = notes_for(&db, Some(1), None, None, 10).unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["author"], "agent-a");
-    let analyses = analysis_list(&db, None, None, 10).unwrap();
+    let analyses = analysis_list(&db, None, None, None, 10).unwrap();
     assert_eq!(analyses.len(), 1);
     assert_eq!(analyses[0]["author"], "agent-a");
     assert_eq!(analyses[0]["source_article_ids"][0], 1);
@@ -475,4 +475,255 @@ async fn an_undeclared_argument_is_refused_not_ignored() {
     let message = body["result"]["content"][0]["text"].as_str().unwrap();
     assert!(message.contains("unknown argument"), "{message}");
     assert!(message.contains("author"), "{message}");
+}
+
+// ---------- notes on an analysis (the Obsidian loop) ----------
+
+fn seed_analysis(state: &SharedState) -> i64 {
+    let agent = caller("agent-writer", &[READ_SCOPE, WRITE_SCOPE]);
+    analysis_create(
+        state,
+        &agent,
+        &serde_json::json!({"title": "Forecast", "body": "BTC up", "topic_slug": "crypto"}),
+    )
+    .expect("analysis created")["id"]
+        .as_i64()
+        .unwrap()
+}
+
+#[test]
+fn a_note_can_hang_off_an_analysis() {
+    let state = state();
+    let analysis_id = seed_analysis(&state);
+    let agent = caller("agent-obsidian", &[READ_SCOPE, WRITE_SCOPE]);
+    let value = note_create(
+        &state,
+        &agent,
+        &serde_json::json!({"analysis_id": analysis_id, "body": "I disagree with the third point."}),
+    )
+    .expect("feedback on an analysis is allowed");
+    assert_eq!(value["created"], true);
+
+    let db = state.db.lock().unwrap();
+    let (target, author): (Option<i64>, Option<String>) = db
+        .conn
+        .query_row(
+            "SELECT analysis_id, author_client FROM newsman_notes WHERE id=?1",
+            [value["id"].as_i64().unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(target, Some(analysis_id));
+    assert_eq!(
+        author.as_deref(),
+        Some("agent-obsidian"),
+        "the author is the delegated caller, never an argument"
+    );
+    // The note must be readable back through the analysis target.
+    let notes = notes_for(&db, None, None, Some(analysis_id), 10).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["analysis_id"], analysis_id);
+    // And the write is audited like any other.
+    let logged: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM newsman_write_log WHERE tool='note_create' AND client_id='agent-obsidian'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(logged, 1);
+}
+
+#[test]
+fn a_note_on_a_missing_analysis_is_refused() {
+    let state = state();
+    let agent = caller("agent-obsidian", &[READ_SCOPE, WRITE_SCOPE]);
+    let error = note_create(
+        &state,
+        &agent,
+        &serde_json::json!({"analysis_id": 4242, "body": "orphan"}),
+    )
+    .err()
+    .unwrap();
+    assert!(error.contains("no analysis"), "{error}");
+    let db = state.db.lock().unwrap();
+    let rows: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM newsman_notes", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "a refused note must leave no row behind");
+}
+
+#[test]
+fn two_targets_at_once_are_refused() {
+    let state = state();
+    let analysis_id = seed_analysis(&state);
+    let agent = caller("agent-obsidian", &[READ_SCOPE, WRITE_SCOPE]);
+    for arguments in [
+        serde_json::json!({"article_id": 1, "analysis_id": analysis_id, "body": "x"}),
+        serde_json::json!({"article_id": 1, "document_id": 1, "body": "x"}),
+        serde_json::json!({"body": "no target at all"}),
+    ] {
+        let error = note_create(&state, &agent, &arguments).err().unwrap();
+        assert!(error.contains("exactly one"), "{arguments} -> {error}");
+    }
+}
+
+#[test]
+fn the_stable_key_does_not_move_when_the_analysis_is_edited() {
+    let state = state();
+    let analysis_id = seed_analysis(&state);
+    let db = state.db.lock().unwrap();
+    let first = analysis_list(&db, None, None, None, 10).unwrap();
+    let key_first = first[0]["stable_key"].as_str().unwrap().to_string();
+    assert_eq!(
+        key_first,
+        format!("analysis-{analysis_id}"),
+        "the key is derived from the immutable row id"
+    );
+    assert_eq!(first[0]["analysis_id"], analysis_id);
+    drop(db);
+
+    // Edit the analysis, as an agent would with a correction.
+    let agent = caller("agent-writer", &[READ_SCOPE, WRITE_SCOPE]);
+    analysis_update(
+        &state,
+        &agent,
+        &serde_json::json!({"id": analysis_id, "body": "BTC up, revised"}),
+    )
+    .expect("the author may revise");
+
+    let db = state.db.lock().unwrap();
+    let second = analysis_list(&db, None, None, None, 10).unwrap();
+    assert_eq!(
+        second[0]["stable_key"].as_str().unwrap(),
+        key_first,
+        "an edit must not move the file name the owner's feedback is attached to"
+    );
+    assert!(second[0]["updated_at"].as_i64().unwrap() >= first[0]["updated_at"].as_i64().unwrap());
+}
+
+#[test]
+fn updated_since_returns_only_what_changed_after_it() {
+    let state = state();
+    let analysis_id = seed_analysis(&state);
+    let db = state.db.lock().unwrap();
+    let stored_updated = analysis_list(&db, None, None, None, 10).unwrap()[0]["updated_at"]
+        .as_i64()
+        .unwrap();
+    drop(db);
+
+    let db = state.db.lock().unwrap();
+    assert_eq!(
+        analysis_list(&db, None, None, Some(stored_updated), 10)
+            .unwrap()
+            .len(),
+        0,
+        "strictly-after: the row at exactly updated_since is not returned again"
+    );
+    assert_eq!(
+        analysis_list(&db, None, None, Some(stored_updated - 1), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(db);
+
+    let agent = caller("agent-writer", &[READ_SCOPE, WRITE_SCOPE]);
+    analysis_update(
+        &state,
+        &agent,
+        &serde_json::json!({"id": analysis_id, "body": "changed"}),
+    )
+    .unwrap();
+    let db = state.db.lock().unwrap();
+    // Bump the clock past the edit so the incremental pull sees it.
+    let rows = analysis_list(&db, None, None, Some(stored_updated - 1), 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["body"], "changed");
+}
+
+/// The caller sends an ISO date; the rows store Unix seconds. A bare date means the
+/// start of that day in UTC, and an unusable value is an error rather than a filter
+/// that silently does nothing — returning everything while the caller believes it has
+/// a delta is the failure this guards.
+#[test]
+fn updated_since_accepts_an_iso_date_and_refuses_nonsense() {
+    let state = state();
+    let _ = seed_analysis(&state);
+    let app = crate::router(state.clone());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let cases: Vec<(serde_json::Value, bool)> = vec![
+        (serde_json::json!("1970-01-01"), true),
+        (serde_json::json!("2099-01-01"), true),
+        (serde_json::json!("2026-11-12T00:00:00Z"), true),
+        (serde_json::json!(0), true),
+        (serde_json::json!("not a date"), false),
+        (serde_json::json!("2026-13-45"), false),
+        (serde_json::json!(-1), false),
+        (serde_json::json!({"d": 1}), false),
+    ];
+    for (value, accepted) in cases {
+        let body = serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"analyses","arguments":{"updated_since": value}}
+        });
+        let response = runtime.block_on(async {
+            use tower::ServiceExt;
+            let request = Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(header::HOST, "newsman.test")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-requested-with", "XMLHttpRequest")
+                .header("x-api-key", "test-api-key")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            app.clone().oneshot(request).await.unwrap()
+        });
+        let bytes = runtime
+            .block_on(async { response.into_body().collect().await.unwrap().to_bytes() });
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let is_error = parsed["result"]["isError"].as_bool().unwrap_or(false);
+        assert_eq!(
+            !is_error, accepted,
+            "updated_since={value} should be {}: {parsed}",
+            if accepted { "accepted" } else { "refused" }
+        );
+    }
+}
+
+/// A date far in the past returns the rows; a date far in the future returns none.
+#[test]
+fn an_iso_cutoff_filters_by_the_stored_time() {
+    let state = state();
+    let _ = seed_analysis(&state);
+    let db = state.db.lock().unwrap();
+    let updated = analysis_list(&db, None, None, None, 10).unwrap()[0]["updated_at"]
+        .as_i64()
+        .unwrap();
+    let day = chrono::DateTime::from_timestamp(updated, 0)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    // "since the start of that day" includes the row itself (it is later that day).
+    let cutoff = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp();
+    assert_eq!(
+        analysis_list(&db, None, None, Some(cutoff), 10).unwrap().len(),
+        1,
+        "a cutoff at the start of the row's own day includes it"
+    );
+    assert_eq!(
+        analysis_list(&db, None, None, Some(updated + 1), 10)
+            .unwrap()
+            .len(),
+        0
+    );
 }

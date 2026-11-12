@@ -677,7 +677,7 @@ async fn agent_writes(State(state): State<SharedState>) -> Response {
 /// Stored briefs and summaries with their author label, for the admin card.
 async fn agent_analyses(State(state): State<SharedState>) -> Response {
     let db = state.db.lock().expect("database lock poisoned");
-    match write::analysis_list(&db, None, None, 50) {
+    match write::analysis_list(&db, None, None, None, 50) {
         Ok(rows) => Json(serde_json::json!({"data": rows})).into_response(),
         Err(err) => internal_error(err),
     }

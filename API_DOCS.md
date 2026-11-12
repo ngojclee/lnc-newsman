@@ -204,8 +204,8 @@ Every tool answers through the same function the matching REST endpoint calls, s
 | `tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
 | `series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |
 | `observations` | `code` (required), `limit?` 1–200 | `GET /api/v1/series/{code}/observations` |
-| `notes` | `article_id` or `document_id`, `limit?` 1–100 | — (`GET /api/v1/articles` then the note list) |
-| `analyses` | `topic?`, `region?`, `limit?` 1–100 | — |
+| `notes` | exactly one of `article_id` / `document_id` / `analysis_id`, `limit?` 1–100 | — (`GET /api/v1/articles` then the note list) |
+| `analyses` | `topic?`, `region?`, `updated_since?` (ISO date or Unix seconds; strictly after), `limit?` 1–100 | — |
 | `write_log` | `limit?` 1–200 | — |
 
 ### Write tools — scope `newsman:write` (also needs `newsman:read`)
@@ -214,7 +214,7 @@ These write **only** the app's own analytic data. None of them can reach a sourc
 
 | Tool | Arguments | Effect |
 |---|---|---|
-| `note_create` | `body` (≤4000), exactly one of `article_id` / `document_id` | Adds a note; the author is the delegated client id |
+| `note_create` | `body` (≤4000), exactly one of `article_id` / `document_id` / `analysis_id` | Adds a note; the author is the delegated client id. A note on an analysis is **feedback**: it never modifies the analysis |
 | `note_update` | `id`, `body` | Replaces the text of a note **you wrote** |
 | `note_delete` | `id` | Deletes a note **you wrote** |
 | `analysis_create` | `title` (≤300), `body` (≤20000), `kind?` (`brief`/`summary`), `topic_slug?`, `region_code?`, `source_article_ids?` (≤200) | Stores a brief or summary |
@@ -223,6 +223,8 @@ These write **only** the app's own analytic data. None of them can reach a sourc
 
 Rules that hold for every write tool:
 
+- **A note may target an article, a document or an analysis**, chosen by exactly one of three ids (migration 19 rebuilt `newsman_notes` so the `CHECK` allows all three; SQLite cannot alter a constraint, so the table was copied and renamed). A note on an analysis is feedback: the analysis is never modified, updated or deleted through the connector.
+- **`analyses` carries `stable_key`** — `analysis-<id>`, derived from the immutable row id, so a caller can name a file after it and keep that name across edits. `updated_since` makes the pull incremental: an ISO date (`2026-11-12`, meaning the start of that day in UTC) or Unix seconds, always **strictly after**. An unusable value is an error, never a filter that quietly returns everything.
 - **An undeclared argument is refused on every tool, read and write.** Silently ignoring one is worse than an error: the caller believes it applied a filter (or set an author) that never took effect. The check derives the allowed names from the tool's own schema, so adding a parameter cannot drift out of sync — a test walks every tool and proves a declared argument is never refused.
 - **The author is the verified delegation**, never an argument. No tool has an `author` field, and an **undeclared argument is refused** (`isError` with `unknown argument: author`) rather than ignored — `additionalProperties: false` alone is a note to the client, so the server enforces it. This is what stops an agent believing it set an author it did not.
 - **Ownership is enforced on update and delete.** A note or brief written by the owner in the web UI has no author and is not reachable through this boundary; one written by another client is refused too.

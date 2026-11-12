@@ -120,6 +120,14 @@ fn article_exists(db: &db::Database, id: i64) -> Result<bool> {
         .map_err(|_| WriteError::new("storage_error"))
 }
 
+fn analysis_exists(db: &db::Database, id: i64) -> Result<bool> {
+    db.conn
+        .query_row("SELECT 1 FROM newsman_analyses WHERE id=?1", [id], |_| Ok(true))
+        .optional()
+        .map(|found| found.unwrap_or(false))
+        .map_err(|_| WriteError::new("storage_error"))
+}
+
 fn document_exists(db: &db::Database, id: i64) -> Result<bool> {
     db.conn
         .query_row("SELECT 1 FROM documents WHERE id=?1", [id], |_| Ok(true))
@@ -165,10 +173,18 @@ pub fn note_create(
     let body = required_text(arguments, "body", MAX_NOTE_CHARS).map_err(|e| e.0.to_string())?;
     let article_id = optional_id(arguments, "article_id").map_err(|e| e.0.to_string())?;
     let document_id = optional_id(arguments, "document_id").map_err(|e| e.0.to_string())?;
+    let analysis_id = optional_id(arguments, "analysis_id").map_err(|e| e.0.to_string())?;
     // Exactly one target: the CHECK constraint would reject both-or-neither anyway, but
-    // saying so here gives the caller a usable message instead of a storage error.
-    if article_id.is_some() == document_id.is_some() {
-        return Err("provide exactly one of `article_id` or `document_id`".into());
+    // saying so here gives the caller a usable message instead of a storage error. Three
+    // targets now, so the count is what matters rather than a pair comparison.
+    let targets = [article_id.is_some(), document_id.is_some(), analysis_id.is_some()]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+    if targets != 1 {
+        return Err(
+            "provide exactly one of `article_id`, `document_id` or `analysis_id`".into(),
+        );
     }
     let db = state.db.lock().map_err(|_| "database lock poisoned".to_string())?;
     if let Some(id) = article_id
@@ -181,12 +197,19 @@ pub fn note_create(
     {
         return Err(format!("no document `{id}`"));
     }
+    // A note must never point at an analysis that does not exist: it would be a row the
+    // owner can neither reach nor delete, and Obsidian would sync a file for nothing.
+    if let Some(id) = analysis_id
+        && !analysis_exists(&db, id).map_err(|e| e.0.to_string())?
+    {
+        return Err(format!("no analysis `{id}`"));
+    }
     let now = crate::now() as i64;
     db.conn
         .execute(
-            "INSERT INTO newsman_notes(article_id,document_id,body,author_client,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?5)",
-            params![article_id, document_id, body, caller.client_id, now],
+            "INSERT INTO newsman_notes(article_id,document_id,analysis_id,body,author_client,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![article_id, document_id, analysis_id, body, caller.client_id, now],
         )
         .map_err(|err| err.to_string())?;
     let id = db.conn.last_insert_rowid();
@@ -269,28 +292,38 @@ pub fn notes_for(
     db: &db::Database,
     article_id: Option<i64>,
     document_id: Option<i64>,
+    analysis_id: Option<i64>,
     limit: i64,
 ) -> anyhow::Result<Vec<Value>> {
     let mut stmt = db.conn.prepare(
-        "SELECT id,article_id,document_id,body,author_client,created_at,updated_at
+        "SELECT id,article_id,document_id,analysis_id,body,author_client,created_at,updated_at
          FROM newsman_notes
-         WHERE (?1 IS NOT NULL AND article_id=?1) OR (?2 IS NOT NULL AND document_id=?2)
-         ORDER BY created_at DESC, id DESC LIMIT ?3",
+         WHERE (?1 IS NOT NULL AND article_id=?1)
+            OR (?2 IS NOT NULL AND document_id=?2)
+            OR (?3 IS NOT NULL AND analysis_id=?3)
+         ORDER BY created_at DESC, id DESC LIMIT ?4",
     )?;
     let rows = stmt
-        .query_map(params![article_id, document_id, limit], |row| {
+        .query_map(params![article_id, document_id, analysis_id, limit], |row| {
             Ok(json!({
                 "id": row.get::<_, i64>(0)?,
                 "article_id": row.get::<_, Option<i64>>(1)?,
                 "document_id": row.get::<_, Option<i64>>(2)?,
-                "body": row.get::<_, String>(3)?,
-                "author": row.get::<_, Option<String>>(4)?,
-                "created_at": row.get::<_, i64>(5)?,
-                "updated_at": row.get::<_, i64>(6)?,
+                "analysis_id": row.get::<_, Option<i64>>(3)?,
+                "body": row.get::<_, String>(4)?,
+                "author": row.get::<_, Option<String>>(5)?,
+                "created_at": row.get::<_, i64>(6)?,
+                "updated_at": row.get::<_, i64>(7)?,
             }))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// The stable name Obsidian uses for a file. Derived from the row id, which never
+/// changes across edits — a key that moved would orphan the owner's feedback on disk.
+pub fn stable_key(analysis_id: i64) -> String {
+    format!("analysis-{analysis_id}")
 }
 
 // ---------- analyses ----------
@@ -436,19 +469,27 @@ pub fn analysis_list(
     db: &db::Database,
     topic: Option<&str>,
     region: Option<&str>,
+    updated_since: Option<i64>,
     limit: i64,
 ) -> anyhow::Result<Vec<Value>> {
     let mut stmt = db.conn.prepare(
         "SELECT id,kind,title,topic_slug,region_code,body,source_article_ids,author_client,created_at,updated_at
          FROM newsman_analyses
-         WHERE (?1 IS NULL OR topic_slug=?1) AND (?2 IS NULL OR region_code=?2)
-         ORDER BY updated_at DESC, id DESC LIMIT ?3",
+         WHERE (?1 IS NULL OR topic_slug=?1)
+           AND (?2 IS NULL OR region_code=?2)
+           AND (?3 IS NULL OR updated_at > ?3)
+         ORDER BY updated_at DESC, id DESC LIMIT ?4",
     )?;
     let rows = stmt
-        .query_map(params![topic, region, limit], |row| {
+        .query_map(params![topic, region, updated_since, limit], |row| {
             let cited: String = row.get(6)?;
+            let id: i64 = row.get(0)?;
             Ok(json!({
-                "id": row.get::<_, i64>(0)?,
+                "id": id,
+                // The pull side names a file after this, so it must not move when the
+                // analysis is edited: derived from the immutable row id.
+                "analysis_id": id,
+                "stable_key": stable_key(id),
                 "kind": row.get::<_, String>(1)?,
                 "title": row.get::<_, String>(2)?,
                 "topic_slug": row.get::<_, Option<String>>(3)?,
