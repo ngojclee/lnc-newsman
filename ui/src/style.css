@@ -184,6 +184,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outlin
 .topic-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .topic-count { color: var(--accent); font-size: 12px; font-weight: 750; }
 .load-more { justify-self: center; margin-top: 18px; }
+/* The infinite-scroll sentinel: a height so it can be observed, no visual weight. */
+.scroll-sentinel { height: 24px; display: flex; align-items: center; justify-content: center; color: var(--ink-soft); font-size: 13px; }
 
 /* Collector & source health */
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-soft); }

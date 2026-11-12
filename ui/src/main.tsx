@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { CatalogManager } from './CatalogManager'
 import { Select } from './Select'
@@ -51,7 +51,7 @@ const copy = {
     today: 'Hôm nay', topics: 'Chủ đề', stories: 'Câu chuyện', reports: 'Báo cáo', alerts: 'Cảnh báo', timeline: 'Dòng thời gian', saved: 'Đã lưu', settings: 'Cài đặt',
     subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Dùng khóa MANAGEMENT_KEY được cấu hình cho ứng dụng.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa cấu hình MANAGEMENT_KEY trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
     briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật, xếp theo thời gian. Mỗi tin dẫn về bài gốc; Newsman chỉ lưu tiêu đề và đường dẫn.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập tin tự động',
-    latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
+    latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', loadFailed: 'Không tải thêm được — thử lại', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
     alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật; luật có thể gửi thêm vào Telegram nếu kênh đó đang bật.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Kênh trong ứng dụng luôn hoạt động. Telegram chỉ nhận thông báo khi đã bật và cấu hình xong ở khối bên dưới; email/webhook thuộc bước sau.', entities: 'Thực thể',
     changeTheme: 'Đổi nền đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
@@ -74,7 +74,7 @@ const copy = {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
     subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Use the MANAGEMENT_KEY configured for this application.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'MANAGEMENT_KEY is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
     briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources, newest first. Every item links to the original; Newsman stores only titles and links.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Automatic collection',
-    latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
+    latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', loadFailed: 'Could not load more — try again', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
     alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule; a rule can also post to Telegram while that channel is on.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'The in-app channel always works. Telegram receives alerts only once it is switched on and fully configured below; email and webhooks come later.', entities: 'Entities',
     changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
@@ -315,12 +315,57 @@ function topicLabel(lang: Lang, topics: Topic[] | undefined, slug: string | null
   const topic = topics?.find((item) => item.slug === slug)
   return topic ? (lang === 'vi' ? topic.label_vi : topic.label_en) : null
 }
+
+/**
+ * Load the next page when a sentinel below the list scrolls into view.
+ *
+ * Two rules that matter more than the mechanism:
+ * - **One attempt per rendered page.** The observer disconnects when it fires, and the
+ *   effect rebuilds it only after the list grew, `hasMore` changed or a load finished.
+ *   A sentinel still on screen after a *failed* load (the list did not grow) is not
+ *   retried, so a broken network does not spin.
+ * - **A failure falls back to the button.** `failed` is set when a load added nothing;
+ *   the caller then shows the old "Load more" control instead of an invisible loop.
+ *
+ * Kept as a hook so every paginated list (articles, documents, alerts) behaves the same,
+ * and so the fallback is one implementation rather than three.
+ */
+function useInfiniteScroll({ hasMore, busy, count, load }: { hasMore: boolean; busy: boolean; count: number; load: () => Promise<boolean> }) {
+  const sentinel = useRef<HTMLDivElement | null>(null)
+  const [failed, setFailed] = useState(false)
+  // The gating flag is a ref, not state: the observer callback would otherwise close
+  // over a stale `busy` and fire twice for one page.
+  const inFlight = useRef(false)
+  useEffect(() => { setFailed(false) }, [count === 0])
+  useEffect(() => {
+    if (!hasMore || busy || failed) return
+    const node = sentinel.current
+    if (!node || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting) || inFlight.current) return
+      // Disconnect first: the callback must run the load exactly once, even if the
+      // sentinel stays in view while the request is in flight.
+      observer.disconnect()
+      inFlight.current = true
+      void load().then((grew) => {
+        inFlight.current = false
+        // Nothing new means the page is exhausted or the request failed; either way
+        // retrying automatically would loop, so hand control back to the button.
+        if (!grew) setFailed(true)
+      })
+    }, { rootMargin: '600px 0px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [hasMore, busy, count, failed, load])
+  return { sentinel, failed }
+}
+
 function useArticles(topic: string | null, region: string, source: string | null, pageSize = 30) {
   const [items, setItems] = useState<Article[] | null>(null)
   const [error, setError] = useState(false)
   const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
-  const load = async (offset: number) => {
+  const load = async (offset: number): Promise<boolean> => {
     setBusy(true); setError(false)
     try {
       const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
@@ -330,13 +375,25 @@ function useArticles(topic: string | null, region: string, source: string | null
       const result = await api<{ data: Article[] }>(`/api/articles?${params}`)
       setItems((current) => offset === 0 || !current ? result.data : [...current, ...result.data])
       setMore(result.data.length === pageSize)
-    } catch { setError(true) } finally { setBusy(false) }
+      return result.data.length > 0
+    } catch { setError(true); return false } finally { setBusy(false) }
   }
   useEffect(() => { setItems(null); void load(0) }, [topic, region, source])
   return { items, error, more, busy, load }
 }
 function ArticleList({ t, lang, topic, topics, region, source, limit }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; limit?: number }) {
   const { items, error, more, busy, load } = useArticles(topic, region ?? '', source ?? null, limit)
+  // A capped list (a home rail) has nothing more to load, so it never gets a sentinel.
+  const paged = !limit
+  // `failed` gates the next attempt, so it cannot be an input to the hook and an output
+  // of it in the same render. The hook decides when to stop; the caller only needs the
+  // resulting sentinel and the flag.
+  const { sentinel, failed } = useInfiniteScroll({
+    hasMore: paged && more,
+    busy,
+    count: items?.length ?? 0,
+    load: () => load(items?.length ?? 0),
+  })
   if (error && !items) return <p className="form-error" role="alert">{t.loadError}</p>
   if (!items) return <p className="muted" role="status">{t.loading}</p>
   if (items.length === 0) return <div className="empty-card"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div>
@@ -349,7 +406,12 @@ function ArticleList({ t, lang, topic, topics, region, source, limit }: { t: Cop
       <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>
       <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
     </article>
-  })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}{more && !limit && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : t.loadMore}</button>}</div>
+  })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}
+    {/* The sentinel only exists while a page can still arrive; when the observer is
+        unavailable or a load added nothing, the button is the fallback. */}
+    {paged && more && !failed && <div ref={sentinel} className="scroll-sentinel" aria-hidden="true">{busy ? t.loading : ''}</div>}
+    {paged && more && (failed || typeof IntersectionObserver === 'undefined') && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : failed ? t.loadFailed : t.loadMore}</button>}
+  </div>
 }
 
 /**
