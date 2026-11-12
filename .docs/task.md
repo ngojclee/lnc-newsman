@@ -200,6 +200,8 @@ Cập nhật: 12/11/2026 (v0.5.0 — quyền ghi newsman:write cho agent Hub; in
 - [x] 254 test, clippy sạch, UI build sạch; đo qua HTTP thật 10 kịch bản (thiếu scope → `-32601`, có scope → ghi và gắn nhãn, author giả → từ chối, cite sai → từ chối, log có mặt, đường API key đọc không đổi).
 - [x] docs-test phủ **tool** chứ không chỉ route: 16 tool phải có tên trong `API_DOCS.md`, và ngược lại.
 - [ ] Owner đặt `allowed_scopes = newsman:read, newsman:write` cho connector trên Hub.
+- [x] **0.5.0 live và kiểm trên production**: 16 tool tên trần; 401 `unauthorized` / 401 `connector_auth_required`; tham số lạ → `unknown argument`; migration 18 đã áp (3 route admin trả 200).
+- [x] Phát hiện và sửa `CONNECTOR_MAX_SCOPES` còn mặc định `newsman:read` trong `stack.yml` — trần báo chỉ-đọc trong khi code đã cấp quyền ghi (`c6995e2`).
 
 ## Giao diện — infinite scroll (12/11/2026, v0.5.0)
 
