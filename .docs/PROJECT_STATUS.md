@@ -180,6 +180,33 @@ Owner's request: drop the "Xem thêm" button and load the next page when the lis
 - **Measured in a real browser** against 120 stored articles: 30 → 60 → 120 while scrolling, switching section resets instead of appending, and a failing page request restores the button and stops.
 - **Tooling note worth keeping**: the in-app browser pane **defers `IntersectionObserver` callbacks** for a hidden page and while the page is scrolled by script — a control observer on a fully visible element also reported zero. The count only moves with a real scroll (`computer{action:"scroll"}`) and the pane displayed. Do not conclude the code is broken from a scripted measurement.
 
+## Vận hành: đọc trạng thái deploy của stack 108 (bài học 12/11/2026)
+
+Mỗi push vào `main` của `lnc-newsman` **kích một build Docker đầy đủ**: stack là repo-stack
+(`Type: 2`) với GitOps source poll `1m` — không cần webhook (repo có **0** webhook). Một
+build Rust release trên NAS mất **>14 phút**, nên push dồn dập sẽ tự xếp hàng sau chính nó.
+
+Ba nguồn **không** dùng để kết luận "không có build":
+
+| Nguồn | Vì sao sai |
+|---|---|
+| `GET /api/endpoints/2/docker/images/json` | Image chỉ xuất hiện khi build **xong**; build đang chạy thì không thấy gì |
+| `GET /api/endpoints/2/docker/events?type=image` | Trả **rỗng** cả khi build đang chạy — đã kiểm, vô dụng làm bằng chứng phủ định |
+| `AutoUpdate.Interval` | Là chu kỳ poll, không phải "mỗi push một webhook" |
+
+Nguồn **đúng** — log của container Portainer, đọc qua Docker proxy (read-only):
+
+```
+GET /api/endpoints/2/docker/containers/<portainer-id>/logs?stdout=1&stderr=1&tail=120
+```
+
+Trả về frame 8-byte (4 byte stream + 4 byte big-endian length) rồi tới payload. Build đang
+chạy thì thấy buildkit ở đó, ví dụ `#25 186.9 Compiling lnc-newsman v0.5.0 (/src)`.
+
+Cũng đừng kết luận từ `ConfigHash` một mình: trong lúc build, nó vẫn ghi **commit cũ**
+(`5c9c945`) trong khi head đã là `e255d20` — Portainer cập nhật hash khi build xong, không
+phải khi bắt đầu.
+
 ## P7 Telegram channel (2026-11-12, v0.4.1)
 
 Requested by the owner through the UI lane: alerts into Telegram, two configuration paths, one decision shared with LNC Library (`.docs/l8-agent-chat-telegram.md`, part B).
