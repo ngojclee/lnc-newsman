@@ -851,7 +851,9 @@ function ConnectorHubPanel({ t }: { t: Copy }) {
       setNotice(t.mcpSaved); await load()
     } catch { setError(true) } finally { setBusy(false) }
   }
-  const source = (value: ConnectorSource) => value === 'env' ? t.mcpFromEnv : value === 'admin' ? t.mcpFromAdmin : t.mcpUnset
+  // "set" must come from the source, not be printed unconditionally: an unset value
+  // read as "đã đặt · chưa đặt" and told the owner nothing.
+  const source = (value: ConnectorSource) => value === 'unset' ? t.mcpUnset : `${t.mcpSet} · ${value === 'env' ? t.mcpFromEnv : t.mcpFromAdmin}`
   return <section className="secrets-admin" aria-labelledby="mcp-title">
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="mcp-title">{t.mcpTitle}</h2><p>{t.mcpSub}</p></div>
       {card && <span className={card.enabled ? 'catalog-status' : 'catalog-status inactive'}>{card.enabled ? t.mcpReady : t.mcpNotReady}</span>}</div>
@@ -859,8 +861,8 @@ function ConnectorHubPanel({ t }: { t: Copy }) {
     {notice && <div className="save-state" role="status">✓ {notice}</div>}
     {card && !card.secret_store_open && <div className="form-error" role="alert">{t.mcpStoreClosed}</div>}
     {card && <dl className="stat-pairs">
-      <div><dt>{t.mcpBearer}</dt><dd>{t.mcpSet} · {source(card.bearer)}</dd></div>
-      <div><dt>{t.mcpSecret}</dt><dd>{t.mcpSet} · {source(card.delegation_secret)}</dd></div>
+      <div><dt>{t.mcpBearer}</dt><dd>{source(card.bearer)}</dd></div>
+      <div><dt>{t.mcpSecret}</dt><dd>{source(card.delegation_secret)}</dd></div>
       <div><dt>{t.mcpScopes}</dt><dd>{card.max_scopes.join(', ') || '—'}</dd></div>
     </dl>}
     <form className="catalog-form" onSubmit={save} autoComplete="off">
