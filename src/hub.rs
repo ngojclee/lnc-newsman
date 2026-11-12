@@ -16,10 +16,8 @@
 //! * every call has a timeout, and any failure returns an error the caller can fall
 //!   back from — "no LLM" mode always works.
 //!
-//! The public functions are used by the endpoints and by P6; until P6 lands, the
-//! completion/agent helpers are exercised only by tests, so the dead-code lint is
-//! relaxed with that reason recorded.
-#![allow(dead_code)]
+//! The public functions are used by the admin settings card and by `src/reader.rs`
+//! for owner-initiated research and brief generation.
 //!
 //! Nothing here contacts the real Hub: tests use a loopback mock. See
 //! `.docs/hub-integration.md` for what the owner must configure on the Hub side.
@@ -46,6 +44,7 @@ const MAX_AGENT_OUTPUT_CHARS: usize = 20_000;
 /// and a strong one handles analysis. Aliases are owner configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum Task {
     Classify,
     Summarise,
@@ -112,6 +111,7 @@ impl ProviderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+#[allow(dead_code)]
 pub enum ProviderError {
     NotConfigured,
     HostNotAllowed,
@@ -321,6 +321,10 @@ pub async fn complete(
         }
     }
     let secret = hub_secret(state).ok_or(ProviderError::NoSecret)?;
+    let max_tokens = match task {
+        Task::Analyse => 2_000,
+        Task::Classify | Task::Summarise => 800,
+    };
     let body = serde_json::to_string(&ChatRequest {
         model: &model,
         messages: vec![ChatMessage {
@@ -328,7 +332,7 @@ pub async fn complete(
             content: prompt,
         }],
         temperature: 0.0,
-        max_tokens: 800,
+        max_tokens,
     })
     .map_err(|_| ProviderError::Provider)?;
     let url = format!("{base}/chat/completions");

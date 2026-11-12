@@ -438,3 +438,266 @@ pub async fn update_source(
         Err(e) => e.response(),
     }
 }
+
+/// Curated public/official RSS & Atom starter feeds so an owner can populate a fresh
+/// or existing installation in one click without hand-copying feed URLs. Installing a
+/// preset always inserts the row **disabled** (`enabled = false`) and makes no network
+/// request: enabling and fetching stay explicit owner actions.
+pub struct FeedPreset {
+    pub slug: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub tier: &'static str,
+    pub language: &'static str,
+    pub region: &'static str,
+    pub topic_slug: &'static str,
+    pub fetch_interval_minutes: i64,
+    pub attribution: &'static str,
+    pub note_vi: &'static str,
+    pub note_en: &'static str,
+}
+
+pub const CURATED_PRESETS: &[FeedPreset] = &[
+    FeedPreset {
+        slug: "fed-monetary",
+        name: "Federal Reserve — Monetary Policy",
+        url: "https://www.federalreserve.gov/feeds/press_monetary.xml",
+        tier: "T1",
+        language: "en",
+        region: "us",
+        topic_slug: "finance",
+        fetch_interval_minutes: 60,
+        attribution: "Source: Board of Governors of the Federal Reserve System",
+        note_vi: "Thông cáo chính sách tiền tệ & FOMC chính thức của Fed (không cần khóa).",
+        note_en: "Official FOMC and monetary policy press releases from the Federal Reserve.",
+    },
+    FeedPreset {
+        slug: "fed-speeches",
+        name: "Federal Reserve — Speeches & Testimony",
+        url: "https://www.federalreserve.gov/feeds/speeches.xml",
+        tier: "T1",
+        language: "en",
+        region: "us",
+        topic_slug: "finance",
+        fetch_interval_minutes: 120,
+        attribution: "Source: Board of Governors of the Federal Reserve System",
+        note_vi: "Bài phát biểu và điều trần của các thống đốc Fed.",
+        note_en: "Official speeches and congressional testimony from Federal Reserve officials.",
+    },
+    FeedPreset {
+        slug: "sec-press-releases",
+        name: "U.S. SEC — Press Releases",
+        url: "https://www.sec.gov/news/pressreleases.rss",
+        tier: "T1",
+        language: "en",
+        region: "us",
+        topic_slug: "finance",
+        fetch_interval_minutes: 60,
+        attribution: "Source: U.S. Securities and Exchange Commission",
+        note_vi: "Thông cáo báo chí và quyết định quản lý thị trường của SEC.",
+        note_en: "Official press releases and regulatory announcements from the U.S. SEC.",
+    },
+    FeedPreset {
+        slug: "ecb-press",
+        name: "European Central Bank — Press & Speeches",
+        url: "https://www.ecb.europa.eu/rss/press.html",
+        tier: "T1",
+        language: "en",
+        region: "eu",
+        topic_slug: "finance",
+        fetch_interval_minutes: 60,
+        attribution: "Source: European Central Bank",
+        note_vi: "Thông cáo chính sách tiền tệ, lãi suất và phát biểu chính thức của ECB.",
+        note_en: "Official ECB monetary policy decisions, press releases and speeches.",
+    },
+    FeedPreset {
+        slug: "boe-news",
+        name: "Bank of England — News & Releases",
+        url: "https://www.bankofengland.co.uk/rss/news",
+        tier: "T1",
+        language: "en",
+        region: "global",
+        topic_slug: "finance",
+        fetch_interval_minutes: 120,
+        attribution: "Source: Bank of England",
+        note_vi: "Tin tức vĩ mô và thông cáo lãi suất từ Ngân hàng Trung ương Anh.",
+        note_en: "Official news and policy releases from the Bank of England.",
+    },
+    FeedPreset {
+        slug: "cisa-advisories",
+        name: "CISA — Cybersecurity Advisories",
+        url: "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+        tier: "T1",
+        language: "en",
+        region: "us",
+        topic_slug: "technology-ai",
+        fetch_interval_minutes: 120,
+        attribution: "Source: U.S. Cybersecurity and Infrastructure Security Agency (CISA)",
+        note_vi: "Cảnh báo an ninh mạng và lỗ hổng hạ tầng chính thức từ CISA.",
+        note_en: "Official cybersecurity alerts and advisories from CISA.",
+    },
+    FeedPreset {
+        slug: "arxiv-cs-ai",
+        name: "arXiv — Artificial Intelligence (cs.AI)",
+        url: "https://rss.arxiv.org/rss/cs.AI",
+        tier: "T2",
+        language: "en",
+        region: "global",
+        topic_slug: "technology-ai",
+        fetch_interval_minutes: 240,
+        attribution: "Source: arXiv.org (Cornell University)",
+        note_vi: "Các công bố nghiên cứu AI mới nhất mỗi ngày trên arXiv.",
+        note_en: "Daily Artificial Intelligence research preprints announced on arXiv.",
+    },
+    FeedPreset {
+        slug: "hn-frontpage",
+        name: "Hacker News — Front Page Tech & AI",
+        url: "https://hnrss.org/frontpage",
+        tier: "T4",
+        language: "en",
+        region: "global",
+        topic_slug: "technology-ai",
+        fetch_interval_minutes: 60,
+        attribution: "Source: Hacker News (Y Combinator)",
+        note_vi: "Các thảo luận công nghệ, phần mềm, AI và khởi nghiệp nổi bật trên Hacker News.",
+        note_en: "Top technology, engineering and AI stories from Hacker News.",
+    },
+    FeedPreset {
+        slug: "vnexpress-kinh-doanh",
+        name: "VnExpress — Kinh doanh",
+        url: "https://vnexpress.net/rss/kinh-doanh.rss",
+        tier: "T3",
+        language: "vi",
+        region: "vn",
+        topic_slug: "finance",
+        fetch_interval_minutes: 60,
+        attribution: "Nguồn: VnExpress",
+        note_vi: "Chỉ lưu tiêu đề & link gốc; sử dụng cá nhân/nội bộ kèm ghi rõ Nguồn: VnExpress.",
+        note_en: "Stores title and link only; personal/non-profit use with VnExpress attribution.",
+    },
+    FeedPreset {
+        slug: "vnexpress-so-hoa",
+        name: "VnExpress — Số hóa & Công nghệ",
+        url: "https://vnexpress.net/rss/so-hoa.rss",
+        tier: "T3",
+        language: "vi",
+        region: "vn",
+        topic_slug: "technology-ai",
+        fetch_interval_minutes: 60,
+        attribution: "Nguồn: VnExpress",
+        note_vi: "Tin công nghệ & chuyển đổi số tại Việt Nam; chỉ lưu tiêu đề & link gốc.",
+        note_en: "Technology and digital news in Vietnam; stores title and link only.",
+    },
+];
+
+#[derive(Debug, Serialize)]
+pub struct PresetView {
+    pub slug: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub tier: &'static str,
+    pub language: &'static str,
+    pub region: &'static str,
+    pub topic_slug: &'static str,
+    pub fetch_interval_minutes: i64,
+    pub attribution: &'static str,
+    pub note_vi: &'static str,
+    pub note_en: &'static str,
+    pub installed: bool,
+    pub source_id: Option<i64>,
+    pub source_enabled: bool,
+    pub region_registered: bool,
+    pub region_enabled: bool,
+}
+
+fn preset_views(db: &db::Database) -> CatalogResult<Vec<PresetView>> {
+    let mut out = Vec::with_capacity(CURATED_PRESETS.len());
+    for preset in CURATED_PRESETS {
+        let pack_slug = format!("pack-{}-{}", preset.region, preset.slug);
+        let existing: Option<(i64, bool)> = db
+            .conn
+            .query_row(
+                "SELECT id, enabled FROM sources WHERE slug=?1 OR slug=?2 OR url=?3 LIMIT 1",
+                params![preset.slug, pack_slug, preset.url],
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
+            )
+            .optional()?;
+        let region_state: Option<bool> = db
+            .conn
+            .query_row(
+                "SELECT enabled FROM regions WHERE code=?1",
+                [preset.region],
+                |row| Ok(row.get::<_, i64>(0)? != 0),
+            )
+            .optional()?;
+        out.push(PresetView {
+            slug: preset.slug,
+            name: preset.name,
+            url: preset.url,
+            tier: preset.tier,
+            language: preset.language,
+            region: preset.region,
+            topic_slug: preset.topic_slug,
+            fetch_interval_minutes: preset.fetch_interval_minutes,
+            attribution: preset.attribution,
+            note_vi: preset.note_vi,
+            note_en: preset.note_en,
+            installed: existing.is_some(),
+            source_id: existing.map(|(id, _)| id),
+            source_enabled: existing.is_some_and(|(_, on)| on),
+            region_registered: region_state.is_some(),
+            region_enabled: region_state.unwrap_or(false),
+        });
+    }
+    Ok(out)
+}
+
+fn install_preset(db: &db::Database, slug: &str) -> CatalogResult<Source> {
+    let Some(preset) = CURATED_PRESETS.iter().find(|item| item.slug == slug) else {
+        return Err(CatalogError::NotFound);
+    };
+    let created = save_source(
+        db,
+        SourceInput {
+            slug: preset.slug.to_string(),
+            name: preset.name.to_string(),
+            url: preset.url.to_string(),
+            tier: preset.tier.to_string(),
+            // Detection/installation is never activation: the owner explicitly enables.
+            enabled: false,
+            language: preset.language.to_string(),
+            region: preset.region.to_string(),
+            topic_slug: Some(preset.topic_slug.to_string()),
+            fetch_interval_minutes: preset.fetch_interval_minutes,
+        },
+        None,
+    )?;
+    db.conn.execute(
+        "UPDATE sources SET attribution=?2 WHERE id=?1",
+        params![created.id, preset.attribution],
+    )?;
+    source_by_id(db, created.id)
+}
+
+pub async fn list_presets(State(state): State<SharedState>) -> Response {
+    let db = state.db.lock().expect("database lock poisoned");
+    match preset_views(&db) {
+        Ok(data) => Json(serde_json::json!({"data": data})).into_response(),
+        Err(err) => err.response(),
+    }
+}
+
+pub async fn add_preset(
+    State(state): State<SharedState>,
+    Path(slug): Path<String>,
+) -> Response {
+    let db = state.db.lock().expect("database lock poisoned");
+    match install_preset(&db, &slug) {
+        Ok(data) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({"data": data})),
+        )
+            .into_response(),
+        Err(err) => err.response(),
+    }
+}

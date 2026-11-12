@@ -198,6 +198,24 @@ Closes the second half of the Obsidian loop: an opinion written under a forecast
 - **Backup taken before the deploy**: `/data/newsman.db.pre-0.5.1` and `newsman.db-wal.pre-0.5.1` in the previous container. The production tables were empty, so the rebuild had nothing to lose — but the backup stays until the owner says otherwise.
 - **Not verifiable yet, and worth knowing**: the two write-guard cases (`note_create` with a missing `analysis_id`, and with two targets) could not be exercised on production because **the connector is not paired** — every write tool requires a delegated caller, so an owner web session is refused with `this tool requires a delegated caller`. That is a real behaviour, not a bug introduced here: it has been true since 0.5.0 and matches "the author is the verified delegation". Both guards are covered by unit tests and were measured live on a local build.
 
+## 0.6.0 — Live Business MCP Hub pairing verified + Reader briefs, grounded analyst, starter presets & connector scheduler (2026-11-12)
+
+1. **Business MCP Hub live pairing verified end-to-end (production `0.5.1` + Hub `10.21.4.101:8790`):**
+   - Verified `newsman`, `obsidian`, and `lnc-library` connectors registered and enabled on Business MCP Hub with live signed delegation (`newsman:read`, `newsman:write`).
+   - Exercised live MCP round-trip through the Hub (`hub_cache_refresh` → `newsman__regions`, `newsman__topics`, `newsman__latest_articles`, `newsman__analyses{limit:3, updated_since}`, `newsman__note_create` → `newsman__notes` → `newsman__note_delete` → `newsman__write_log`, plus `obsidian__vault_status` and `obsidian__vault_list` confirming `_agents/` boundary). All test rows cleaned up afterward.
+2. **Provider connector controls & background scheduler (`src/connectors.rs`):**
+   - Added `PUT /api/admin/connectors/{id}` (`{"enabled": bool}`) validating offline gates (`region_disabled`, `missing_secret`, `secret_store_locked`, `secret_corrupt`) before flipping `enabled`.
+   - Added `connectors_auto_enabled` setting (default `false`, separate from RSS `collector_enabled`), `ConnectorInFlight` concurrency guard (`409 connector_busy`), and `connectors::spawn_scheduler` polling due connectors every 60 s.
+   - Upgraded `/admin` Connectors card with Enable/Disable, "Lấy ngay" (`Run now`), and automatic connector scheduler toggle.
+3. **1-click curated starter RSS/Atom presets (`src/catalog.rs` + `CatalogManager.tsx`):**
+   - Added 10 vetted official/public starter feeds (`GET /api/admin/sources/presets` and `POST /api/admin/sources/presets/{slug}/add`) across `global`, `eu`, `fr`, `us`, `vn` (SEC Press Releases, Fed Monetary Policy, Treasury Press Releases, ECB Press, CNIL France, ANSSI CERT-FR, Hacker News Frontpage, GitHub Blog, Rust Blog, VnExpress Kinh doanh).
+   - Presets register **disabled** (`enabled = false`) with required attribution and perform zero network calls until the owner enables the region and source.
+4. **Reader Reports (`#reports`), Today briefs rail, two-way feedback notes, Focus/Schedule preferences & grounded Hub research (`src/reader.rs`, `src/mcp.rs`, `ui/src/main.tsx`):**
+   - Added REST v1 read endpoints (`GET /api/v1/analyses`, `GET /api/v1/analyses/{id}` with resolved `cited_articles` and `notes`, `GET /api/v1/notes`) and owner session write endpoints (`POST /api/notes` with `author_client = NULL` protected from agent edits, `DELETE /api/notes/{id}`, and `POST /api/admin/research` grounded in stored headlines, macro/market series, declared tax deadlines, and `focus_profile`, with optional `save_as_brief: true`).
+   - Added `focus_profile`, `brief_morning_time`, `brief_evening_time`, `brief_timezone` in `/api/settings` and exposed read-only MCP tool `reader_preferences` (`newsman:read`, bringing `/mcp` to **17 tools**: 11 read + 6 write).
+   - Unlocked `#reports` (`Báo cáo`) in the reader shell, added Latest Briefs rail on `#today`, Focus & Schedule panel in `#settings`, and updated stale MCP status copy.
+   - `src/connector.rs` untouched; 270 Rust tests pass, `API_DOCS.md` 100% in sync with routes and MCP tools (`docs_tests`), TypeScript + Vite build clean. Local `0.6.0` ready for owner review before pushing to `main`.
+
 ## Infinite scroll (2026-11-12, v0.5.0)
 
 Owner's request: drop the "Xem thêm" button and load the next page when the list reaches the bottom.

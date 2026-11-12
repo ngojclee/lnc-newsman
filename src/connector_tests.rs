@@ -207,6 +207,7 @@ fn a_correctly_signed_read_call_is_accepted() {
             vec![
                 "regions",
                 "topics",
+                "reader_preferences",
                 "latest_articles",
                 "documents",
                 "tax_calendar",

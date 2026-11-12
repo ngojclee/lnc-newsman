@@ -45,6 +45,7 @@ pub struct Tool {
 const READ_TOOLS: &[&str] = &[
     "regions",
     "topics",
+    "reader_preferences",
     "latest_articles",
     "documents",
     "tax_calendar",
@@ -100,6 +101,11 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "topics",
             description: "Enabled topics in the reader's tree order.",
+            input: empty_object(),
+        },
+        Tool {
+            name: "reader_preferences",
+            description: "Reader focus profile, preferred language, morning/evening brief times and timezone, plus enabled regions and topics so scheduled briefs match the owner's priorities.",
             input: empty_object(),
         },
         Tool {
@@ -398,6 +404,9 @@ fn dispatch(
         "topics" => db
             .topics()
             .map(|topics| json!({"data": topics}))
+            .map_err(|err| err.to_string()),
+        "reader_preferences" => crate::reader::mcp_preferences(&db)
+            .map(|prefs| json!({"data": prefs}))
             .map_err(|err| err.to_string()),
         "latest_articles" => {
             let region = string_arg(arguments, "region");

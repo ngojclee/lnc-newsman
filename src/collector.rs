@@ -481,15 +481,15 @@ pub struct ArticleQuery {
 
 #[derive(Serialize)]
 pub struct Article {
-    id: i64,
-    title: String,
-    url: String,
-    published_at: Option<String>,
-    fetched_at: Option<String>,
-    topic_slug: Option<String>,
+    pub(crate) id: i64,
+    pub(crate) title: String,
+    pub(crate) url: String,
+    pub(crate) published_at: Option<String>,
+    pub(crate) fetched_at: Option<String>,
+    pub(crate) topic_slug: Option<String>,
     pub region_code: Option<String>,
-    source_name: String,
-    source_tier: String,
+    pub(crate) source_name: String,
+    pub(crate) source_tier: String,
     /// Human-first labels from `article_matches` (P5). Two readers of the same article
     /// see the same labels because they are read here, not recomputed per request.
     pub labels: Labels,

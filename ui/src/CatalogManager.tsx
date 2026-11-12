@@ -9,6 +9,7 @@ type Source = SourceInput & { id: number; last_checked_at: string | null; last_s
 type Region = { code: string; label_vi: string; label_en: string; parent_code: string | null; enabled: boolean }
 type RunSummary = { status: 'ok' | 'not_modified' | 'error'; items_seen: number; items_new: number; error: string | null; paused: boolean }
 type Preview = { final_url: string; items_seen: number; sample: { title: string; url: string; published_at: string | null }[] }
+type Preset = { slug: string; name: string; url: string; tier: string; language: string; region: string; topic_slug: string | null; fetch_interval_minutes: number; attribution: string; installed: boolean; region_enabled: boolean }
 
 type RegionsPayload = { data: Region[]; effective: string[] }
 type Props = { lang: Lang; api: Api; regions?: RegionsPayload | null; onChanged: () => void }
@@ -37,6 +38,8 @@ const strings = {
     fetch_in_progress: 'Nguồn này đang được quét. Hãy thử lại sau ít giây.',
     error: 'Không lưu hoặc tải được danh mục. Hãy kiểm tra dữ liệu và thử lại.', loading: 'Đang tải danh mục…',
     tier1: 'T1 · Cơ quan chính thức', tier2: 'T2 · Hãng thông tấn', tier3: 'T3 · Báo / tạp chí', tier4: 'T4 · Nguồn khác',
+    presetsTitle: 'Gói nguồn gợi ý (1 chạm)', presetsSub: 'Các feed chính thức & báo chí công khai đã rà soát. Bấm “Thêm nguồn” sẽ đăng ký ở trạng thái Đã tắt (chưa gọi mạng); sau đó anh bật vùng tương ứng, bật nguồn hoặc bấm “Quét ngay”.',
+    presetAdd: '+ Thêm nguồn', presetAdding: 'Đang thêm…', presetAdded: 'Đã có trong danh sách', presetSaved: 'Đã thêm nguồn gợi ý (đang tắt). Anh có thể bấm “Quét ngay” hoặc “Bật lại” ở danh sách dưới.', presetNeedRegion: 'cần bật vùng',
   },
   en: {
     title: 'Sources & topics', subtitle: 'Manage RSS/Atom sources and the topic tree used to file items.', topics: 'Topics', sources: 'Sources',
@@ -62,6 +65,8 @@ const strings = {
     fetch_in_progress: 'This source is already being fetched. Try again in a few seconds.',
     error: 'Could not load or save the catalog. Check the data and try again.', loading: 'Loading catalog…',
     tier1: 'T1 · Official', tier2: 'T2 · News agency', tier3: 'T3 · Publisher', tier4: 'T4 · Other source',
+    presetsTitle: 'Curated starter feeds (1-click)', presetsSub: 'Vetted official and public RSS/Atom feeds. Clicking “Add feed” registers the source disabled with zero network calls; enable its region first, then enable or click “Fetch now”.',
+    presetAdd: '+ Add feed', presetAdding: 'Adding…', presetAdded: 'Already added', presetSaved: 'Starter feed added (disabled). Click “Fetch now” or “Enable” in the list below.', presetNeedRegion: 'enable region',
   },
 } as const
 
@@ -85,6 +90,8 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
   const [tab, setTab] = useState<'topics' | 'sources'>('topics')
   const [topics, setTopics] = useState<Topic[]>([])
   const [sources, setSources] = useState<Source[]>([])
+  const [presets, setPresets] = useState<Preset[]>([])
+  const [addingPreset, setAddingPreset] = useState('')
   const [topicForm, setTopicForm] = useState<Topic>(blankTopic)
   const [sourceForm, setSourceForm] = useState<SourceInput>(blankSource)
   const [editingTopic, setEditingTopic] = useState(false)
@@ -99,14 +106,24 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
   const [testing, setTesting] = useState(false)
 
   const reload = async () => {
-    const [topicData, sourceData] = await Promise.all([
+    const [topicData, sourceData, presetData] = await Promise.all([
       api<{ data: Topic[] }>('/api/admin/topics'),
       api<{ data: Source[] }>('/api/admin/sources'),
+      api<{ data: Preset[] }>('/api/admin/sources/presets').catch(() => ({ data: [] as Preset[] })),
     ])
     setTopics(topicData.data)
     setSources(sourceData.data)
+    setPresets(presetData.data)
   }
   useEffect(() => { reload().catch(() => setError('load')).finally(() => setLoading(false)) }, [])
+
+  const addPreset = async (slug: string) => {
+    setAddingPreset(slug); clear()
+    try {
+      await api(`/api/admin/sources/presets/${encodeURIComponent(slug)}/add`, { method: 'POST' })
+      await reload(); onChanged(); setNotice(t.presetSaved)
+    } catch (err) { fail(err) } finally { setAddingPreset('') }
+  }
 
   const clear = () => { setError(''); setNotice('') }
   const fail = (err: unknown) => { setNotice(''); setError(err instanceof Error ? err.message : 'unknown') }
@@ -198,7 +215,22 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         <label className="toggle-field"><span>{t.active}</span><input type="checkbox" checked={topicForm.enabled} onChange={(e) => setTopicForm({ ...topicForm, enabled: e.target.checked })} /></label>
         <div className="catalog-form-actions actions-row"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingTopic ? t.save : t.create}</button>{editingTopic && <button type="button" className="btn secondary" onClick={resetTopic}>{t.cancel}</button>}</div>
       </form>
-    </div> : <div className="catalog-layout">
+    </div> : <>
+      {presets.length > 0 && <div className="presets-box">
+        <div className="presets-head"><h3>{t.presetsTitle}</h3><span className="muted">{presets.filter((p) => p.installed).length}/{presets.length}</span></div>
+        <p className="muted" style={{ margin: 0 }}>{t.presetsSub}</p>
+        <div className="presets-grid">{presets.map((preset) => <div className="preset-card" key={preset.slug}>
+          <div className="preset-main">
+            <strong>{preset.name}</strong>
+            <span><span className="tier-badge">{preset.tier}</span> · {preset.region}{!preset.region_enabled ? ` (${t.presetNeedRegion})` : ''}{preset.topic_slug ? ` · ${preset.topic_slug}` : ''}</span>
+            <small>{preset.attribution}</small>
+          </div>
+          {preset.installed
+            ? <span className="catalog-status">{t.presetAdded}</span>
+            : <button type="button" className="btn secondary" disabled={busy || addingPreset !== ''} onClick={() => void addPreset(preset.slug)}>{addingPreset === preset.slug ? t.presetAdding : t.presetAdd}</button>}
+        </div>)}</div>
+      </div>}
+      <div className="catalog-layout">
       <div className="catalog-list" aria-label={t.sources}>
         {sources.length === 0 && <p className="muted">{t.noSources}</p>}
         {sources.map((source) => {
@@ -238,6 +270,6 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         <label className="toggle-field"><span>{t.active}</span><input type="checkbox" checked={sourceForm.enabled} onChange={(e) => setSourceForm({ ...sourceForm, enabled: e.target.checked })} /></label>
         <div className="catalog-form-actions actions-row"><button className="btn primary" disabled={busy}>{busy ? t.saving : editingSource === null ? t.create : t.save}</button>{editingSource !== null && <button type="button" className="btn secondary" onClick={resetSource}>{t.cancel}</button>}</div>
       </form>
-    </div>}
+    </div></>}
   </section>
 }

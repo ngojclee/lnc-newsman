@@ -374,3 +374,51 @@ async fn disabled_child_remains_editable_when_parent_is_disabled() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body(response).await["error"], "invalid_parent");
 }
+
+#[tokio::test]
+async fn curated_presets_register_disabled_with_attribution_and_reject_duplicates() {
+    let app = app();
+    let cookie = session(&app).await;
+    let response = request(
+        &app,
+        "GET",
+        "/api/admin/sources/presets",
+        None,
+        Some(&cookie),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let presets = body(response).await["data"].as_array().unwrap().clone();
+    assert!(presets.len() >= 8);
+    assert!(presets.iter().all(|p| p["installed"] == false));
+
+    let add = request(
+        &app,
+        "POST",
+        "/api/admin/sources/presets/hn-frontpage/add",
+        None,
+        Some(&cookie),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(add.status(), StatusCode::CREATED);
+    let created = body(add).await["data"].clone();
+    assert_eq!(created["slug"], "hn-frontpage");
+    assert_eq!(created["enabled"], false);
+
+    // Duplicate install is refused cleanly.
+    let dup = request(
+        &app,
+        "POST",
+        "/api/admin/sources/presets/hn-frontpage/add",
+        None,
+        Some(&cookie),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(dup.status(), StatusCode::CONFLICT);
+}

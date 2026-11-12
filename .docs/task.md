@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.5.0 — quyền ghi newsman:write cho agent Hub; infinite scroll)
+Cập nhật: 12/11/2026 (v0.6.0 — xác minh kết nối thật Business MCP Hub; trang Báo cáo `#reports`, hỏi đáp Agent có dẫn chứng, phản hồi 2 chiều Obsidian, 10 nguồn mẫu 1 chạm & điều khiển Connector)
 
 ## Đã xong
 
@@ -202,6 +202,16 @@ Cập nhật: 12/11/2026 (v0.5.0 — quyền ghi newsman:write cho agent Hub; in
 - [ ] Owner đặt `allowed_scopes = newsman:read, newsman:write` cho connector trên Hub.
 - [x] **0.5.0 live và kiểm trên production**: 16 tool tên trần; 401 `unauthorized` / 401 `connector_auth_required`; tham số lạ → `unknown argument`; migration 18 đã áp (3 route admin trả 200).
 - [x] Phát hiện và sửa `CONNECTOR_MAX_SCOPES` còn mặc định `newsman:read` trong `stack.yml` — trần báo chỉ-đọc trong khi code đã cấp quyền ghi (`c6995e2`).
+- [x] **Xác minh ghép nối thật Business MCP Hub (12/11/2026)**: `newsman`, `obsidian`, `lnc-library` đã bật và ký uỷ quyền thật trên Hub (`10.21.4.101:8790`); đã test vòng khép kín `note_create` → `notes` → `note_delete` → `write_log` và kiểm ranh giới `_agents/` trên Obsidian vault.
+
+## v0.6.0 — Tối ưu trải nghiệm người đọc, Hỏi đáp Agent, Phản hồi 2 chiều & Nguồn dữ liệu (12/11/2026)
+
+- [x] **Điều khiển & lịch tự động cho Provider Connectors (`src/connectors.rs`)**: thêm `PUT /api/admin/connectors/{id}` kiểm cổng offline trước khi bật, `connectors_auto_enabled` (tách riêng với `collector_enabled`), `ConnectorInFlight` chặn chạy chồng (`409 connector_busy`), `connectors::spawn_scheduler` (60s/vòng) và UI bật/tắt + "Lấy ngay" trên `/admin`.
+- [x] **10 nguồn RSS/Atom gợi ý 1 chạm (`src/catalog.rs` + `CatalogManager.tsx`)**: `GET /api/admin/sources/presets` và `POST /api/admin/sources/presets/{slug}/add` cho `global`, `eu`, `fr`, `us`, `vn` — luôn tạo ở trạng thái **tắt** (`enabled = false`), gắn sẵn `attribution`, không gọi mạng khi thêm.
+- [x] **Trang Báo cáo (`#reports`), dải Bản tin mới nhất ở Hôm nay & Phản hồi 2 chiều (`src/reader.rs` + `ui/src/main.tsx`)**: thêm `GET /api/v1/analyses`, `GET /api/v1/analyses/{id}` (kèm `cited_articles` + `notes`), `GET /api/v1/notes`, `POST /api/notes` (`author_client = NULL`, agent không được sửa/xoá) và `DELETE /api/notes/{id}`.
+- [x] **Hỏi & Yêu cầu Agent phân tích ngay trên UI (`POST /api/admin/research`)**: tổng hợp ngữ cảnh từ tin đã lưu + chỉ số vĩ mô/thị trường + lịch thuế + `focus_profile` gửi qua `hub.rs` (`Task::Analyse`), tuỳ chọn lưu thành bản phân tích (`save_as_brief: true`) để đồng bộ sang Obsidian.
+- [x] **Hồ sơ trọng tâm & Lịch nhận tin (`reader_preferences`)**: thêm `focus_profile`, `brief_morning_time`, `brief_evening_time`, `brief_timezone` trong `/api/settings` + tool MCP chỉ-đọc `reader_preferences` (`newsman:read`, nâng tổng số tool `/mcp` lên **17 tool**: 11 đọc + 6 ghi).
+- [x] **Kiểm thử & tài liệu**: 270 Rust tests pass (`docs_tests` khớp 100% route & 17 MCP tools trong `API_DOCS.md`), `tsc -b && vite build` sạch, `src/connector.rs` giữ nguyên không chạm. Chờ anh duyệt trước khi `git commit` + `git push origin main`.
 
 ## Giao diện — infinite scroll (12/11/2026, v0.5.0)
 

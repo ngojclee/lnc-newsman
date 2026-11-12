@@ -13,7 +13,8 @@ type SourceFacet = { slug: string; name: string; tier: string; region: string; a
 type Stats = { collector_enabled: boolean; articles_total: number; articles_24h: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
 type Dashboard = { topics: Topic[]; sources: SourceFacet[]; stats: Stats }
 type Settings = {
-  version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean;
+  version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean; connectors_auto_enabled: boolean;
+  focus_profile: string; brief_morning_time: string; brief_evening_time: string; brief_timezone: string;
   telegram_mode: 'relay' | 'direct' | 'off'; telegram_mode_stored: 'relay' | 'direct' | 'off'; telegram_env_override: boolean;
   telegram_ready: boolean; telegram_reason?: string; telegram_chat_id: number | null; telegram_alerts_topic_id: number | null;
   telegram_has_relay_token: boolean; telegram_has_bot_token: boolean
@@ -37,7 +38,11 @@ type DocsPayload = { data: DocRow[]; effective: string[] }
 type TaxDeadline = { code: string; region: string; name_vi: string; name_en: string; cadence: string; source_code: string; url: string; note: string; verified: boolean; lead_days: number; due_on: string; days_until: number; due_soon: boolean; nominal_on: string; weekend_rule: string }
 type TaxPayload = { data: TaxDeadline[]; disclaimer_vi: string; disclaimer_en: string; holidays_modelled: boolean }
 type AgentWrite = { id: number; at: number; client_id: string | null; app_id: string | null; tool: string; record_kind: string; record_id: number | null; outcome: string; note: string | null }
-type AgentAnalysis = { id: number; kind: string; title: string; topic_slug: string | null; region_code: string | null; author: string | null; updated_at: number; source_article_ids: number[] }
+type AgentAnalysis = { id: number; analysis_id?: number; stable_key?: string; kind: string; title: string; body?: string; topic_slug: string | null; region_code: string | null; author: string | null; created_at?: number; updated_at: number; source_article_ids: number[] }
+type CitedArticle = { id: number; title: string; url: string; published_at: string | null; source_name: string; source_tier: string }
+type NoteItem = { id: number; article_id: number | null; document_id: number | null; analysis_id: number | null; body: string; author: string | null; created_at: number; updated_at: number }
+type AnalysisDetailPayload = { data: AgentAnalysis; cited_articles: CitedArticle[]; notes: NoteItem[] }
+type ResearchResponse = { answer: string; model: string; tokens: number; cached: boolean; source_article_ids: number[]; saved_analysis_id: number | null; stable_key: string | null }
 type ConnectorSource = 'env' | 'admin' | 'unset'
 type ConnectorCard = { enabled: boolean; audience: string; max_scopes: string[]; bearer: ConnectorSource; delegation_secret: ConnectorSource; audience_source: ConnectorSource; secret_store_open: boolean }
 type ProviderStatus = { configured: boolean; base_host: string | null; allowed_hosts: string[]; models: [string, string, string]; agent: string; timeout_seconds: number; tokens_used_today: number; daily_budget: number; calls_today: number; has_secret: boolean }
@@ -66,9 +71,31 @@ const copy = {
     market: 'Thị trường', marketTitle: 'Chuỗi số liệu', marketSub: 'Dữ liệu số theo vùng. Chưa kết nối nhà cung cấp nào: danh sách này chỉ có khi một connector thật được duyệt và chạy.', noSeries: 'Chưa có chuỗi số liệu', noSeriesSub: 'P2 mới có kho chuỗi và khung connector. Dữ liệu thật cần chọn nhà cung cấp (plan mục 8).',
     seriesPoints: (n: number) => `${n} điểm`, observing: 'Lấy dữ liệu', latestValue: 'Giá trị mới nhất', asOf: 'Ghi nhận lúc', observedAt: 'Kỳ dữ liệu', revision: (n: number) => `bản ${n}`, noAttribution: 'Chưa có dòng ghi nguồn cho chuỗi này.',
     hubTitle: 'LNC Agent Hub', hubSub: 'Kết nối Hub cho phân loại, tóm tắt và nghiên cứu. Khóa chỉ ghi, không hiện lại. Cấu hình địa chỉ do máy chủ quyết định (biến môi trường), không nhập ở đây.', hubKeyName: 'hub-api-key', hubKeyHint: 'Khóa riêng của Newsman trên Hub. Dán vào đây; giá trị không bao giờ được trả lại.', hubCheck: 'Kiểm tra kết nối', hubChecking: 'Đang kiểm tra…', hubCheckOk: (n: number) => `Kết nối được, thấy ${n} model. Chỉ liệt kê model, chưa sinh nội dung, chưa tốn token.`, hubCheckFail: 'Không kết nối được Hub. Kiểm tra địa chỉ, allowlist host và khóa.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model theo tác vụ', hubClassify: 'Phân loại', hubSummarise: 'Tóm tắt', hubAnalyse: 'Phân tích', hubAgent: 'Agent', hubBudget: 'Token hôm nay', hubSecret: 'Khóa', hubSaved: 'Đã lưu khóa Hub.', hubHasKey: 'đã có khóa', hubNoKey: 'chưa có khóa', hubNotConfigured: 'Máy chủ chưa đặt HUB_BASE_URL hoặc host chưa nằm trong HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', mcpWrites: 'Ghi qua connector', mcpWritesSub: 'Mỗi lần agent ghi đều có nhãn nguồn. Nhãn là client id do Hub cấp, không phải thứ agent tự đặt.', mcpNoWrites: 'Chưa có agent nào ghi.', mcpAnalyses: 'Brief đã lưu', mcpSources: 'bài nguồn', mcpNoAnalyses: 'Chưa có brief nào.', mcpOwner: 'chủ dự án', mcpTitle: 'Kết nối Business MCP Hub', mcpSub: 'Hub gọi vào /mcp bằng một khóa riêng của connector, kèm chữ ký ủy quyền cho từng agent. Chỉ đọc: mọi công cụ đều là truy vấn, không có công cụ ghi.', mcpReady: 'Đã ghép nối', mcpNotReady: 'Chưa ghép nối', mcpBearer: 'Khóa connector', mcpSecret: 'Khóa ủy quyền', mcpAudience: 'Audience', mcpScopes: 'Phạm vi tối đa', mcpFromEnv: 'biến môi trường', mcpFromAdmin: 'nhập ở đây', mcpUnset: 'chưa đặt', mcpSet: 'đã đặt', mcpSave: 'Lưu', mcpSaved: 'Đã lưu cấu hình connector.', mcpStoreClosed: 'Máy chủ chưa có LNC_MASTER_KEY nên chưa lưu được khóa connector.', mcpHint: 'Hai khóa nằm ở mục "Khóa nhà cung cấp" bên dưới, tên `connector-bearer` và `delegation-secret`. Chúng là bí mật nên chỉ ghi, không hiện lại.', legalTitle: 'Nguồn văn bản pháp luật', legalSub: 'Mỗi nguồn kèm điều khoản sử dụng đã đọc và ngày kiểm. Nguồn chưa đọc được điều khoản thì không bật được.', legalBlocked: 'Chưa được bật', legalBlockedUnverified: 'Chưa kiểm điều khoản', legalBlockedProhibited: 'Không được phép', legalTurnsOn: 'Bật theo dõi', legalTurnsOff: 'Tắt theo dõi', legalTerms: 'Điều khoản', legalChecked: 'Kiểm ngày', legalStale: 'Điều khoản đã kiểm quá lâu, cần đọc lại', legalNoChannel: 'Chưa có kênh truy cập chính thức', legalReasonUnverified: 'Chưa đọc được điều khoản sử dụng của trang nên chưa theo dõi.', legalReasonProhibited: 'Điều khoản của trang không cho phép lấy tự động.', valid_terms_unverified: 'Chưa đọc được điều khoản sử dụng nên không bật được nguồn này.', valid_terms_prohibit_polling: 'Điều khoản của trang không cho phép lấy tự động.', valid_no_documented_channel: 'Nguồn chưa có kênh truy cập chính thức.', valid_region_disabled: 'Vùng của nguồn này đang tắt.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
+    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', mcpWrites: 'Ghi qua connector', mcpWritesSub: 'Mỗi lần agent ghi đều có nhãn nguồn. Nhãn là client id do Hub cấp, không phải thứ agent tự đặt.', mcpNoWrites: 'Chưa có agent nào ghi.', mcpAnalyses: 'Brief đã lưu', mcpSources: 'bài nguồn', mcpNoAnalyses: 'Chưa có brief nào.', mcpOwner: 'chủ dự án', mcpTitle: 'Kết nối Business MCP Hub', mcpSub: 'Hub gọi vào /mcp bằng khóa riêng của connector kèm chữ ký ủy quyền từng agent (newsman:read để truy vấn, newsman:write để lưu brief, ghi chú phản hồi & đồng bộ hai chiều với Obsidian).', mcpReady: 'Đã ghép nối', mcpNotReady: 'Chưa ghép nối', mcpBearer: 'Khóa connector', mcpSecret: 'Khóa ủy quyền', mcpAudience: 'Audience', mcpScopes: 'Phạm vi tối đa', mcpFromEnv: 'biến môi trường', mcpFromAdmin: 'nhập ở đây', mcpUnset: 'chưa đặt', mcpSet: 'đã đặt', mcpSave: 'Lưu', mcpSaved: 'Đã lưu cấu hình connector.', mcpStoreClosed: 'Máy chủ chưa có LNC_MASTER_KEY nên chưa lưu được khóa connector.', mcpHint: 'Hai khóa nằm ở mục "Khóa nhà cung cấp" bên dưới, tên `connector-bearer` và `delegation-secret`. Chúng là bí mật nên chỉ ghi, không hiện lại.', legalTitle: 'Nguồn văn bản pháp luật', legalSub: 'Mỗi nguồn kèm điều khoản sử dụng đã đọc và ngày kiểm. Nguồn chưa đọc được điều khoản thì không bật được.', legalBlocked: 'Chưa được bật', legalBlockedUnverified: 'Chưa kiểm điều khoản', legalBlockedProhibited: 'Không được phép', legalTurnsOn: 'Bật theo dõi', legalTurnsOff: 'Tắt theo dõi', legalTerms: 'Điều khoản', legalChecked: 'Kiểm ngày', legalStale: 'Điều khoản đã kiểm quá lâu, cần đọc lại', legalNoChannel: 'Chưa có kênh truy cập chính thức', legalReasonUnverified: 'Chưa đọc được điều khoản sử dụng của trang nên chưa theo dõi.', legalReasonProhibited: 'Điều khoản của trang không cho phép lấy tự động.', valid_terms_unverified: 'Chưa đọc được điều khoản sử dụng nên không bật được nguồn này.', valid_terms_prohibit_polling: 'Điều khoản của trang không cho phép lấy tự động.', valid_no_documented_channel: 'Nguồn chưa có kênh truy cập chính thức.', valid_region_disabled: 'Vùng của nguồn này đang tắt.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
     // --- browse sidebar, rails and the filter chip (W1/W2 in the shared UI plan)
     browse: 'Duyệt', browseAll: 'Mọi tin đang đọc', byTopic: 'Chủ đề', byRegion: 'Vùng', bySource: 'Nguồn', quickFilter: 'Lọc nhanh', filterPlaceholder: 'Tên chủ đề hoặc nguồn…', clearFilter: 'Bỏ lọc', showing: 'Đang xem', noMatch: 'Không có mục nào khớp', railLatest: 'Tin mới nhất', railAlerts: 'Cảnh báo gần đây', railWatch: 'Theo dõi', seeAll: 'Xem tất cả', emptyRail: 'Chưa có gì', itemUnit: 'tin', tabbarLabel: 'Điều hướng một tay', themeLabel: 'Nền đọc',
+    railBriefs: 'Bản tin phân tích mới nhất', openReports: 'Mở Báo cáo', noBriefsRail: 'Chưa có bản tin phân tích — mở mục Báo cáo để yêu cầu Agent tổng hợp hoặc nhận đồng bộ từ MCP / Obsidian.',
+    reportsTitle: 'Báo cáo & Trợ lý Phân tích', reportsSub: 'Đọc bản tin do Agent tổng hợp, đối chiếu bài nguồn trích dẫn, ghi ý kiến phản hồi hai chiều (đồng bộ Obsidian) hoặc yêu cầu phân tích trực tiếp.',
+    askTitle: 'Hỏi & Yêu cầu Agent phân tích', askSub: 'Agent chỉ tổng hợp dựa trên tiêu đề tin đã lưu, chuỗi số liệu, lịch thuế và Hồ sơ trọng tâm của anh — không tự bịa nguồn.',
+    askPlaceholder: 'Ví dụ: Tóm tắt các diễn biến lãi suất, tỷ giá và chính sách đáng chú ý hôm nay…',
+    askChip1: 'Điểm nóng 24h qua', askChip1Prompt: 'Tóm tắt các tin tức và diễn biến quan trọng nhất đang lưu trong Newsman, nhóm theo chủ đề và nêu điểm cần theo dõi.',
+    askChip2: 'Vĩ mô & Lãi suất', askChip2Prompt: 'Phân tích bức tranh vĩ mô, lãi suất và chuỗi số liệu mới nhất đang có; nêu rủi ro và cơ hội chính.',
+    askChip3: 'Thuế & Pháp lý', askChip3Prompt: 'Rà soát các mốc lịch thuế sắp tới và văn bản chính thức đang lưu, nhắc những việc cần kiểm tra sớm.',
+    askMode: 'Chế độ phân tích', askModeAnalyse: 'Phân tích nhanh (Model)', askModeAgent: 'Nghiên cứu sâu (Hub Agent)',
+    askSaveBrief: 'Lưu kết quả thành Báo cáo (đồng bộ Obsidian)', askBriefTitle: 'Tiêu đề báo cáo (tuỳ chọn)',
+    askSubmit: 'Phân tích ngay', askRunning: 'Agent đang phân tích…', askSavedAs: 'Đã lưu báo cáo:',
+    askHubHint: 'Chưa gọi được LNC Agent Hub (hãy kiểm tra HUB_BASE_URL và khóa hub-api-key trong Cài đặt → LNC Agent Hub). Các báo cáo gửi từ Business MCP Hub vẫn đọc và phản hồi bình thường.',
+    noBriefs: 'Chưa có báo cáo phân tích', noBriefsSub: 'Bấm “Phân tích ngay” ở trên (bật Lưu thành Báo cáo) hoặc để Agent định kỳ gửi brief qua cổng /mcp.',
+    citedArticles: 'Bài nguồn trích dẫn', noCited: 'Báo cáo này chưa gắn mã bài nguồn cụ thể.',
+    feedbackTitle: 'Ý kiến của anh & Phản hồi hai chiều', feedbackSub: 'Ghi chú của anh trên web được bảo vệ (Agent không thể sửa/xóa); ý kiến anh viết trong Obsidian cũng tự gắn về đúng mã báo cáo này.',
+    feedbackPlaceholder: 'Viết nhận định, câu hỏi đào sâu hoặc hướng điều chỉnh cho kỳ báo cáo tới…', feedbackSubmit: 'Gửi ý kiến', feedbackEmpty: 'Chưa có ghi chú phản hồi nào trên báo cáo này.',
+    focusTitle: 'Hồ sơ trọng tâm & Lịch nhận tin', focusSub: 'Giúp cả Trợ lý nội bộ lẫn các Agent đặt lịch qua MCP (`reader_preferences`) bám đúng ưu tiên và khung giờ đọc của anh.',
+    focusLabel: 'Chủ đề, chỉ số & câu hỏi trọng tâm', focusHint: 'Tối đa 1.000 ký tự. Ví dụ: Lãi suất FED/ECB, tỷ giá USD/VND, BTC, thuế doanh nghiệp Việt Nam & xuất nhập khẩu.',
+    morningTime: 'Giờ bản tin sáng (HH:MM)', eveningTime: 'Giờ bản tin chiều (HH:MM)', briefTz: 'Múi giờ (IANA)',
+    connectorAutoOn: 'Đang bật tự động chạy Connector định kỳ', connectorAutoOff: 'Tự động chạy Connector đang tắt', connectorAutoHelp: 'Tách riêng với RSS để anh bấm “Lấy ngay” kiểm thử từng nhà cung cấp trước khi bật chạy nền tự động.',
+    connectorRunNow: 'Lấy ngay', connectorRunning: 'Đang lấy…', connectorEnable: 'Bật', connectorDisable: 'Tắt',
+    connectorRanOk: (obs: number, docs: number, ev: number) => `Đã lấy dữ liệu: ${obs} điểm số liệu, ${docs} văn bản, ${ev} sự kiện.`,
+    connectorErrRegion: 'Vùng của connector này đang tắt — hãy bật vùng ở mục Vùng trước.', connectorErrSecret: 'Thiếu khóa API của nhà cung cấp — hãy lưu khóa ở mục Khóa nhà cung cấp trước.', connectorErrConfig: 'Thiếu cấu hình máy chủ (ví dụ SEC_USER_AGENT).', connectorErrCache: 'Dữ liệu vừa lấy vẫn còn mới trong cửa sổ cache.', connectorErrQuota: 'Đã hết hạn mức truy vấn hôm nay của connector này.',
   },
   en: {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
@@ -89,8 +116,30 @@ const copy = {
     market: 'Markets', marketTitle: 'Time series', marketSub: 'Numeric data by region. No provider is connected yet: this list only fills once a real connector is approved and running.', noSeries: 'No series yet', noSeriesSub: 'P2 provides only the series store and the connector framework. Real data needs a chosen provider (plan section 8).',
     seriesPoints: (n: number) => `${n} points`, observing: 'Fetch data', latestValue: 'Latest value', asOf: 'Known as of', observedAt: 'Period', revision: (n: number) => `revision ${n}`, noAttribution: 'This series has no credit line yet.',
     hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research. The key is write-only and never shown again. The address is server configuration (environment), not entered here.', hubKeyName: 'hub-api-key', hubKeyHint: 'Newsman’s own Hub key. Paste it here; the value is never returned.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'The server has no HUB_BASE_URL, or the host is not in HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', mcpWrites: 'Writes through the connector', mcpWritesSub: 'Every agent write carries a source label. The label is the client id the Hub assigned, not something the agent chose.', mcpNoWrites: 'No agent has written anything yet.', mcpAnalyses: 'Stored briefs', mcpSources: 'sources', mcpNoAnalyses: 'No briefs yet.', mcpOwner: 'owner', mcpTitle: 'Business MCP Hub connector', mcpSub: 'The Hub calls /mcp with its own connector key plus a signed delegation for each agent. Read-only: every tool is a query, and there is no write tool.', mcpReady: 'Paired', mcpNotReady: 'Not paired', mcpBearer: 'Connector key', mcpSecret: 'Delegation secret', mcpAudience: 'Audience', mcpScopes: 'Maximum scopes', mcpFromEnv: 'environment', mcpFromAdmin: 'set here', mcpUnset: 'not set', mcpSet: 'set', mcpSave: 'Save', mcpSaved: 'Connector settings saved.', mcpStoreClosed: 'The server has no LNC_MASTER_KEY, so the two connector secrets cannot be stored yet.', mcpHint: 'Both secrets live under "Provider keys" below, named `connector-bearer` and `delegation-secret`. They are secrets: write-only, never shown again.', legalTitle: 'Legal-text sources', legalSub: 'Each source lists the terms we read and the date we checked them. A source whose terms were not read cannot be switched on.', legalBlocked: 'Not available', legalBlockedUnverified: 'Terms not checked', legalBlockedProhibited: 'Not permitted', legalTurnsOn: 'Follow this source', legalTurnsOff: 'Stop following', legalTerms: 'Terms', legalChecked: 'Checked', legalStale: 'The terms were checked a long time ago — read them again', legalNoChannel: 'No official access channel yet', legalReasonUnverified: 'The site’s terms of use could not be read, so this source is not followed.', legalReasonProhibited: 'The site’s terms do not allow automated retrieval.', valid_terms_unverified: 'The terms of use could not be read, so this source cannot be switched on.', valid_terms_prohibit_polling: 'The site’s terms do not allow automated retrieval.', valid_no_documented_channel: 'This source has no official access channel yet.', valid_region_disabled: 'This source’s region is off.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
+    secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', mcpWrites: 'Writes through the connector', mcpWritesSub: 'Every agent write carries a source label. The label is the client id the Hub assigned, not something the agent chose.', mcpNoWrites: 'No agent has written anything yet.', mcpAnalyses: 'Stored briefs', mcpSources: 'sources', mcpNoAnalyses: 'No briefs yet.', mcpOwner: 'owner', mcpTitle: 'Business MCP Hub connector', mcpSub: 'The Hub calls /mcp with its own connector key plus a signed delegation per agent (newsman:read for queries, newsman:write for briefs, feedback notes & two-way Obsidian sync).', mcpReady: 'Paired', mcpNotReady: 'Not paired', mcpBearer: 'Connector key', mcpSecret: 'Delegation secret', mcpAudience: 'Audience', mcpScopes: 'Maximum scopes', mcpFromEnv: 'environment', mcpFromAdmin: 'set here', mcpUnset: 'not set', mcpSet: 'set', mcpSave: 'Save', mcpSaved: 'Connector settings saved.', mcpStoreClosed: 'The server has no LNC_MASTER_KEY, so the two connector secrets cannot be stored yet.', mcpHint: 'Both secrets live under "Provider keys" below, named `connector-bearer` and `delegation-secret`. They are secrets: write-only, never shown again.', legalTitle: 'Legal-text sources', legalSub: 'Each source lists the terms we read and the date we checked them. A source whose terms were not read cannot be switched on.', legalBlocked: 'Not available', legalBlockedUnverified: 'Terms not checked', legalBlockedProhibited: 'Not permitted', legalTurnsOn: 'Follow this source', legalTurnsOff: 'Stop following', legalTerms: 'Terms', legalChecked: 'Checked', legalStale: 'The terms were checked a long time ago — read them again', legalNoChannel: 'No official access channel yet', legalReasonUnverified: 'The site’s terms of use could not be read, so this source is not followed.', legalReasonProhibited: 'The site’s terms do not allow automated retrieval.', valid_terms_unverified: 'The terms of use could not be read, so this source cannot be switched on.', valid_terms_prohibit_polling: 'The site’s terms do not allow automated retrieval.', valid_no_documented_channel: 'This source has no official access channel yet.', valid_region_disabled: 'This source’s region is off.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
     browse: 'Browse', browseAll: 'Everything visible', byTopic: 'Topics', byRegion: 'Regions', bySource: 'Sources', quickFilter: 'Quick filter', filterPlaceholder: 'Topic or source name…', clearFilter: 'Clear filter', showing: 'Showing', noMatch: 'Nothing matches', railLatest: 'Latest items', railAlerts: 'Recent alerts', railWatch: 'Following', seeAll: 'See all', emptyRail: 'Nothing yet', itemUnit: 'items', tabbarLabel: 'One-handed navigation', themeLabel: 'Reading theme',
+    railBriefs: 'Latest briefs', openReports: 'Open Reports', noBriefsRail: 'No briefs stored yet — open Reports to ask the Analyst or sync via MCP / Obsidian.',
+    reportsTitle: 'Briefs & Research Analyst', reportsSub: 'Read agent-authored briefs, check cited source articles, leave two-way feedback notes (synced with Obsidian) or run a grounded analysis.',
+    askTitle: 'Ask Newsman Analyst', askSub: 'Grounded strictly in stored headlines, numeric series, declared tax deadlines and your Focus Profile — never invented sources.',
+    askPlaceholder: 'Example: Summarise today’s notable rate, FX and policy developments…',
+    askChip1: '24h highlights', askChip1Prompt: 'Summarise the most important stored headlines in Newsman grouped by topic and highlight what to watch next.',
+    askChip2: 'Macro & Rates', askChip2Prompt: 'Analyse the macro and interest-rate picture from stored headlines and latest series; note key risks and opportunities.',
+    askChip3: 'Tax & Official docs', askChip3Prompt: 'Review upcoming declared tax deadlines and stored official documents, noting items to verify early.',
+    askMode: 'Analysis mode', askModeAnalyse: 'Quick brief (Model)', askModeAgent: 'Deep research (Hub Agent)',
+    askSaveBrief: 'Save result as a Brief (syncs to Obsidian)', askBriefTitle: 'Brief title (optional)',
+    askSubmit: 'Run analysis', askRunning: 'Analysing…', askSavedAs: 'Saved brief:',
+    askHubHint: 'Could not reach LNC Agent Hub (check HUB_BASE_URL and hub-api-key in Settings → LNC Agent Hub). Briefs pushed via Business MCP Hub still read and accept feedback normally.',
+    noBriefs: 'No briefs stored yet', noBriefsSub: 'Click “Run analysis” above (with Save as a Brief checked) or let a scheduled MCP agent publish briefs via /mcp.',
+    citedArticles: 'Cited source articles', noCited: 'No specific stored articles were cited.',
+    feedbackTitle: 'Your feedback & two-way notes', feedbackSub: 'Notes you write here are protected (agents cannot edit or delete them); feedback written in Obsidian also attaches to this brief.',
+    feedbackPlaceholder: 'Write your takeaway, follow-up question or guidance for the next brief…', feedbackSubmit: 'Save note', feedbackEmpty: 'No feedback notes on this brief yet.',
+    focusTitle: 'Focus profile & brief schedule', focusSub: 'Guides both the built-in analyst and scheduled MCP agents (`reader_preferences`) on what you prioritise and when you read.',
+    focusLabel: 'Priorities, sectors & recurring questions', focusHint: 'Up to 1,000 characters. E.g. Fed/ECB rates, USD/VND, BTC, Vietnam corporate tax & trade.',
+    morningTime: 'Morning brief (HH:MM)', eveningTime: 'Evening brief (HH:MM)', briefTz: 'Timezone (IANA)',
+    connectorAutoOn: 'Automatic scheduled connector polling is on', connectorAutoOff: 'Automatic connector polling is off', connectorAutoHelp: 'Kept separate from RSS so you can verify each provider with “Run now” before enabling scheduled background runs.',
+    connectorRunNow: 'Run now', connectorRunning: 'Running…', connectorEnable: 'Enable', connectorDisable: 'Disable',
+    connectorRanOk: (obs: number, docs: number, ev: number) => `Fetched: ${obs} observations, ${docs} documents, ${ev} events.`,
+    connectorErrRegion: 'This connector’s region is off — enable the region above first.', connectorErrSecret: 'Required provider API key is missing — save it under Provider keys first.', connectorErrConfig: 'Required server configuration is missing (e.g. SEC_USER_AGENT).', connectorErrCache: 'Recent data is still fresh inside the cache window.', connectorErrQuota: 'Today’s request quota for this connector is exhausted.',
   },
 } as const
 type Copy = (typeof copy)[Lang]
@@ -117,7 +166,7 @@ const isLocal = () => location.hostname === '127.0.0.1' || location.hostname ===
  * placeholder, so the phone tab bar offers only real destinations and the rest stay
  * in the desktop sidebar until their phase lands.
  */
-const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'alerts', 'settings']
+const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'alerts', 'settings']
 const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'alerts', 'timeline', 'saved', 'settings']
 function currentPage(): Page { const hash = location.hash.slice(1) as Page; return pages.includes(hash) ? hash : 'today' }
 
@@ -244,12 +293,13 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} />}
         {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}
         {page === 'market' && <Market t={t} lang={lang} region={region} />}
+        {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
         {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>
-    <nav className="tabbar" aria-label={t.tabbarLabel}>{ROUTABLE_PAGES.filter((id) => id !== 'market').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+    <nav className="tabbar" aria-label={t.tabbarLabel}>{ROUTABLE_PAGES.filter((id) => id !== 'market' && id !== 'regions').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
   </div>
   function setRoute(next: Page) { location.hash = next; setPage(next) }
 }
@@ -434,10 +484,12 @@ function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang
   const [latest, setLatest] = useState<Article[] | null>(null)
   const [watched, setWatched] = useState<Article[] | null>(null)
   const [alerts, setAlerts] = useState<AlertDelivery[] | null>(null)
+  const [briefs, setBriefs] = useState<AgentAnalysis[] | null>(null)
   useEffect(() => {
     const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
-    api<{ data: Article[] }>(`/api/articles?limit=8${suffix}`).then((payload) => setLatest(payload.data)).catch(() => setLatest([]))
-    api<{ data: AlertDelivery[] }>('/api/alerts?limit=5').then((payload) => setAlerts(payload.data)).catch(() => setAlerts([]))
+    api<{ data: Article[] }>(`/api/articles?limit=6${suffix}`).then((payload) => setLatest(payload.data)).catch(() => setLatest([]))
+    api<{ data: AlertDelivery[] }>('/api/alerts?limit=6').then((payload) => setAlerts(payload.data)).catch(() => setAlerts([]))
+    api<{ data: AgentAnalysis[] }>(`/api/v1/analyses?limit=6${suffix}`).then((payload) => setBriefs(payload.data)).catch(() => setBriefs([]))
   }, [region])
   // "Following" = the enabled source with the most visible items; with no sources it
   // stays empty rather than guessing.
@@ -445,9 +497,12 @@ function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang
     if (!sources.length) { setWatched([]); return }
     const top = sources[0]
     const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
-    api<{ data: Article[] }>(`/api/articles?limit=8&source=${encodeURIComponent(top.slug)}${suffix}`).then((payload) => setWatched(payload.data)).catch(() => setWatched([]))
+    api<{ data: Article[] }>(`/api/articles?limit=6&source=${encodeURIComponent(top.slug)}${suffix}`).then((payload) => setWatched(payload.data)).catch(() => setWatched([]))
   }, [sources, region])
   return <>
+    <Rail title={t.railBriefs} action={<button type="button" className="text-button" onClick={() => { location.hash = 'reports' }}>{t.openReports} →</button>}>
+      {!briefs ? <p className="muted">{t.loading}</p> : briefs.length === 0 ? <p className="rail-empty">{t.noBriefsRail}</p> : briefs.map((item) => <article className="mini-card" key={item.id}><span className="mini-tier">{item.stable_key ?? `analysis-${item.id}`}</span><a href="#reports">{item.title}</a><div className="article-meta"><span>{item.author ?? t.mcpOwner}</span>{item.region_code && <span>· {item.region_code}</span>}<span>· {formatDate(lang, new Date(item.updated_at * 1000).toISOString())}</span></div></article>)}
+    </Rail>
     <Rail title={t.railLatest} action={<button type="button" className="text-button" onClick={() => onPick({ topic: null, source: null })}>{t.seeAll}</button>}>
       {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} lang={lang} item={item} topics={topics} />)}
     </Rail>
@@ -590,7 +645,17 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
     if (!settings) return
     setBusy(true); setError(false); setSaved(false)
     try {
-      const result = await api<Settings>('/api/settings', { method: 'PATCH', body: JSON.stringify({ language: settings.language, default_reader_mode: settings.default_reader_mode }) })
+      const result = await api<Settings>('/api/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          language: settings.language,
+          default_reader_mode: settings.default_reader_mode,
+          focus_profile: settings.focus_profile,
+          brief_morning_time: settings.brief_morning_time,
+          brief_evening_time: settings.brief_evening_time,
+          brief_timezone: settings.brief_timezone,
+        }),
+      })
       setSettings(result); setLang(result.language); setMode(result.default_reader_mode); setSaved(true)
     } catch { setError(true) } finally { setBusy(false) }
   }
@@ -615,7 +680,16 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
     </section></div>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · P5+P7 foundation</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><ConnectorHubPanel t={t} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <section className="settings-card">
+      <div className="card-heading"><span className="card-icon">✦</span><div><h3>{t.focusTitle}</h3><p>{t.focusSub}</p></div></div>
+      <label className="field"><span>{t.focusLabel}</span><textarea rows={3} maxLength={1000} value={settings.focus_profile} placeholder={t.focusHint} onChange={(e) => { setSaved(false); setSettings({ ...settings, focus_profile: e.target.value }) }} /><small>{t.focusHint}</small></label>
+      <div className="research-controls">
+        <label className="field"><span>{t.morningTime}</span><input maxLength={5} placeholder="07:30" value={settings.brief_morning_time} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_morning_time: e.target.value }) }} /></label>
+        <label className="field"><span>{t.eveningTime}</span><input maxLength={5} placeholder="18:00" value={settings.brief_evening_time} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_evening_time: e.target.value }) }} /></label>
+        <label className="field"><span>{t.briefTz}</span><input maxLength={64} placeholder="Asia/Ho_Chi_Minh" value={settings.brief_timezone} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_timezone: e.target.value }) }} /></label>
+      </div>
+    </section>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><ConnectorHubPanel t={t} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -963,18 +1037,222 @@ function ConnectorHubPanel({ t }: { t: Copy }) {
 
 function ConnectorsPanel({ t }: { t: Copy }) {
   const [items, setItems] = useState<ConnectorStatus[] | null>(null)
-  useEffect(() => { api<{ data: ConnectorStatus[] }>('/api/admin/connectors').then((p) => setItems(p.data)).catch(() => setItems([])) }, [])
+  const [autoEnabled, setAutoEnabled] = useState(false)
+  const [busyId, setBusyId] = useState('')
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const load = async () => {
+    try {
+      const payload = await api<{ data: ConnectorStatus[]; auto_enabled?: boolean }>('/api/admin/connectors')
+      setItems(payload.data)
+      setAutoEnabled(Boolean(payload.auto_enabled))
+    } catch { setItems([]) }
+  }
+  useEffect(() => { void load() }, [])
+  const explain = (code: string) => {
+    if (code === 'connector_region_off') return t.connectorErrRegion
+    if (code === 'connector_secret_missing' || code === 'connector_secret_unreadable') return t.connectorErrSecret
+    if (code === 'connector_not_configured') return t.connectorErrConfig
+    if (code === 'connector_cache_fresh' || code === 'connector_not_due') return t.connectorErrCache
+    if (code === 'connector_quota_exhausted') return t.connectorErrQuota
+    return `${t.loadError} (${code})`
+  }
+  const toggleAuto = async () => {
+    setBusyId('auto'); setError(''); setNotice('')
+    try {
+      const next = await api<Settings>('/api/settings', { method: 'PATCH', body: JSON.stringify({ connectors_auto_enabled: !autoEnabled }) })
+      setAutoEnabled(next.connectors_auto_enabled)
+      setNotice(t.savedToast)
+    } catch { setError(t.settingsError) } finally { setBusyId('') }
+  }
+  const toggleConnector = async (item: ConnectorStatus) => {
+    setBusyId(item.id); setError(''); setNotice('')
+    try {
+      await api(`/api/admin/connectors/${encodeURIComponent(item.id)}`, { method: 'PUT', body: JSON.stringify({ enabled: !item.enabled }) })
+      await load()
+    } catch (err) {
+      setError(explain(err instanceof Error ? err.message : 'error'))
+    } finally { setBusyId('') }
+  }
+  const runNow = async (item: ConnectorStatus) => {
+    setBusyId(`run:${item.id}`); setError(''); setNotice('')
+    try {
+      const { data } = await api<{ data: { observations: number; documents: number; events: number } }>(`/api/admin/connectors/${encodeURIComponent(item.id)}/run`, { method: 'POST' })
+      setNotice(t.connectorRanOk(data.observations, data.documents, data.events))
+      await load()
+    } catch (err) {
+      setError(explain(err instanceof Error ? err.message : 'error'))
+      await load()
+    } finally { setBusyId('') }
+  }
   const when = (seconds: number | null) => seconds ? new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(seconds * 1000)) : null
   return <section className="connectors-admin" aria-labelledby="connectors-title">
-    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="connectors-title">{t.connectors}</h2></div></div>
+    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="connectors-title">{t.connectors}</h2><p>{t.connectorAutoHelp}</p></div></div>
+    <div className="switch-row"><div><strong>{autoEnabled ? t.connectorAutoOn : t.connectorAutoOff}</strong><span>{t.connectorAutoHelp}</span></div><button type="button" role="switch" className="switch" aria-checked={autoEnabled} disabled={busyId !== ''} onClick={() => void toggleAuto()} /></div>
+    {error && <div className="form-error" role="alert">{error}</div>}
+    {notice && <div className="save-state" role="status">✓ {notice}</div>}
     {!items ? <p className="muted">{t.loading}</p> : items.length === 0 ? <p className="muted">{t.noSeriesSub}</p> : <div className="catalog-list">{items.map((item) => <article className="catalog-entry" key={item.id}>
       <div className="catalog-entry-main"><strong>{item.id}</strong><span>{item.provider} · {item.region}{item.needs_secret ? ` · ${t.needsSecret}` : ''}</span>
-        <span className={item.health === 'healthy' ? 'catalog-status' : 'catalog-status inactive'}>{t.connectorHealth}: {item.health}</span>
-        <span className="catalog-health">{item.last_run_at ? `${t.asOf}: ${when(item.last_run_at)}` : t.neverRan}{item.last_error ? ` · ${item.last_error}` : ''}</span>
+        <span className={item.enabled ? 'catalog-status' : 'catalog-status inactive'}>{item.enabled ? t.connectorEnable : t.connectorDisable} · {t.connectorHealth}: {item.health}</span>
+        <span className="catalog-health">{item.last_run_at ? `${t.asOf}: ${when(item.last_run_at)}` : t.neverRan}{item.last_error ? ` · ${item.last_error}` : ''} · {t.quota}: {item.requests_today}/{item.daily_quota}</span>
       </div>
-      <div className="catalog-entry-actions"><span className="catalog-health">{t.quota}: {item.requests_today}/{item.daily_quota}</span></div>
+      <div className="catalog-entry-actions">
+        <button type="button" className="text-button" disabled={busyId !== '' || !item.enabled} onClick={() => void runNow(item)}>{busyId === `run:${item.id}` ? t.connectorRunning : t.connectorRunNow}</button>
+        <button type="button" className="text-button" disabled={busyId !== ''} onClick={() => void toggleConnector(item)}>{item.enabled ? t.connectorDisable : t.connectorEnable}</button>
+      </div>
     </article>)}</div>}
   </section>
+}
+
+function ReportsPage({ t, lang, region, dashboard }: { t: Copy; lang: Lang; region: string; dashboard: Dashboard | null }) {
+  const topics = dashboard?.topics ?? []
+  const [items, setItems] = useState<AgentAnalysis[] | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [detail, setDetail] = useState<AnalysisDetailPayload | null>(null)
+  const [question, setQuestion] = useState('')
+  const [topic, setTopic] = useState('')
+  const [mode, setMode] = useState<'analyse' | 'agent'>('analyse')
+  const [saveAsBrief, setSaveAsBrief] = useState(true)
+  const [customTitle, setCustomTitle] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [researchOut, setResearchOut] = useState<ResearchResponse | null>(null)
+  const [researchErr, setResearchErr] = useState('')
+  const [noteText, setNoteText] = useState('')
+  const [noteBusy, setNoteBusy] = useState(false)
+  const [error, setError] = useState(false)
+
+  const loadList = async (pickId?: number) => {
+    try {
+      const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
+      const payload = await api<{ data: AgentAnalysis[] }>(`/api/v1/analyses?limit=50${suffix}`)
+      setItems(payload.data); setError(false)
+      const nextId = pickId ?? (selectedId && payload.data.some((row) => row.id === selectedId) ? selectedId : payload.data[0]?.id ?? null)
+      setSelectedId(nextId)
+    } catch { setError(true); setItems([]) }
+  }
+  const loadDetail = async (id: number) => {
+    try {
+      const payload = await api<AnalysisDetailPayload>(`/api/v1/analyses/${id}`)
+      setDetail(payload)
+    } catch { setDetail(null) }
+  }
+  useEffect(() => { void loadList() }, [region])
+  useEffect(() => {
+    if (selectedId !== null) void loadDetail(selectedId)
+    else setDetail(null)
+  }, [selectedId])
+
+  const submitResearch = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!question.trim()) return
+    setAsking(true); setResearchErr(''); setResearchOut(null)
+    try {
+      const { data } = await api<{ data: ResearchResponse }>('/api/admin/research', {
+        method: 'POST',
+        body: JSON.stringify({
+          question: question.trim(),
+          region: region || undefined,
+          topic: topic || undefined,
+          mode,
+          save_as_brief: saveAsBrief,
+          title: customTitle.trim() || undefined,
+        }),
+      })
+      setResearchOut(data)
+      if (data.saved_analysis_id) {
+        setCustomTitle('')
+        await loadList(data.saved_analysis_id)
+        await loadDetail(data.saved_analysis_id)
+      }
+    } catch (err) {
+      const code = err instanceof Error ? err.message : ''
+      setResearchErr(code.startsWith('provider_') ? t.askHubHint : t.loadError)
+    } finally { setAsking(false) }
+  }
+
+  const submitNote = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selectedId || !noteText.trim()) return
+    setNoteBusy(true)
+    try {
+      await api('/api/notes', { method: 'POST', body: JSON.stringify({ analysis_id: selectedId, body: noteText.trim() }) })
+      setNoteText('')
+      await loadDetail(selectedId)
+    } catch { setError(true) } finally { setNoteBusy(false) }
+  }
+
+  const deleteNote = async (noteId: number) => {
+    if (!selectedId) return
+    setNoteBusy(true)
+    try {
+      await api(`/api/notes/${noteId}`, { method: 'DELETE' })
+      await loadDetail(selectedId)
+    } catch { setError(true) } finally { setNoteBusy(false) }
+  }
+
+  const stamp = (sec: number) => formatDate(lang, new Date(sec * 1000).toISOString()) ?? ''
+  return <div className="content-stack">
+    <section className="section-heading"><div><span className="eyebrow">{t.reports}</span><h2>{t.reportsTitle}</h2><p>{t.reportsSub}</p></div></section>
+    <form className="research-card" onSubmit={submitResearch}>
+      <div><h3>{t.askTitle}</h3><p className="muted" style={{ margin: '4px 0 0' }}>{t.askSub}</p></div>
+      <div className="chip-row">
+        <button type="button" className="chip" onClick={() => setQuestion(t.askChip1Prompt)}>{t.askChip1}</button>
+        <button type="button" className="chip" onClick={() => setQuestion(t.askChip2Prompt)}>{t.askChip2}</button>
+        <button type="button" className="chip" onClick={() => setQuestion(t.askChip3Prompt)}>{t.askChip3}</button>
+      </div>
+      <label className="field"><span>{t.askTitle}</span><textarea rows={3} maxLength={2000} required value={question} placeholder={t.askPlaceholder} onChange={(e) => setQuestion(e.target.value)} /></label>
+      <div className="research-controls">
+        <Select label={t.byTopic} value={topic} options={[{ value: '', label: t.allTopics }, ...topics.map((item) => ({ value: item.slug, label: lang === 'vi' ? item.label_vi : item.label_en }))]} onChange={setTopic} />
+        <Select label={t.askMode} value={mode} options={[{ value: 'analyse', label: t.askModeAnalyse }, { value: 'agent', label: t.askModeAgent }]} onChange={(v) => setMode(v as 'analyse' | 'agent')} />
+        <label className="field"><span>{t.askBriefTitle}</span><input maxLength={300} value={customTitle} onChange={(e) => setCustomTitle(e.target.value)} placeholder="Morning Macro Brief…" /></label>
+      </div>
+      <label className="toggle-field"><span>{t.askSaveBrief}</span><input type="checkbox" checked={saveAsBrief} onChange={(e) => setSaveAsBrief(e.target.checked)} /></label>
+      <div className="btn-row"><button className="btn primary" disabled={asking || !question.trim()}>{asking ? t.askRunning : t.askSubmit}</button></div>
+      {researchErr && <div className="catalog-notice" role="status">{researchErr}</div>}
+      {researchOut && <div className="research-answer" role="status">
+        <div className="article-meta"><span className="tier-badge">{researchOut.model}</span><span>{researchOut.tokens} tokens</span>{researchOut.stable_key && <span>· {t.askSavedAs} <code>{researchOut.stable_key}</code></span>}</div>
+        <div className="brief-body">{researchOut.answer}</div>
+      </div>}
+    </form>
+
+    {error && <div className="form-error" role="alert">{t.loadError}</div>}
+    {!items ? <p className="muted" role="status">{t.loading}</p> : items.length === 0
+      ? <div className="empty-card"><div className="empty-art">◫</div><h3>{t.noBriefs}</h3><p>{t.noBriefsSub}</p></div>
+      : <div className="reports-layout">
+          <div className="brief-list" aria-label={t.reports}>
+            {items.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? 'brief-item active' : 'brief-item'} onClick={() => setSelectedId(item.id)}>
+              <div className="article-meta"><span className="key-chip">{item.stable_key ?? `analysis-${item.id}`}</span><span>{item.author ?? t.mcpOwner}</span></div>
+              <h3>{item.title}</h3>
+              <div className="article-meta"><span>{stamp(item.updated_at)}</span>{item.region_code && <span>· {item.region_code}</span>}<span>· {item.source_article_ids.length} {t.mcpSources}</span></div>
+            </button>)}
+          </div>
+          {detail && <article className="brief-reader">
+            <header className="brief-reader-head">
+              <div className="article-meta"><span className="key-chip">{detail.data.stable_key ?? `analysis-${detail.data.id}`}</span><span className="tier-badge">{detail.data.kind}</span><span>{detail.data.author ?? t.mcpOwner}</span>{detail.data.region_code && <span>· {detail.data.region_code}</span>}{detail.data.topic_slug && <span>· {detail.data.topic_slug}</span>}<span>· {stamp(detail.data.updated_at)}</span></div>
+              <h2>{detail.data.title}</h2>
+            </header>
+            <div className="brief-body">{detail.data.body}</div>
+            <section className="cited-box">
+              <h3>{t.citedArticles} ({detail.cited_articles.length})</h3>
+              {detail.cited_articles.length === 0 ? <p className="muted">{t.noCited}</p> : <ul className="cited-list">{detail.cited_articles.map((art) => <li key={art.id}><span className="key-chip">#{art.id}</span><span className="tier-badge">{art.source_tier}</span><a href={art.url} target="_blank" rel="noopener noreferrer">{art.title}</a><span className="muted">({art.source_name})</span></li>)}</ul>}
+            </section>
+            <section className="notes-box">
+              <div><h3>{t.feedbackTitle} ({detail.notes.length})</h3><p className="muted" style={{ margin: '4px 0 0' }}>{t.feedbackSub}</p></div>
+              {detail.notes.length === 0 ? <p className="muted">{t.feedbackEmpty}</p> : <div className="notes-list">{detail.notes.map((note) => <div className="note-card" key={note.id}>
+                <div className="note-head">
+                  <span><strong>{note.author ?? t.mcpOwner}</strong> · {stamp(note.updated_at)}</span>
+                  <button type="button" className="text-button" disabled={noteBusy} onClick={() => void deleteNote(note.id)}>{t.removeSecret}</button>
+                </div>
+                <p>{note.body}</p>
+              </div>)}</div>}
+              <form className="login-form" onSubmit={submitNote}>
+                <textarea rows={3} maxLength={4000} required value={noteText} placeholder={t.feedbackPlaceholder} onChange={(e) => setNoteText(e.target.value)} />
+                <div className="btn-row"><button className="btn secondary" disabled={noteBusy || !noteText.trim()}>{noteBusy ? t.saving : t.feedbackSubmit}</button></div>
+              </form>
+            </section>
+          </article>}
+        </div>}
+  </div>
 }
 
 function RegionsPage({ t, lang, region }: { t: Copy; lang: Lang; region: string }) {

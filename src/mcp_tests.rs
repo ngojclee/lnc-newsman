@@ -408,3 +408,36 @@ fn a_read_tool_also_refuses_an_undeclared_argument() {
         .expect_err("an undeclared filter must not be ignored");
     assert!(error.contains("language"), "{error}");
 }
+
+#[tokio::test]
+async fn reader_preferences_tool_exposes_focus_and_schedule_without_secrets() {
+    let st = state();
+    st.db
+        .lock()
+        .unwrap()
+        .set_settings(&[
+            ("focus_profile", "Theo dõi vĩ mô Mỹ và thuế Việt Nam"),
+            ("brief_morning_time", "07:00"),
+            ("brief_evening_time", "18:30"),
+            ("brief_timezone", "Asia/Ho_Chi_Minh"),
+        ])
+        .unwrap();
+    let app = crate::router(st);
+    let (status, body) = rpc(
+        app,
+        call("reader_preferences", serde_json::json!({})),
+        Some("test-api-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false, "{body}");
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        parsed["data"]["focus_profile"],
+        "Theo dõi vĩ mô Mỹ và thuế Việt Nam"
+    );
+    assert_eq!(parsed["data"]["brief_morning_time"], "07:00");
+    assert_eq!(parsed["data"]["brief_evening_time"], "18:30");
+    assert_eq!(parsed["data"]["brief_timezone"], "Asia/Ho_Chi_Minh");
+}

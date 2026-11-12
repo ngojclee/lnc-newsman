@@ -22,6 +22,7 @@ mod legal;
 mod connector;
 mod mcp;
 mod providers;
+mod reader;
 mod regions;
 mod secrets;
 mod series;
@@ -58,6 +59,7 @@ struct AppState {
     started_at: u64,
     fetcher: fetch::Fetcher,
     in_flight: Mutex<HashSet<i64>>,
+    connector_in_flight: Mutex<HashSet<String>>,
     /// Last request per host, shared by every path that fetches (scheduler,
     /// "Fetch now", feed preview) so the per-host gap cannot be bypassed.
     host_gates: Mutex<std::collections::HashMap<String, std::time::Instant>>,
@@ -93,6 +95,7 @@ impl AppState {
             started_at: now(),
             fetcher,
             in_flight: Mutex::new(HashSet::new()),
+            connector_in_flight: Mutex::new(HashSet::new()),
             host_gates: Mutex::new(std::collections::HashMap::new()),
             host_gap: collector::HOST_GAP,
             secrets: None,
@@ -125,6 +128,11 @@ struct SettingsResponse {
     language: String,
     default_reader_mode: String,
     collector_enabled: bool,
+    connectors_auto_enabled: bool,
+    focus_profile: String,
+    brief_morning_time: String,
+    brief_evening_time: String,
+    brief_timezone: String,
     /// Effective mode (env override applied) and the mode the admin stored.
     telegram_mode: &'static str,
     telegram_mode_stored: &'static str,
@@ -143,6 +151,11 @@ struct SettingsPatch {
     language: Option<String>,
     default_reader_mode: Option<String>,
     collector_enabled: Option<bool>,
+    connectors_auto_enabled: Option<bool>,
+    focus_profile: Option<String>,
+    brief_morning_time: Option<String>,
+    brief_evening_time: Option<String>,
+    brief_timezone: Option<String>,
     // Telegram fields are listed here rather than flattened: `deny_unknown_fields`
     // stops working once a struct flattens another, and a typo must be an error.
     telegram_mode: Option<String>,
@@ -210,6 +223,7 @@ async fn main() -> anyhow::Result<()> {
         Err(err) => tracing::warn!(%err, "could not register legal sources"),
     }
     collector::spawn_scheduler(state.clone());
+    connectors::spawn_scheduler(state.clone());
     tracing::info!(%addr, data_dir = %state.cfg.data_dir.display(), "starting lnc-newsman");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
@@ -244,6 +258,11 @@ fn router(state: SharedState) -> Router {
             axum::routing::put(catalog::update_source),
         )
         .route("/api/admin/sources/preview", post(collector::preview))
+        .route("/api/admin/sources/presets", get(catalog::list_presets))
+        .route(
+            "/api/admin/sources/presets/{slug}/add",
+            post(catalog::add_preset),
+        )
         .route("/api/admin/sources/{id}/fetch", post(collector::fetch_now))
         .route("/api/admin/sources/{id}/resume", post(collector::resume))
         .route("/api/admin/sources/{id}/runs", get(collector::runs))
@@ -289,9 +308,14 @@ fn router(state: SharedState) -> Router {
         .route("/api/admin/connector/analyses", get(agent_analyses))
         .route("/api/admin/connectors", get(connectors::status_handler))
         .route(
+            "/api/admin/connectors/{id}",
+            axum::routing::put(connectors::toggle_handler),
+        )
+        .route(
             "/api/admin/connectors/{id}/run",
             post(connectors::run_handler),
         )
+        .route("/api/admin/research", post(reader::run_research))
         .route("/api/admin/regions", get(regions::list))
         .route(
             "/api/admin/regions/reload",
@@ -304,6 +328,11 @@ fn router(state: SharedState) -> Router {
         .route("/api/alerts", get(alerts::list_inbox))
         .route("/api/alerts/read-all", post(alerts::read_all))
         .route("/api/alerts/{id}/read", post(alerts::read_one))
+        .route("/api/notes", post(reader::create_owner_note))
+        .route(
+            "/api/notes/{id}",
+            axum::routing::delete(reader::delete_owner_note),
+        )
         .route("/api/articles", get(collector::articles))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -325,6 +354,9 @@ fn router(state: SharedState) -> Router {
         .route("/api/v1/companies/{id}/facts", get(filings::list_facts))
         .route("/api/v1/tax-calendar", get(tax::list_calendar))
         .route("/api/v1/articles", get(collector::articles))
+        .route("/api/v1/analyses", get(reader::list_analyses))
+        .route("/api/v1/analyses/{id}", get(reader::get_analysis))
+        .route("/api/v1/notes", get(reader::list_notes))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session_or_api,
@@ -638,6 +670,7 @@ async fn api_status(State(state): State<SharedState>) -> Json<serde_json::Value>
 fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
     let db = state.db.lock().expect("database lock poisoned");
     let resolved = telegram::endpoint(&db, state.secrets.as_ref(), &state.telegram);
+    let prefs = reader::brief_preferences(&db)?;
     let has = |name: &str| match state.secrets.as_ref() {
         Some(vault) => secrets::get(&db, vault, name).is_ok(),
         None => false,
@@ -649,6 +682,11 @@ fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
             .get_setting("default_reader_mode")?
             .unwrap_or_else(|| "paper".into()),
         collector_enabled: collector::collector_enabled(&db),
+        connectors_auto_enabled: connectors::connectors_auto_enabled(&db),
+        focus_profile: prefs.focus_profile,
+        brief_morning_time: prefs.brief_morning_time,
+        brief_evening_time: prefs.brief_evening_time,
+        brief_timezone: prefs.brief_timezone,
         telegram_mode: telegram::effective_mode(&db, &state.telegram).as_str(),
         telegram_mode_stored: telegram::stored_mode(&db).as_str(),
         telegram_env_override: state.telegram.mode.is_some(),
@@ -713,6 +751,21 @@ async fn patch_settings(
     if let Some(enabled) = patch.collector_enabled {
         writes.push(("collector_enabled", if enabled { "true" } else { "false" }));
     }
+    if let Some(enabled) = patch.connectors_auto_enabled {
+        writes.push((
+            "connectors_auto_enabled",
+            if enabled { "true" } else { "false" },
+        ));
+    }
+    let pref_writes = match reader::validate_preferences_patch(
+        patch.focus_profile.as_deref(),
+        patch.brief_morning_time.as_deref(),
+        patch.brief_evening_time.as_deref(),
+        patch.brief_timezone.as_deref(),
+    ) {
+        Ok(writes) => writes,
+        Err(code) => return failure(StatusCode::BAD_REQUEST, code),
+    };
     // Telegram fields are validated together, so a bad chat id cannot leave the mode
     // changed with no destination. Nothing is written unless the whole patch is valid.
     let telegram_writes = match telegram::settings_writes(&patch.telegram()) {
@@ -723,6 +776,7 @@ async fn patch_settings(
         .iter()
         .map(|(key, value)| (*key, (*value).to_string()))
         .collect();
+    owned.extend(pref_writes);
     owned.extend(telegram_writes);
     let owned_refs: Vec<(&str, &str)> = owned
         .iter()
@@ -812,6 +866,7 @@ mod tests {
             started_at: now(),
             fetcher: fetch::Fetcher::public_only(),
             in_flight: Mutex::new(HashSet::new()),
+            connector_in_flight: Mutex::new(HashSet::new()),
             host_gates: Mutex::new(std::collections::HashMap::new()),
             host_gap: collector::HOST_GAP,
             secrets: None,

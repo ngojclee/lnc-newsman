@@ -18,14 +18,16 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/dashboard` | Enabled topics plus `stats` (collector switch, item counts, enabled/paused sources, per-topic counts). Optional `region`: article counters (`articles_total`, `articles_24h`, `topic_counts`) then follow that region and its ancestors, like the article list; 400 `invalid_region` if the region is unknown or disabled. Source counters stay global |
-| GET | `/api/settings` | Global language and reader-mode defaults |
-| PATCH | `/api/settings` | Partial JSON: `language` = `vi`/`en`, `default_reader_mode` = `paper`/`sepia`/`night`, `collector_enabled` = boolean (default `false`) |
+| GET | `/api/settings` | Global language, reader-mode defaults, collector/connector background switches, focus profile and brief schedule |
+| PATCH | `/api/settings` | Partial JSON: `language` = `vi`/`en`, `default_reader_mode` = `paper`/`sepia`/`night`, `collector_enabled` = boolean (default `false`), `connectors_auto_enabled` = boolean (default `false`), `focus_profile` (≤1000 chars), `brief_morning_time` / `brief_evening_time` (`HH:MM` or `""`), `brief_timezone` (IANA zone) |
 | GET | `/api/admin/topics` | List enabled and disabled topics |
 | POST | `/api/admin/topics` | Create a topic; returns 201 |
 | PUT | `/api/admin/topics/{slug}` | Replace topic fields |
 | GET | `/api/admin/sources` | List enabled and disabled sources |
 | POST | `/api/admin/sources` | Create a source; returns 201 |
 | PUT | `/api/admin/sources/{id}` | Replace source fields by numeric ID |
+| GET | `/api/admin/sources/presets` | Curated official/public RSS/Atom presets with `installed`, `region_enabled` and required `attribution`. Zero network calls |
+| POST | `/api/admin/sources/presets/{slug}/add` | Register one curated preset **disabled** (`enabled = false`) with its required `attribution`; returns 201 `{ data: { id, slug, enabled: false } }`, 409 `duplicate_slug`/`duplicate_source`, or 404 `not_found`. Zero network calls |
 | POST | `/api/admin/sources/preview` | `{ "url": "..." }`: fetch and parse once, store nothing; returns `items_seen` and up to 5 sample titles. Failures return 502 `{ "error": "preview_failed", "reason": "..." }` |
 | POST | `/api/admin/sources/{id}/fetch` | Fetch one source now (also works for a disabled source); returns `status` (`ok`/`not_modified`/`error`), `items_seen`, `items_new`, `error`, `paused`. 409 `fetch_in_progress` if already running |
 | POST | `/api/admin/sources/{id}/resume` | Clear an automatic pause and failure count; the source becomes due immediately |
@@ -42,8 +44,12 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | GET | `/api/admin/connector/analyses` | Stored briefs/summaries with their `author` label, newest first |
 | GET | `/api/admin/connector` | Business MCP Hub connector card: `enabled`, `audience`, `max_scopes`, and the **source** of each value (`env`/`admin`/`unset`) — never a value |
 | PATCH | `/api/admin/connector` | Partial JSON `audience`, `max_scopes`; a `null` restores the built-in default. 400 `invalid_connector_audience` / `invalid_connector_scopes` / `unsupported_connector_scope`. The bearer and the delegation secret are **not** accepted here — they are secrets, written through `PUT /api/admin/secrets/{name}` |
-| GET | `/api/admin/connectors` | Connector id, provider, region, enabled, health, `last_error`, run times, `requests_today`/`daily_quota`, `requests_last_run`, `needs_secret`. No secrets |
-| POST | `/api/admin/connectors/{id}/run` | Run one connector now. Same gates as a scheduled run: 409 with `connector_disabled`, `connector_region_off`, `connector_secret_missing`, `connector_not_configured`, `connector_quota_exhausted`, `connector_cache_fresh` or `connector_not_due`; 502 with `connector_fetch_failed`, `connector_provider_error`, `connector_unauthorized`, `connector_invalid_data` |
+| GET | `/api/admin/connectors` | Connector id, provider, region, enabled, health, `last_error`, run times, `requests_today`/`daily_quota`, `requests_last_run`, `needs_secret`, plus `auto_enabled`. No secrets |
+| PUT | `/api/admin/connectors/{id}` | Body `{"enabled": boolean}`. Flips a connector's `enabled` switch with zero network calls; enabling checks `connector_region_off`, `connector_not_configured`, `connector_secret_missing` and `connector_secret_unreadable` upfront (409) |
+| POST | `/api/admin/connectors/{id}/run` | Run one connector now. Same gates as a scheduled run: 409 with `fetch_in_progress`, `connector_disabled`, `connector_region_off`, `connector_secret_missing`, `connector_not_configured`, `connector_quota_exhausted`, `connector_cache_fresh` or `connector_not_due`; 502 with `connector_fetch_failed`, `connector_provider_error`, `connector_unauthorized`, `connector_invalid_data` |
+| POST | `/api/admin/research` | Grounded Hub research/brief run (`{ question, region?, topic?, mode?: "analyse"\|"agent", save_as_brief?: boolean, title? }`). Quotes stored headlines, numeric series, declared deadlines and `focus_profile`; optionally saves to `newsman_analyses` (`stable_key = "analysis-<id>"`) |
+| POST | `/api/notes` | Owner feedback note (`{ body, article_id? \| document_id? \| analysis_id? }`), stored with `author_client = NULL` so no delegated MCP agent can edit or delete it |
+| DELETE | `/api/notes/{id}` | Owner deletes a stored note by id |
 | GET | `/api/admin/legal-sources` | Legal-text sources with the terms verdict each one rests on: `terms_verdict` (`verified`/`not_required`/`unverified`/`prohibited`), `terms_checked_on`, `terms_url`, `terms_quote`, `terms_note`, `pollable`, `block_reason`, `evidence_age_days`, `evidence_stale`. No secrets |
 | PUT | `/api/admin/legal-sources/{code}` | Body `{"enabled": bool}`. Refuses with 409 `terms_unverified`, `terms_prohibit_polling`, `no_documented_channel` or `region_disabled`; enabling a `feed` source also creates/updates its collector row (`legal-<code>`, T1, every 12 h) |
 
@@ -115,6 +121,9 @@ The built-in pack (`global`, `eu`, `eu/fr`, `us`, `vn`) is embedded in the binar
 | GET | `/api/v1/topics` | Enabled topics only |
 | GET | `/api/v1/regions` | Enabled regions only, plus the effective set: `{ data, effective }` |
 | GET | `/api/v1/articles` | Newest first. Query: `topic` (includes descendant topics), `source` (one source slug, applied on top of the same visibility rules), `region` (that region plus its ancestors; 400 `invalid_region` if the region is unknown or disabled), `limit` 1–100 (default 50), `offset` 0–10,000. Fields: `id`, `title`, `url`, `published_at`, `fetched_at`, `topic_slug`, `region_code`, `source_name`, `source_tier`. Items under disabled topics or outside the effective region set are hidden |
+| GET | `/api/v1/analyses` | Stored briefs and summaries in enabled regions, newest first. Query: `topic`, `region`, `updated_since` (ISO date, RFC 3339 or Unix seconds), `limit` 1–100 |
+| GET | `/api/v1/analyses/{id}` | One stored brief with `stable_key` (`analysis-<id>`), resolved `cited_articles` and feedback `notes` |
+| GET | `/api/v1/notes` | Notes on one target (`article_id`, `document_id` or `analysis_id`, `limit` 1–100), plus `flags` when querying an article |
 
 ## Alerts (P7 foundation)
 
@@ -163,7 +172,7 @@ Three credentials are accepted, and they are told apart by **how** they arrive:
 |---|---|---|
 | Signed-in browser | session cookie (+ `X-Requested-With` on POST) | every tool |
 | Reader client | `x-api-key` (or `Authorization: Bearer` with a reader key) | every tool |
-| Business MCP Hub | `Authorization: Bearer <connector token>` plus the signed delegation headers below | only the scopes it was granted; today that is `newsman:read` |
+| Business MCP Hub | `Authorization: Bearer <connector token>` plus the signed delegation headers below | only the scopes it was granted (`newsman:read`, optionally `newsman:write`) |
 
 The Hub path refuses a call when the connector is not paired. Error codes: 401 `connector_auth_required` for a missing or wrong connector token (an unpaired connector answers identically — a caller cannot tell the two apart), 403 `delegation_denied` for a bad or missing signature, the wrong audience, a timestamp more than 90 s off, a replayed nonce, a malformed header, or a scope outside the connector ceiling.
 
@@ -199,6 +208,7 @@ Every tool answers through the same function the matching REST endpoint calls, s
 |---|---|---|
 | `regions` | — | `GET /api/v1/regions` |
 | `topics` | — | `GET /api/v1/topics` |
+| `reader_preferences` | — | Non-sensitive `focus_profile`, `language`, `brief_morning_time`, `brief_evening_time`, `brief_timezone`, `effective_regions` and `enabled_topics` |
 | `latest_articles` | `region?`, `topic?`, `limit?` 1–100 | `GET /api/v1/articles` |
 | `documents` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/documents` |
 | `tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |

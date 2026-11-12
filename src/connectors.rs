@@ -331,6 +331,7 @@ pub fn gate(
 /// Why a run ended without data. Separates "not allowed to run" from "ran and failed".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunError {
+    Busy,
     Skipped(Skip),
     Failed(ConnectorError),
 }
@@ -338,9 +339,25 @@ pub enum RunError {
 impl RunError {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Busy => "fetch_in_progress",
             Self::Skipped(skip) => skip.code(),
             Self::Failed(err) => err.code(),
         }
+    }
+}
+
+struct ConnectorInFlight<'a> {
+    state: &'a SharedState,
+    id: String,
+}
+
+impl Drop for ConnectorInFlight<'_> {
+    fn drop(&mut self) {
+        self.state
+            .connector_in_flight
+            .lock()
+            .expect("connector in-flight lock poisoned")
+            .remove(&self.id);
     }
 }
 
@@ -360,6 +377,18 @@ pub async fn run_with(
     connector: &dyn Connector,
     base_url: &str,
 ) -> Result<CollectOutcome, RunError> {
+    if !state
+        .connector_in_flight
+        .lock()
+        .expect("connector in-flight lock poisoned")
+        .insert(connector.id().to_string())
+    {
+        return Err(RunError::Busy);
+    }
+    let _guard = ConnectorInFlight {
+        state,
+        id: connector.id().to_string(),
+    };
     let now = crate::now() as i64;
     let (row, secret) = {
         let db = state.db.lock().expect("database lock poisoned");
@@ -467,6 +496,136 @@ pub fn register_missing(db: &db::Database) -> anyhow::Result<usize> {
     Ok(added)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToggleInput {
+    pub enabled: bool,
+}
+
+/// Flip a connector's `enabled` switch without making any network request. Enabling
+/// checks region, operator config and required secret upfront so the admin gets an
+/// immediate refusal rather than a silent background skip.
+pub async fn toggle_handler(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(input): Json<ToggleInput>,
+) -> Response {
+    let Some(connector) = crate::providers::all()
+        .into_iter()
+        .find(|candidate| candidate.id() == id)
+    else {
+        return crate::failure(axum::http::StatusCode::NOT_FOUND, "not_found");
+    };
+    let db = state.db.lock().expect("database lock poisoned");
+    let Some(stored) = (match row(&db, connector.id()) {
+        Ok(stored) => stored,
+        Err(err) => return crate::internal_error(err),
+    }) else {
+        return crate::failure(axum::http::StatusCode::NOT_FOUND, "not_found");
+    };
+    if input.enabled {
+        if !matches!(regions::region_enabled(&db, &stored.region), Ok(true)) {
+            return crate::failure(
+                axum::http::StatusCode::CONFLICT,
+                Skip::RegionOff.code(),
+            );
+        }
+        if !connector.config_ready(&state.connector_config) {
+            return crate::failure(
+                axum::http::StatusCode::CONFLICT,
+                Skip::NotConfigured.code(),
+            );
+        }
+        if let Some(name) = stored.secret_name.as_deref() {
+            let Some(vault) = state.secrets.as_ref() else {
+                return crate::failure(
+                    axum::http::StatusCode::CONFLICT,
+                    Skip::SecretMissing.code(),
+                );
+            };
+            match secrets::get(&db, vault, name) {
+                Ok(_) => {}
+                Err(secrets::SecretError::Missing | secrets::SecretError::NotConfigured) => {
+                    return crate::failure(
+                        axum::http::StatusCode::CONFLICT,
+                        Skip::SecretMissing.code(),
+                    );
+                }
+                Err(_) => {
+                    return crate::failure(
+                        axum::http::StatusCode::CONFLICT,
+                        Skip::SecretUnreadable.code(),
+                    );
+                }
+            }
+        }
+    }
+    if let Err(err) = db.conn.execute(
+        "UPDATE connectors SET enabled=?2 WHERE id=?1",
+        rusqlite::params![connector.id(), i64::from(input.enabled)],
+    ) {
+        return crate::internal_error(err);
+    }
+    match statuses(&db).map(|list| list.into_iter().find(|item| item.id == connector.id())) {
+        Ok(Some(status)) => Json(serde_json::json!({ "data": status })).into_response(),
+        Ok(None) => crate::failure(axum::http::StatusCode::NOT_FOUND, "not_found"),
+        Err(err) => crate::internal_error(err),
+    }
+}
+
+/// Separate switch from RSS `collector_enabled` so live acceptance can still run one
+/// deliberate click at a time before background polling is turned on.
+pub fn connectors_auto_enabled(db: &db::Database) -> bool {
+    db.get_setting("connectors_auto_enabled")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
+}
+
+/// One scheduled connector pass. Off unless `connectors_auto_enabled` is true; each
+/// connector then passes through the full `gate` (enabled, region, quota, cache, due).
+pub async fn run_due_once(state: &SharedState) -> usize {
+    let auto_on = {
+        let db = state.db.lock().expect("database lock poisoned");
+        connectors_auto_enabled(&db)
+    };
+    if !auto_on {
+        return 0;
+    }
+    let mut ran = 0;
+    for connector in crate::providers::all() {
+        match run(state, connector.as_ref()).await {
+            Ok(outcome) => {
+                ran += 1;
+                tracing::info!(
+                    connector = connector.id(),
+                    observations = outcome.observations,
+                    documents = outcome.documents,
+                    events = outcome.events,
+                    "scheduled connector run completed"
+                );
+            }
+            Err(RunError::Busy | RunError::Skipped(_)) => {}
+            Err(RunError::Failed(err)) => {
+                tracing::warn!(connector = connector.id(), code = err.code(), "scheduled connector run failed");
+            }
+        }
+    }
+    ran
+}
+
+pub fn spawn_scheduler(state: SharedState) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            run_due_once(&state).await;
+        }
+    });
+}
+
 /// Manual run, so the approval script has a button and every live request is
 /// deliberate. Same gates as a scheduled run; nothing runs while the connector is off.
 pub async fn run_handler(
@@ -483,7 +642,7 @@ pub async fn run_handler(
         Ok(outcome) => Json(serde_json::json!({ "data": outcome })).into_response(),
         Err(err) => {
             let status = match err {
-                RunError::Skipped(_) => axum::http::StatusCode::CONFLICT,
+                RunError::Busy | RunError::Skipped(_) => axum::http::StatusCode::CONFLICT,
                 RunError::Failed(_) => axum::http::StatusCode::BAD_GATEWAY,
             };
             crate::failure(status, err.code())
@@ -495,7 +654,11 @@ pub async fn run_handler(
 pub async fn status_handler(State(state): State<SharedState>) -> Response {
     let db = state.db.lock().expect("database lock poisoned");
     match statuses(&db) {
-        Ok(data) => Json(serde_json::json!({ "data": data })).into_response(),
+        Ok(data) => Json(serde_json::json!({
+            "data": data,
+            "auto_enabled": connectors_auto_enabled(&db)
+        }))
+        .into_response(),
         Err(err) => crate::internal_error(err),
     }
 }

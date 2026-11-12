@@ -5,6 +5,7 @@ use super::*;
 use crate::{AppState, config, secrets::SecretBox};
 use axum::routing::get;
 use std::sync::Arc;
+use tower::ServiceExt;
 
 fn temp_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -435,4 +436,81 @@ async fn a_missing_secret_blocks_the_run() {
         RunError::Skipped(Skip::SecretMissing)
     );
     assert_eq!(hits.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn toggle_handler_checks_gates_offline_and_flips_enabled_cleanly() {
+    let state = state_with(crate::fetch::Fetcher::public_only());
+    crate::regions::reload(&state);
+    register_missing(&state.db.lock().unwrap()).unwrap();
+    let app = crate::router(state.clone());
+    let login = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(axum::http::header::HOST, "newsman.test")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header("x-requested-with", "XMLHttpRequest")
+                .body(axum::body::Body::from(r#"{"key":"test-management-key"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // `ecb-sdmx` lives in `eu`, which starts disabled -> 409 `connector_region_off`.
+    let resp = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/admin/connectors/ecb-sdmx")
+                .header(axum::http::header::HOST, "newsman.test")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(axum::http::header::COOKIE, &cookie)
+                .header("x-requested-with", "XMLHttpRequest")
+                .body(axum::body::Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
+
+    // `mempool-space` lives in `global` and needs no secret -> enables cleanly with zero network.
+    let resp = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/api/admin/connectors/mempool-space")
+                .header(axum::http::header::HOST, "newsman.test")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(axum::http::header::COOKIE, &cookie)
+                .header("x-requested-with", "XMLHttpRequest")
+                .body(axum::body::Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    assert!(
+        row(&state.db.lock().unwrap(), "mempool-space")
+            .unwrap()
+            .unwrap()
+            .enabled
+    );
+
+    // Background scheduler stays idle while `connectors_auto_enabled` is false.
+    assert_eq!(run_due_once(&state).await, 0);
 }
