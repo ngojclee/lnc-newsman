@@ -619,3 +619,73 @@ fn a_nonsense_env_ceiling_narrows_to_the_real_scope() {
         );
     }
 }
+
+// ---------- the admin card's own validation ----------
+
+fn patch(state: &SharedState, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    let app = crate::router(state.clone());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async move {
+        // A signed-in session is required for the admin routes; the test signs in
+        // first and reuses the cookie, exactly as the browser does.
+        let login = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::HOST, "newsman.test")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-requested-with", "XMLHttpRequest")
+            .body(Body::from(r#"{"key":"test-management-key"}"#))
+            .unwrap();
+        let response = app.clone().oneshot(login).await.unwrap();
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let request = Request::builder()
+            .method("PATCH")
+            .uri("/api/admin/connector")
+            .header(header::HOST, "newsman.test")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-requested-with", "XMLHttpRequest")
+            .header(header::COOKIE, cookie)
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        send(app, request).await
+    })
+}
+
+#[test]
+fn the_admin_card_refuses_what_it_cannot_honour() {
+    let state = state_with_connector();
+    for (body, code) in [
+        (
+            serde_json::json!({"max_scopes": "newsman:write"}),
+            "unsupported_connector_scope",
+        ),
+        (
+            serde_json::json!({"max_scopes": "not a scope"}),
+            "invalid_connector_scopes",
+        ),
+        (
+            serde_json::json!({"audience": "has space"}),
+            "invalid_connector_audience",
+        ),
+    ] {
+        let (status, reply) = patch(&state, body.clone());
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {reply}");
+        assert_eq!(reply["error"], code, "{body}");
+    }
+    // The honest values are accepted, and the reply never carries a secret.
+    let (status, reply) = patch(
+        &state,
+        serde_json::json!({"audience": "lnc-newsman", "max_scopes": "newsman:read"}),
+    );
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["audience"], "lnc-newsman");
+    let rendered = reply.to_string();
+    assert!(!rendered.contains(BEARER), "{rendered}");
+    assert!(!rendered.contains(SECRET), "{rendered}");
+}
