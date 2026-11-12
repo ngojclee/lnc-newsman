@@ -1,7 +1,6 @@
 {
   "name": "lnc-newsman-ui",
   "private": true,
-  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

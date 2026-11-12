@@ -10,7 +10,7 @@ RUN npm run build
 
 FROM rust:1.93-bookworm AS rust-build
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock VERSION ./
 # Only the manifest is needed for the dependency cache layer.
 COPY src ./src
 COPY migrations ./migrations
