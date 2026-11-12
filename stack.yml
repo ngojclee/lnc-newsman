@@ -57,7 +57,9 @@ services:
       - CONNECTOR_BEARER=${CONNECTOR_BEARER:-}
       - DELEGATION_SECRET=${DELEGATION_SECRET:-}
       - CONNECTOR_AUDIENCE=${CONNECTOR_AUDIENCE:-lnc-newsman}
-      - CONNECTOR_MAX_SCOPES=${CONNECTOR_MAX_SCOPES:-newsman:read}
+      # Both scopes by default, matching the connector record. Set this to
+      # `newsman:read` to keep a deployment read-only without touching the code.
+      - CONNECTOR_MAX_SCOPES=${CONNECTOR_MAX_SCOPES:-newsman:read,newsman:write}
       - RUST_LOG=${RUST_LOG:-lnc_newsman=info,tower_http=warn}
     volumes:
       - ${DATA_DIR:-/share/Docker}/lnc-newsman:/data
