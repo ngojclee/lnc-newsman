@@ -10,9 +10,10 @@
 //! Three rules hold for every tool here:
 //!
 //! * **The author is the verified caller.** `author_client` comes from the delegation
-//!   the boundary already checked, never from a tool argument; an agent cannot write a
-//!   note that looks like the owner's, and an argument named `author` is refused by
-//!   `deny_unknown_fields`.
+//!   the boundary already checked, never from a tool argument. `additionalProperties:
+//!   false` in the schema is only a note to the client, so `crate::mcp` refuses an
+//!   undeclared key itself — otherwise `{"author": "louis"}` would be silently dropped
+//!   and the agent would believe it had set an author.
 //! * **Every write is logged** with the client id, the tool and the record id, in a
 //!   table no tool can write to except this path.
 //! * **Article content is data, never instruction.** Text stored by a feed is quoted
