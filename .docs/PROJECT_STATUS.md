@@ -396,3 +396,11 @@ No score was invented. If the gate matters, the next step is a human read of `.d
 - Icon workflow, port reservation (`8462` proposal), NAS deployment and the plan-quality gate remain open as before.
 
 See [task.md](task.md), [plan.md](plan.md), [README](../README.md) and [API documentation](../API_DOCS.md).
+
+## v0.6.0 & v0.7.0 — UI Horizontal-Overflow Fix, Full-Text Article Archive, Reader Mode & MCP `article_get` (2026-11-12)
+
+- **UI layout (`v0.6.0`, commit `94f5c78`)**: eliminated horizontal scrollbars caused by implicit `auto` (`min-content`) tracks in CSS Grid containers (`.side-shelves`, `.side-group`, `.side-items`, `.content-stack`, `.rail`, `.settings-grid`, `.topic-grid`, `.stat-grid`, `.select-menu`) and converted `.rail-strip` into a responsive wrapping grid.
+- **Full-text storage & FTS5 (`v0.7.0`, migration 20)**: per owner instruction (2026-11-12), `articles` now stores clean feed excerpts (`summary`) and extracted readable article bodies (`content_text`, `content_source`, `word_count`) in the runtime SQLite database (`/data`), indexed in `articles_fts` (`unicode61 remove_diacritics 2`). Existing articles are backfilled into `articles_fts` at startup.
+- **Readability & Collector (`src/readability.rs`, `src/feed.rs`, `src/collector.rs`)**: pure-Rust HTML cleaner & `<article>`/`<main>` density scorer strips scripts, navigation, sidebars, footers and download-portal boilerplate while preserving GovInfo/legal feed hygiene. Background worker (`spawn_content_worker`, controlled by `fulltext_auto_enabled`, default `true`) and on-demand endpoints (`POST /api/articles/{id}/extract`, `POST /api/admin/articles/backfill`, `GET /api/v1/articles/{id}`, `GET /api/v1/articles?q=`) route all fetches through `fetch::Fetcher` and the shared 5-second per-host gate.
+- **Grounded Analyst & MCP (`src/reader.rs`, `src/mcp.rs`)**: `/mcp` now exposes **18 tools** (12 read including `article_get` and `latest_articles(q)`, plus 6 write); `POST /api/admin/research` queries FTS5 for relevant stored articles and includes clean `content_text` excerpts in the Hub prompt.
+- **Verification**: `275/275` Rust unit & integration tests (including `docs_tests::every_mcp_tool_is_documented`), `cargo clippy --all-targets -- -D warnings` (0 warnings), and `npm --prefix ui run build` pass cleanly.

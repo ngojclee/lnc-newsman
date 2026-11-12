@@ -1,6 +1,6 @@
 # LNC Newsman — Task
 
-Cập nhật: 12/11/2026 (v0.6.0 — xác minh kết nối thật Business MCP Hub; trang Báo cáo `#reports`, hỏi đáp Agent có dẫn chứng, phản hồi 2 chiều Obsidian, 10 nguồn mẫu 1 chạm & điều khiển Connector)
+Cập nhật: 12/11/2026 (v0.7.0 — lưu trữ toàn văn bài báo sạch Reader Mode + chỉ mục FTS5 tìm kiếm không dấu, đọc trực tiếp trong app, sửa triệt để thanh cuộn ngang UI, MCP `article_get` & đồng bộ 2 chiều Obsidian)
 
 ## Đã xong
 
@@ -281,6 +281,16 @@ Chủ dự án duyệt bật govinfo. Đã làm đúng thứ tự và **hoàn l�
   Còn lại là acronym thật trong tên luật (`FISA`, `LACA`, `GI`, `VA`, `ROAD`, `FAST`, `VETS`, `ALS`) và 2 `ORG:`. Chủ đề không đổi (`politics` 100/100), link gốc giữ nguyên.
 - [x] Ghi chú vận hành: redeploy trông như kẹt hơn một giờ (`git/redeploy` và `stop` đều 409, `lastSyncDate` = 0 ở hai workflow, không còn tiến trình biên dịch nào chạy). Nó **tự hồi phục** khi vòng sync đó xong — không restart Portainer, không xoá gì. Muốn áp đổi luật lên bài đã lưu thì phải chạy `POST /api/admin/classify/reclassify`; chỉ fetch lại thì không bao giờ sửa được nhãn cũ.
 - [ ] Còn lại của P8: Légifrance chờ khóa PISTE; EUR-Lex và vbpl.vn chờ đọc được điều khoản của trang.
+
+### v0.6.0 → v0.7.0 — Kho lưu trữ toàn văn bài báo, Reader Mode, FTS5 & sửa cuộn ngang UI (12/11/2026)
+
+- [x] **Sửa triệt để lỗi cuộn ngang (`v0.6.0`)**: thêm `grid-template-columns: minmax(0, 1fr)` và `min-width: 0` cho toàn bộ lưới đơn cột trong sidebar (`.side-shelves`, `.side-group`, `.side-items`), vùng đọc (`.content-stack`, `.rail`), `.select-menu` và đổi `.rail-strip` sang lưới thẻ tự xuống dòng (`repeat(auto-fill, minmax(min(248px, 100%), 1fr))`), kèm `overflow-x: clip` trên `html, body`.
+- [x] **Migration 20 (`0020_article_content.sql`)**: bổ sung `content_text`, `content_source` (`none`/`feed`/`web`/`failed`), `content_fetched_at`, `content_error`, `word_count` trên bảng `articles` và bảng ảo `articles_fts` (`fts5` với `unicode61 remove_diacritics 2`) tự động đồng bộ các bài cũ khi khởi động.
+- [x] **Bộ lọc HTML & bóc tách toàn văn sạch (`src/readability.rs` + `src/feed.rs`)**: giải mã thực thể HTML (gồm mã số thập phân/hex tiếng Việt), lọc bỏ thẻ script/nav/footer/sidebar/quảng cáo và boilerplate tải tệp (như GovInfo PDF/ZIP); lấy cả `description`/`content:encoded` từ RSS/Atom lẫn tải trang web qua `state.fetcher` (chống SSRF + giãn cách 5 giây/máy chủ).
+- [x] **Worker nền & API đọc/bóc tách (`src/collector.rs`)**: worker nền tự tải toàn văn sạch (`fulltext_auto_enabled`, mặc định bật), `GET /api/v1/articles/{id}` (trả toàn văn + ghi chú), `POST /api/articles/{id}/extract` (tải ngay 1 bài), `POST /api/admin/articles/backfill` (tải hàng loạt bài cũ), và tham số tìm kiếm toàn văn `?q=` cho `/api/articles` & `/api/v1/articles`.
+- [x] **MCP & Trợ lý AI có dẫn chứng sâu (`src/mcp.rs`, `src/reader.rs`)**: thêm tool `article_get` và tham số `q` cho `latest_articles` (nâng tổng số tool `/mcp` lên 18: 12 đọc + 6 ghi); `POST /api/admin/research` tự kết hợp kết quả khớp FTS5 và đưa đoạn trích toàn văn bài báo vào ngữ cảnh phân tích cho Hub Model/Agent.
+- [x] **Reader Mode ngay trong ứng dụng (`ui/src/main.tsx`, `ui/src/style.css`)**: bấm tiêu đề bài báo mở ngăn đọc chữ serif sạch theo 6 nền đọc (Giấy/Sepia/Xám/Xanh dịu/Đêm/OLED), tự tải toàn văn nếu chưa có, kèm ghi chú cá nhân trên từng bài, thanh tìm kiếm toàn văn trên trang Hôm nay & Chủ đề, và nút tải toàn văn hàng loạt trong Cài đặt.
+- [x] **275 Rust tests xanh**, `cargo clippy --all-targets -- -D warnings` 0 cảnh báo, `npm run build` sạch.
 
 ## Rà soát giao diện cuối (checklist dùng chung, mục U)
 

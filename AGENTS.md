@@ -11,9 +11,9 @@ P1 collector plus P1.5 regions, local only. RSS/Atom feeds are fetched by `src/f
 ## Boundaries
 
 - Do not deploy to Portainer, modify DNS, register a Business MCP connector or publish an image without explicit owner approval.
-- Do not put tokens, cookies, source credentials, article full text or personal data in git.
+- Do not put tokens, cookies, source credentials, runtime databases or personal data in git.
 - Store runtime data under `/data`; local development may use `./data`.
-- Preserve source links and write original summaries; never copy full articles.
+- Preserve source links and attribution; store clean feed excerpts and extracted readable article text in the runtime SQLite database (`/data`) for in-app Reader mode, FTS5 search and grounded AI analysis (never commit runtime data to git).
 - `D:\_Finance` is a read-only research reference unless a specific import task is approved.
 
 ## Commands

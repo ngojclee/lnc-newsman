@@ -209,6 +209,7 @@ fn a_correctly_signed_read_call_is_accepted() {
                 "topics",
                 "reader_preferences",
                 "latest_articles",
+                "article_get",
                 "documents",
                 "tax_calendar",
                 "series",

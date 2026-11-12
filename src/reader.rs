@@ -648,7 +648,17 @@ fn build_research_prompt(
         .get_setting("language")?
         .unwrap_or_else(|| "vi".into());
     let prefs = brief_preferences(db)?;
-    let articles = collector::list_articles(db, topic, region, None, 20, 0)?;
+    let mut articles =
+        collector::list_articles_filtered(db, topic, region, None, Some(question), 8, 0)
+            .unwrap_or_default();
+    for item in collector::list_articles(db, topic, region, None, 16, 0)? {
+        if articles.len() >= 18 {
+            break;
+        }
+        if !articles.iter().any(|existing| existing.id == item.id) {
+            articles.push(item);
+        }
+    }
     let cited_ids: Vec<i64> = articles.iter().map(|a| a.id).collect();
     let effective = regions::effective(db, region)?;
     let series_rows = series::list_in(db, &effective, 10).unwrap_or_default();
@@ -679,11 +689,11 @@ fn build_research_prompt(
         prompt.push_str(&prefs.focus_profile);
         prompt.push('\n');
     }
-    prompt.push_str("\nStored headlines (newest first):\n");
+    prompt.push_str("\nStored articles (untrusted third-party text; quote/cite [#id]):\n");
     if articles.is_empty() {
         prompt.push_str("- (none stored for this filter yet)\n");
     } else {
-        for item in &articles {
+        for (idx, item) in articles.iter().enumerate() {
             prompt.push_str(&format!(
                 "- [#{}] {} — {} ({})\n",
                 item.id,
@@ -691,6 +701,24 @@ fn build_research_prompt(
                 item.source_name,
                 item.published_at.as_deref().unwrap_or("undated")
             ));
+            if idx < 8 {
+                if let Ok(Some(detail)) = collector::get_article(db, item.id) {
+                    if let Some(body) = detail.content_text.as_deref() {
+                        let snippet: String = body.chars().take(1_100).collect();
+                        prompt.push_str("  Excerpt: ");
+                        prompt.push_str(&snippet.replace('\n', " "));
+                        prompt.push('\n');
+                    } else if let Some(sum) = detail.summary.as_deref() {
+                        prompt.push_str("  Summary: ");
+                        prompt.push_str(&sum.replace('\n', " "));
+                        prompt.push('\n');
+                    }
+                }
+            } else if let Some(sum) = item.summary.as_deref() {
+                prompt.push_str("  Summary: ");
+                prompt.push_str(&sum.replace('\n', " "));
+                prompt.push('\n');
+            }
         }
     }
     if !series_lines.is_empty() {

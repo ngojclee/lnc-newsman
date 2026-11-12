@@ -18,8 +18,8 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/dashboard` | Enabled topics plus `stats` (collector switch, item counts, enabled/paused sources, per-topic counts). Optional `region`: article counters (`articles_total`, `articles_24h`, `topic_counts`) then follow that region and its ancestors, like the article list; 400 `invalid_region` if the region is unknown or disabled. Source counters stay global |
-| GET | `/api/settings` | Global language, reader-mode defaults, collector/connector background switches, focus profile and brief schedule |
-| PATCH | `/api/settings` | Partial JSON: `language` = `vi`/`en`, `default_reader_mode` = `paper`/`sepia`/`night`, `collector_enabled` = boolean (default `false`), `connectors_auto_enabled` = boolean (default `false`), `focus_profile` (≤1000 chars), `brief_morning_time` / `brief_evening_time` (`HH:MM` or `""`), `brief_timezone` (IANA zone) |
+| GET | `/api/settings` | Global language, reader-mode defaults, collector/fulltext/connector background switches, focus profile and brief schedule |
+| PATCH | `/api/settings` | Partial JSON: `language` = `vi`/`en`, `default_reader_mode` = `paper`/`sepia`/`night`, `collector_enabled` = boolean (default `false`), `fulltext_auto_enabled` = boolean (default `true`), `connectors_auto_enabled` = boolean (default `false`), `focus_profile` (≤1000 chars), `brief_morning_time` / `brief_evening_time` (`HH:MM` or `""`), `brief_timezone` (IANA zone) |
 | GET | `/api/admin/topics` | List enabled and disabled topics |
 | POST | `/api/admin/topics` | Create a topic; returns 201 |
 | PUT | `/api/admin/topics/{slug}` | Replace topic fields |
@@ -36,6 +36,8 @@ P1 acceptance against real feeds is still open. P1.5 region support is implement
 | PUT | `/api/admin/regions/{code}` | Body `{"enabled": boolean}`. Enabling needs an enabled parent; disabling needs every region below it (any depth) to be off; `global` cannot be disabled (`region_required`). Errors: 409 `invalid_parent_region`, `region_in_use`, `region_required`; 404 `not_found` |
 | POST | `/api/admin/regions/reload` | Re-scan the pack directory (`REGIONS_DIR`, default `$DATA_DIR/regions`). Registers new regions and sources **disabled**; keeps previous valid rows when a file is broken. Returns the same `pack` object with per-file `issues` (`{ path, code, detail }`) |
 | GET | `/api/articles` | Same as `/api/v1/articles` for the reader UI |
+| POST | `/api/articles/{id}/extract` | Fetch and extract clean readable text for one visible stored article via the hardened fetcher; updates `summary`, `content_text`, `content_source`, `word_count` and `articles_fts` |
+| POST | `/api/admin/articles/backfill` | Optional `{ "limit": 1..20 }`: extract readable web bodies for pending visible articles (`content_source = "none"`), obeying per-host spacing |
 | GET | `/api/admin/secrets` | Secret names, key version and `updated_at` only, plus `key_fingerprint`. **Never returns a value.** 503 `secret_store_not_configured` when `LNC_MASTER_KEY` is absent |
 | PUT | `/api/admin/secrets/{name}` | `{ "value": "..." }` — write-only; the value is encrypted immediately and cannot be read back |
 | DELETE | `/api/admin/secrets/{name}` | Remove a secret |
@@ -95,7 +97,7 @@ Requests go only through the hardened fetcher: http/https on ports 80, 443, 8080
 
 The scheduler runs only while `collector_enabled` is true: every 30 s it picks up to 20 enabled, unpaused sources whose topic is enabled or empty, whose region is enabled (or an ancestor of an enabled region) and whose `next_fetch_at` has passed. Requests to one host are spaced by 5 s on **every** fetch path — scheduler, `Fetch now` and `Test feed` — through one shared gate. Success schedules the next run at the interval plus jitter. Failure doubles the wait up to 24 h; the 5th consecutive failure sets `paused_reason = "consecutive_failures"`. A run whose source URL, region or `enabled` flag changed while the request was in flight is discarded (`status: "discarded"`, `error: "source_changed"`) and stores nothing.
 
-Stored per item: title (HTML stripped, ≤300 chars), canonical URL (fragment and tracking parameters removed), identifier and publication time in UTC. Descriptions and article text are never stored or returned.
+Stored per item: title (HTML stripped, ≤300 chars), canonical URL (fragment and tracking parameters removed), identifier, publication time in UTC, clean plain-text `summary` (≤420 chars) and extracted `content_text` (from RSS `<content:encoded>` or background/on-demand Readability web extraction, indexed in `articles_fts` with Vietnamese diacritics folded).
 
 Fetch error codes: `invalid_url`, `blocked_address`, `dns_failed`, `timeout`, `network_error`, `response_too_large`, `too_many_redirects`, `http_<status>`, `not_a_feed`, `invalid_feed`.
 
@@ -120,7 +122,8 @@ The built-in pack (`global`, `eu`, `eu/fr`, `us`, `vn`) is embedded in the binar
 | GET | `/api/status` | Service version, `phase: "P1-collector"` and `mcp_available: true` |
 | GET | `/api/v1/topics` | Enabled topics only |
 | GET | `/api/v1/regions` | Enabled regions only, plus the effective set: `{ data, effective }` |
-| GET | `/api/v1/articles` | Newest first. Query: `topic` (includes descendant topics), `source` (one source slug, applied on top of the same visibility rules), `region` (that region plus its ancestors; 400 `invalid_region` if the region is unknown or disabled), `limit` 1–100 (default 50), `offset` 0–10,000. Fields: `id`, `title`, `url`, `published_at`, `fetched_at`, `topic_slug`, `region_code`, `source_name`, `source_tier`. Items under disabled topics or outside the effective region set are hidden |
+| GET | `/api/v1/articles` | Newest first. Query: `topic` (includes descendant topics), `source` (one source slug, applied on top of the same visibility rules), `region` (that region plus its ancestors; 400 `invalid_region` if the region is unknown or disabled), `q` (folded FTS5 search across title, summary and full body), `limit` 1–100 (default 50), `offset` 0–10,000. Fields: `id`, `title`, `url`, `summary`, `content_source`, `word_count`, `published_at`, `fetched_at`, `topic_slug`, `region_code`, `source_name`, `source_tier`, `labels`. Items under disabled topics or outside the effective region set are hidden |
+| GET | `/api/v1/articles/{id}` | Full visible article with `summary`, `content_text`, `content_source`, `word_count`, `source_attribution`, `labels` and attached `notes` |
 | GET | `/api/v1/analyses` | Stored briefs and summaries in enabled regions, newest first. Query: `topic`, `region`, `updated_since` (ISO date, RFC 3339 or Unix seconds), `limit` 1–100 |
 | GET | `/api/v1/analyses/{id}` | One stored brief with `stable_key` (`analysis-<id>`), resolved `cited_articles` and feedback `notes` |
 | GET | `/api/v1/notes` | Notes on one target (`article_id`, `document_id` or `analysis_id`, `limit` 1–100), plus `flags` when querying an article |
@@ -209,7 +212,8 @@ Every tool answers through the same function the matching REST endpoint calls, s
 | `regions` | — | `GET /api/v1/regions` |
 | `topics` | — | `GET /api/v1/topics` |
 | `reader_preferences` | — | Non-sensitive `focus_profile`, `language`, `brief_morning_time`, `brief_evening_time`, `brief_timezone`, `effective_regions` and `enabled_topics` |
-| `latest_articles` | `region?`, `topic?`, `limit?` 1–100 | `GET /api/v1/articles` |
+| `latest_articles` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/articles` |
+| `article_get` | `id` (required) | `GET /api/v1/articles/{id}` |
 | `documents` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/documents` |
 | `tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
 | `series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |

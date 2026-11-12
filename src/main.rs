@@ -22,6 +22,7 @@ mod legal;
 mod connector;
 mod mcp;
 mod providers;
+mod readability;
 mod reader;
 mod regions;
 mod secrets;
@@ -128,6 +129,7 @@ struct SettingsResponse {
     language: String,
     default_reader_mode: String,
     collector_enabled: bool,
+    fulltext_auto_enabled: bool,
     connectors_auto_enabled: bool,
     focus_profile: String,
     brief_morning_time: String,
@@ -151,6 +153,7 @@ struct SettingsPatch {
     language: Option<String>,
     default_reader_mode: Option<String>,
     collector_enabled: Option<bool>,
+    fulltext_auto_enabled: Option<bool>,
     connectors_auto_enabled: Option<bool>,
     focus_profile: Option<String>,
     brief_morning_time: Option<String>,
@@ -223,6 +226,7 @@ async fn main() -> anyhow::Result<()> {
         Err(err) => tracing::warn!(%err, "could not register legal sources"),
     }
     collector::spawn_scheduler(state.clone());
+    collector::spawn_content_worker(state.clone());
     connectors::spawn_scheduler(state.clone());
     tracing::info!(%addr, data_dir = %state.cfg.data_dir.display(), "starting lnc-newsman");
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -334,6 +338,14 @@ fn router(state: SharedState) -> Router {
             axum::routing::delete(reader::delete_owner_note),
         )
         .route("/api/articles", get(collector::articles))
+        .route(
+            "/api/articles/{id}/extract",
+            post(collector::extract_article_handler),
+        )
+        .route(
+            "/api/admin/articles/backfill",
+            post(collector::backfill_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -354,6 +366,10 @@ fn router(state: SharedState) -> Router {
         .route("/api/v1/companies/{id}/facts", get(filings::list_facts))
         .route("/api/v1/tax-calendar", get(tax::list_calendar))
         .route("/api/v1/articles", get(collector::articles))
+        .route(
+            "/api/v1/articles/{id}",
+            get(collector::article_detail_handler),
+        )
         .route("/api/v1/analyses", get(reader::list_analyses))
         .route("/api/v1/analyses/{id}", get(reader::get_analysis))
         .route("/api/v1/notes", get(reader::list_notes))
@@ -682,6 +698,7 @@ fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
             .get_setting("default_reader_mode")?
             .unwrap_or_else(|| "paper".into()),
         collector_enabled: collector::collector_enabled(&db),
+        fulltext_auto_enabled: collector::fulltext_auto_enabled(&db),
         connectors_auto_enabled: connectors::connectors_auto_enabled(&db),
         focus_profile: prefs.focus_profile,
         brief_morning_time: prefs.brief_morning_time,
@@ -750,6 +767,12 @@ async fn patch_settings(
     }
     if let Some(enabled) = patch.collector_enabled {
         writes.push(("collector_enabled", if enabled { "true" } else { "false" }));
+    }
+    if let Some(enabled) = patch.fulltext_auto_enabled {
+        writes.push((
+            "fulltext_auto_enabled",
+            if enabled { "true" } else { "false" },
+        ));
     }
     if let Some(enabled) = patch.connectors_auto_enabled {
         writes.push((

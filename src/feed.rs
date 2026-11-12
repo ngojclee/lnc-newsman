@@ -1,7 +1,5 @@
-//! RSS 2.0 / RSS 1.0 (RDF) / Atom parser that keeps metadata only.
-//!
-//! Descriptions and article bodies are deliberately ignored: Newsman stores the
-//! title, link, identifier and publication time, never the publisher's text.
+//! RSS 2.0 / RSS 1.0 (RDF) / Atom parser that extracts canonical links, metadata,
+//! clean excerpts and feed-provided article bodies.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use quick_xml::{Reader, events::Event};
@@ -10,6 +8,7 @@ use url::Url;
 pub const MAX_ITEMS: usize = 200;
 const MAX_TITLE_CHARS: usize = 300;
 const MAX_GUID_CHARS: usize = 512;
+const MAX_FIELD_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeedItem {
@@ -19,6 +18,11 @@ pub struct FeedItem {
     pub guid: Option<String>,
     /// RFC 3339 UTC, e.g. `2026-11-11T08:00:00Z`.
     pub published_at: Option<String>,
+    /// Clean plain-text lead/excerpt extracted from `<description>` / `<summary>`.
+    pub summary: Option<String>,
+    /// Clean plain-text body when the feed embeds full content (`<content:encoded>` / `<content>`).
+    pub content_text: Option<String>,
+    pub word_count: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -45,6 +49,8 @@ struct Draft {
     guid_is_link: bool,
     published: Option<String>,
     updated: Option<String>,
+    description: Option<String>,
+    content: Option<String>,
 }
 
 /// Parse a feed body. `base` resolves relative links. `now` rejects dates far in the future.
@@ -103,6 +109,21 @@ pub fn parse(bytes: &[u8], base: &Url, now: DateTime<Utc>) -> Result<Vec<FeedIte
                     if !is_empty {
                         field = Some((name, depth));
                         text.clear();
+                    }
+                } else if let Some((ref active_name, field_depth)) = field
+                    && depth > field_depth
+                    && matches!(
+                        active_name.as_str(),
+                        "description" | "summary" | "encoded" | "content"
+                    )
+                {
+                    match name.as_str() {
+                        "p" | "div" | "section" | "blockquote" | "h1" | "h2" | "h3" | "h4" => {
+                            push_text(&mut text, "\n\n");
+                        }
+                        "br" | "hr" => push_text(&mut text, "\n"),
+                        "li" => push_text(&mut text, "\n• "),
+                        _ => {}
                     }
                 }
                 if !is_empty {
@@ -178,7 +199,7 @@ fn attr(start: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Option<String
 }
 
 fn push_text(text: &mut String, value: &str) {
-    if text.len() < 64 * 1024 {
+    if text.len() < MAX_FIELD_BYTES {
         text.push_str(value);
     }
 }
@@ -196,6 +217,12 @@ fn assign(draft: &mut Draft, name: &str, value: &str) {
         }
         "updated" | "modified" if draft.updated.is_none() => {
             draft.updated = Some(value.to_string())
+        }
+        "description" | "summary" if draft.description.is_none() => {
+            draft.description = Some(value.to_string())
+        }
+        "encoded" | "content" if draft.content.is_none() => {
+            draft.content = Some(value.to_string())
         }
         _ => {}
     }
@@ -219,11 +246,19 @@ fn finish(draft: Draft, base: &Url, now: DateTime<Utc>) -> Option<FeedItem> {
         .published
         .or(draft.updated)
         .and_then(|value| parse_date(&value, now));
+    let (summary, content_text, word_count) = crate::readability::extract_from_feed(
+        draft.description.as_deref(),
+        draft.content.as_deref(),
+        &title,
+    );
     Some(FeedItem {
         title,
         url,
         guid,
         published_at,
+        summary,
+        content_text,
+        word_count,
     })
 }
 
@@ -324,15 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_rss_without_keeping_descriptions() {
-        let xml = br#"<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title><link>https://news.example.org/</link>
+    fn parses_rss_and_extracts_clean_summary_and_content() {
+        let xml = r#"<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>Feed</title><link>https://news.example.org/</link>
             <item><title>Ng&#226;n h&#224;ng &amp; l&#227;i su&#7845;t</title><link>/a/1?utm_source=x&amp;id=7#top</link>
               <guid isPermaLink="false">abc-1</guid><pubDate>Tue, 10 Nov 2026 08:30:00 +0100</pubDate>
-              <description>&lt;p&gt;Full publisher text that must not be stored&lt;/p&gt;</description></item>
+              <description>&lt;p&gt;Tóm tắt quyết định điều hành lãi suất mới nhất của ngân hàng trung ương.&lt;/p&gt;</description>
+              <content:encoded><![CDATA[<p>Ngân hàng trung ương quyết định giữ nguyên biên độ lãi suất điều hành trong kỳ họp tháng 11 nhằm ổn định tỷ giá và thanh khoản liên ngân hàng.</p><p>Các chuyên gia phân tích dự báo mặt bằng lãi suất huy động sẽ đi ngang trong quý tới khi áp lực lạm phát dần hạ nhiệt và tín dụng tăng trưởng đều đặn.</p>]]></content:encoded></item>
             <item><title><![CDATA[<b>Second</b>   story]]></title><guid>https://news.example.org/a/2</guid></item>
             <item><title>No link</title></item>
             <item><title>Bad scheme</title><link>javascript:alert(1)</link></item>
-          </channel></rss>"#;
+          </channel></rss>"#.as_bytes();
         let items = parse(xml, &base(), now()).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].title, "Ngân hàng & lãi suất");
@@ -342,9 +378,14 @@ mod tests {
             items[0].published_at.as_deref(),
             Some("2026-11-10T07:30:00Z")
         );
+        assert_eq!(
+            items[0].summary.as_deref(),
+            Some("Tóm tắt quyết định điều hành lãi suất mới nhất của ngân hàng trung ương.")
+        );
+        assert!(items[0].content_text.as_deref().unwrap().contains("ổn định tỷ giá"));
+        assert!(items[0].word_count >= 40);
         assert_eq!(items[1].title, "Second story");
         assert_eq!(items[1].url, "https://news.example.org/a/2");
-        assert!(format!("{items:?}").find("publisher text").is_none());
     }
 
     #[test]

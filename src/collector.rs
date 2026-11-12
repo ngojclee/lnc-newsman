@@ -225,13 +225,40 @@ pub async fn collect(state: &SharedState, id: i64) -> Result<RunSummary, Collect
                     let mut new = 0;
                     let mut new_ids = Vec::new();
                     for item in items {
+                        let content_source = if item.content_text.is_some() {
+                            "feed"
+                        } else {
+                            "none"
+                        };
                         let inserted = tx.execute(
-                            "INSERT OR IGNORE INTO articles(canonical_url,title,source_id,published_at,guid,topic_slug,fetched_at,region_code) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                            params![item.url, item.title, id, item.published_at, item.guid, job.topic_slug, started, job.region_code],
+                            "INSERT OR IGNORE INTO articles(canonical_url,title,summary,content_text,content_source,word_count,source_id,published_at,guid,topic_slug,fetched_at,region_code)
+                             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                            params![
+                                item.url,
+                                item.title,
+                                item.summary,
+                                item.content_text,
+                                content_source,
+                                item.word_count as i64,
+                                id,
+                                item.published_at,
+                                item.guid,
+                                job.topic_slug,
+                                started,
+                                job.region_code
+                            ],
                         )?;
                         new += inserted;
                         if inserted > 0 {
-                            new_ids.push((tx.last_insert_rowid(), item.title.clone()));
+                            let row_id = tx.last_insert_rowid();
+                            let _ = crate::db::index_article_fts(
+                                &tx,
+                                row_id,
+                                &item.title,
+                                item.summary.as_deref(),
+                                item.content_text.as_deref(),
+                            );
+                            new_ids.push((row_id, item.title.clone()));
                         }
                     }
                     // Rule labels only: no model is called during collection, so a fetch
@@ -475,6 +502,8 @@ pub struct ArticleQuery {
     region: Option<String>,
     /// Source slug, so the desktop browse list can narrow the reader to one feed.
     source: Option<String>,
+    /// Folded FTS5 query across title, summary and extracted article body.
+    q: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -484,6 +513,9 @@ pub struct Article {
     pub(crate) id: i64,
     pub(crate) title: String,
     pub(crate) url: String,
+    pub(crate) summary: Option<String>,
+    pub(crate) content_source: String,
+    pub(crate) word_count: i64,
     pub(crate) published_at: Option<String>,
     pub(crate) fetched_at: Option<String>,
     pub(crate) topic_slug: Option<String>,
@@ -492,6 +524,26 @@ pub struct Article {
     pub(crate) source_tier: String,
     /// Human-first labels from `article_matches` (P5). Two readers of the same article
     /// see the same labels because they are read here, not recomputed per request.
+    pub labels: Labels,
+}
+
+#[derive(Serialize)]
+pub struct ArticleDetail {
+    pub id: i64,
+    pub title: String,
+    pub url: String,
+    pub summary: Option<String>,
+    pub content_text: Option<String>,
+    pub content_source: String,
+    pub content_error: Option<String>,
+    pub word_count: i64,
+    pub published_at: Option<String>,
+    pub fetched_at: Option<String>,
+    pub topic_slug: Option<String>,
+    pub region_code: Option<String>,
+    pub source_name: String,
+    pub source_tier: String,
+    pub source_attribution: String,
     pub labels: Labels,
 }
 
@@ -510,6 +562,29 @@ pub struct Labels {
 /// topics and items outside the effective region set are hidden. `source` narrows to
 /// one feed and is applied on top of the same visibility rules, so a source filter can
 /// only ever hide items the reader already shows.
+/// Searches `articles_fts` with folded Vietnamese diacritics and returns matching article IDs.
+pub fn search_article_ids(
+    db: &crate::db::Database,
+    query: &str,
+    limit: i64,
+) -> rusqlite::Result<Vec<i64>> {
+    let folded = crate::documents::fold_diacritics(query.trim());
+    let tokens: Vec<String> = folded
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| format!("\"{token}\"*"))
+        .collect();
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+    let expression = tokens.join(" AND ");
+    let mut stmt = db.conn.prepare(
+        "SELECT CAST(article_id AS INTEGER) FROM articles_fts WHERE articles_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![expression, limit], |r| r.get(0))?;
+    rows.collect()
+}
+
 pub fn list_articles(
     db: &crate::db::Database,
     topic: Option<&str>,
@@ -518,6 +593,29 @@ pub fn list_articles(
     limit: i64,
     offset: i64,
 ) -> rusqlite::Result<Vec<Article>> {
+    list_articles_filtered(db, topic, region, source, None, limit, offset)
+}
+
+pub fn list_articles_filtered(
+    db: &crate::db::Database,
+    topic: Option<&str>,
+    region: Option<&str>,
+    source: Option<&str>,
+    query: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> rusqlite::Result<Vec<Article>> {
+    let q_clean = query.map(str::trim).filter(|s| !s.is_empty());
+    let matched_ids = match q_clean {
+        Some(text) => {
+            let ids = search_article_ids(db, text, (limit + offset).saturating_mul(4).max(100))?;
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            Some(serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()))
+        }
+        None => None,
+    };
     let mut stmt = db.conn.prepare(
         "WITH RECURSIVE tree(slug) AS (
            SELECT ?1 WHERE ?1 IS NOT NULL
@@ -528,30 +626,38 @@ pub fn list_articles(
          up(code) AS (
            SELECT code FROM regions WHERE enabled=1
            UNION SELECT r.parent_code FROM regions r JOIN up ON r.code=up.code WHERE r.parent_code IS NOT NULL)
-         SELECT a.id, a.title, a.canonical_url, a.published_at, a.fetched_at, a.topic_slug, s.name, s.tier, a.region_code
+         SELECT a.id, a.title, a.canonical_url, a.published_at, a.fetched_at, a.topic_slug, s.name, s.tier, a.region_code,
+                a.summary, COALESCE(a.content_source,'none'), COALESCE(a.word_count,0)
          FROM articles a JOIN sources s ON s.id=a.source_id LEFT JOIN topics t ON t.slug=a.topic_slug
          WHERE (a.topic_slug IS NULL OR t.enabled=1)
            AND (?1 IS NULL OR a.topic_slug IN (SELECT slug FROM tree))
            AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)
            AND (?2 IS NULL OR COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM branch))
            AND (?5 IS NULL OR s.slug=?5)
+           AND (?6 IS NULL OR a.id IN (SELECT value FROM json_each(?6)))
          ORDER BY COALESCE(a.published_at, strftime('%Y-%m-%dT%H:%M:%SZ', a.fetched_at, 'unixepoch')) DESC, a.id DESC
          LIMIT ?3 OFFSET ?4",
     )?;
-    let rows = stmt.query_map(params![topic, region, limit, offset, source], |r| {
-        Ok(Article {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            url: r.get(2)?,
-            published_at: r.get(3)?,
-            fetched_at: r.get::<_, Option<i64>>(4)?.map(rfc3339),
-            topic_slug: r.get(5)?,
-            region_code: r.get(8)?,
-            source_name: r.get(6)?,
-            source_tier: r.get(7)?,
-            labels: Labels::default(),
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![topic, region, limit, offset, source, matched_ids],
+        |r| {
+            Ok(Article {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                url: r.get(2)?,
+                published_at: r.get(3)?,
+                fetched_at: r.get::<_, Option<i64>>(4)?.map(rfc3339),
+                topic_slug: r.get(5)?,
+                region_code: r.get(8)?,
+                source_name: r.get(6)?,
+                source_tier: r.get(7)?,
+                summary: r.get(9)?,
+                content_source: r.get(10)?,
+                word_count: r.get(11)?,
+                labels: Labels::default(),
+            })
+        },
+    )?;
     let mut items: Vec<Article> = rows.collect::<rusqlite::Result<_>>()?;
     let mut labels = labels_for(db, &items)?;
     for item in &mut items {
@@ -631,13 +737,26 @@ pub async fn articles(
         .as_deref()
         .map(str::trim)
         .filter(|slug| !slug.is_empty());
+    let search_q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
     let result = {
         let db = state.db.lock().expect("database lock poisoned");
         match region.as_deref() {
             Some(code) if !matches!(regions::region_enabled(&db, code), Ok(true)) => {
                 return failure(StatusCode::BAD_REQUEST, "invalid_region");
             }
-            _ => list_articles(&db, topic, region.as_deref(), source, limit, offset),
+            _ => list_articles_filtered(
+                &db,
+                topic,
+                region.as_deref(),
+                source,
+                search_q,
+                limit,
+                offset,
+            ),
         }
     };
     match result {
@@ -647,11 +766,293 @@ pub async fn articles(
     }
 }
 
+/// Reads a single visible article with its stored summary, clean full text and labels.
+pub fn get_article(
+    db: &crate::db::Database,
+    article_id: i64,
+) -> rusqlite::Result<Option<ArticleDetail>> {
+    let mut detail: Option<ArticleDetail> = db
+        .conn
+        .query_row(
+            "WITH RECURSIVE up(code) AS (
+               SELECT code FROM regions WHERE enabled=1
+               UNION SELECT r.parent_code FROM regions r JOIN up ON r.code=up.code WHERE r.parent_code IS NOT NULL)
+             SELECT a.id, a.title, a.canonical_url, a.summary, a.content_text,
+                    COALESCE(a.content_source,'none'), a.content_error, COALESCE(a.word_count,0),
+                    a.published_at, a.fetched_at, a.topic_slug, a.region_code,
+                    s.name, s.tier, COALESCE(s.attribution,'')
+             FROM articles a
+             JOIN sources s ON s.id=a.source_id
+             LEFT JOIN topics t ON t.slug=a.topic_slug
+             WHERE a.id=?1
+               AND (a.topic_slug IS NULL OR t.enabled=1)
+               AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)",
+            [article_id],
+            |r| {
+                Ok(ArticleDetail {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    url: r.get(2)?,
+                    summary: r.get(3)?,
+                    content_text: r.get(4)?,
+                    content_source: r.get(5)?,
+                    content_error: r.get(6)?,
+                    word_count: r.get(7)?,
+                    published_at: r.get(8)?,
+                    fetched_at: r.get::<_, Option<i64>>(9)?.map(rfc3339),
+                    topic_slug: r.get(10)?,
+                    region_code: r.get(11)?,
+                    source_name: r.get(12)?,
+                    source_tier: r.get(13)?,
+                    source_attribution: r.get(14)?,
+                    labels: Labels::default(),
+                })
+            },
+        )
+        .optional()?;
+    if let Some(ref mut item) = detail {
+        let stub = Article {
+            id: item.id,
+            title: item.title.clone(),
+            url: item.url.clone(),
+            summary: item.summary.clone(),
+            content_source: item.content_source.clone(),
+            word_count: item.word_count,
+            published_at: item.published_at.clone(),
+            fetched_at: item.fetched_at.clone(),
+            topic_slug: item.topic_slug.clone(),
+            region_code: item.region_code.clone(),
+            source_name: item.source_name.clone(),
+            source_tier: item.source_tier.clone(),
+            labels: Labels::default(),
+        };
+        let mut map = labels_for(db, &[stub])?;
+        item.labels = map.remove(&item.id).unwrap_or_default();
+    }
+    Ok(detail)
+}
+
+pub async fn article_detail_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+) -> Response {
+    let (detail, notes) = {
+        let db = state.db.lock().expect("database lock poisoned");
+        let detail = match get_article(&db, id) {
+            Ok(Some(d)) => d,
+            Ok(None) => return failure(StatusCode::NOT_FOUND, "not_found"),
+            Err(err) => return internal_error(err),
+        };
+        let notes = crate::write::notes_for(&db, Some(id), None, None, 50).unwrap_or_default();
+        (detail, notes)
+    };
+    Json(serde_json::json!({ "data": detail, "notes": notes })).into_response()
+}
+
+/// Fetches the canonical web URL via `state.fetcher` (SSRF-safe + per-host politeness),
+/// extracts clean readable text, updates `articles` + `articles_fts` and returns the article.
+pub async fn extract_article(
+    state: &SharedState,
+    article_id: i64,
+) -> Result<ArticleDetail, &'static str> {
+    let (url, title, existing_summary) = {
+        let db = state.db.lock().expect("database lock poisoned");
+        let detail = get_article(&db, article_id)
+            .map_err(|_| "database_error")?
+            .ok_or("not_found")?;
+        (detail.url, detail.title, detail.summary)
+    };
+    host_slot(state, &host_of(&url)).await;
+    let fetched_at = now() as i64;
+    match state.fetcher.get(&url, &Validators::default()).await {
+        Ok(FetchOutcome::Body { bytes, .. }) => {
+            let mut db = state.db.lock().expect("database lock poisoned");
+            if let Some(extracted) = crate::readability::extract_web_article(&bytes, &title) {
+                let merged_summary = match existing_summary {
+                    Some(ref s) if !s.trim().is_empty() => Some(s.clone()),
+                    _ => extracted.summary.clone(),
+                };
+                let tx = db.conn.transaction().map_err(|_| "database_error")?;
+                tx.execute(
+                    "UPDATE articles
+                     SET summary = ?2,
+                         content_text = ?3,
+                         content_source = 'web',
+                         content_fetched_at = ?4,
+                         content_error = NULL,
+                         word_count = ?5
+                     WHERE id = ?1",
+                    params![
+                        article_id,
+                        merged_summary,
+                        extracted.content_text,
+                        fetched_at,
+                        extracted.word_count as i64
+                    ],
+                )
+                .map_err(|_| "database_error")?;
+                let _ = crate::db::index_article_fts(
+                    &tx,
+                    article_id,
+                    &title,
+                    merged_summary.as_deref(),
+                    Some(&extracted.content_text),
+                );
+                tx.commit().map_err(|_| "database_error")?;
+            } else {
+                db.conn
+                    .execute(
+                        "UPDATE articles
+                         SET content_source = CASE WHEN content_text IS NOT NULL THEN content_source ELSE 'failed' END,
+                             content_fetched_at = ?2,
+                             content_error = 'unreadable_or_dynamic_page'
+                         WHERE id = ?1",
+                        params![article_id, fetched_at],
+                    )
+                    .map_err(|_| "database_error")?;
+            }
+            get_article(&db, article_id)
+                .map_err(|_| "database_error")?
+                .ok_or("not_found")
+        }
+        Ok(FetchOutcome::NotModified) => {
+            let db = state.db.lock().expect("database lock poisoned");
+            get_article(&db, article_id)
+                .map_err(|_| "database_error")?
+                .ok_or("not_found")
+        }
+        Err(err) => {
+            let code = err.code();
+            let db = state.db.lock().expect("database lock poisoned");
+            let _ = db.conn.execute(
+                "UPDATE articles
+                 SET content_source = CASE WHEN content_text IS NOT NULL THEN content_source ELSE 'failed' END,
+                     content_fetched_at = ?2,
+                     content_error = ?3
+                 WHERE id = ?1",
+                params![article_id, fetched_at, code],
+            );
+            get_article(&db, article_id)
+                .map_err(|_| "database_error")?
+                .ok_or("not_found")
+        }
+    }
+}
+
+pub async fn extract_article_handler(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match extract_article(&state, id).await {
+        Ok(detail) => {
+            let notes = {
+                let db = state.db.lock().expect("database lock poisoned");
+                crate::write::notes_for(&db, Some(id), None, None, 50).unwrap_or_default()
+            };
+            Json(serde_json::json!({ "data": detail, "notes": notes })).into_response()
+        }
+        Err("not_found") => failure(StatusCode::NOT_FOUND, "not_found"),
+        Err(code) => failure(StatusCode::INTERNAL_SERVER_ERROR, code),
+    }
+}
+
+pub fn fulltext_auto_enabled(db: &crate::db::Database) -> bool {
+    db.get_setting("fulltext_auto_enabled")
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some("false")
+}
+
+pub fn pending_content_ids(db: &crate::db::Database, limit: i64) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = db.conn.prepare(
+        "WITH RECURSIVE up(code) AS (
+           SELECT code FROM regions WHERE enabled=1
+           UNION SELECT r.parent_code FROM regions r JOIN up ON r.code=up.code WHERE r.parent_code IS NOT NULL)
+         SELECT a.id
+         FROM articles a
+         LEFT JOIN topics t ON t.slug=a.topic_slug
+         WHERE COALESCE(a.content_source,'none') = 'none'
+           AND (a.topic_slug IS NULL OR t.enabled=1)
+           AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)
+         ORDER BY COALESCE(a.published_at, strftime('%Y-%m-%dT%H:%M:%SZ', a.fetched_at, 'unixepoch')) DESC, a.id DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |r| r.get(0))?;
+    rows.collect()
+}
+
+pub async fn run_content_backfill_once(state: &SharedState, limit: i64) -> (usize, usize) {
+    let ids = {
+        let db = state.db.lock().expect("database lock poisoned");
+        match pending_content_ids(&db, limit.clamp(1, 20)) {
+            Ok(ids) => ids,
+            Err(_) => return (0, 0),
+        }
+    };
+    let mut attempted = 0usize;
+    let mut extracted = 0usize;
+    for id in ids {
+        attempted += 1;
+        if let Ok(detail) = extract_article(state, id).await
+            && detail.content_source == "web"
+        {
+            extracted += 1;
+        }
+    }
+    (attempted, extracted)
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BackfillInput {
+    pub limit: Option<i64>,
+}
+
+pub async fn backfill_handler(
+    State(state): State<SharedState>,
+    body: Option<Json<BackfillInput>>,
+) -> Response {
+    let limit = body.and_then(|Json(b)| b.limit).unwrap_or(8).clamp(1, 20);
+    let (attempted, extracted) = run_content_backfill_once(&state, limit).await;
+    let remaining = {
+        let db = state.db.lock().expect("database lock poisoned");
+        pending_content_ids(&db, 1000).map(|v| v.len()).unwrap_or(0)
+    };
+    Json(serde_json::json!({
+        "ok": true,
+        "attempted": attempted,
+        "extracted": extracted,
+        "remaining": remaining,
+    }))
+    .into_response()
+}
+
+pub fn spawn_content_worker(state: SharedState) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(20));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let auto_on = {
+                let db = state.db.lock().expect("database lock poisoned");
+                fulltext_auto_enabled(&db)
+            };
+            if auto_on {
+                run_content_backfill_once(&state, 3).await;
+            }
+        }
+    });
+}
+
 #[derive(Serialize, Default)]
 pub struct Stats {
     pub collector_enabled: bool,
+    pub fulltext_auto_enabled: bool,
     pub articles_total: i64,
     pub articles_24h: i64,
+    pub articles_with_content: i64,
+    pub articles_pending_content: i64,
     pub sources_enabled: i64,
     pub sources_paused: i64,
     pub topic_counts: HashMap<String, i64>,
@@ -708,18 +1109,21 @@ pub fn source_facets(
 /// is off (the source list warns about it), and hiding it would understate reality.
 pub fn stats(db: &crate::db::Database, region: Option<&str>) -> rusqlite::Result<Stats> {
     let since = now() as i64 - 24 * 60 * 60;
-    let (articles_total, articles_24h): (i64, i64) = db.conn.query_row(
+    let (articles_total, articles_24h, articles_with_content, articles_pending_content): (i64, i64, i64, i64) = db.conn.query_row(
         "WITH RECURSIVE up(code) AS (
            SELECT code FROM regions
             WHERE (?2 IS NULL AND enabled=1)
                OR (?2 IS NOT NULL AND code=?2 AND enabled=1)
            UNION SELECT r.parent_code FROM regions r JOIN up ON r.code=up.code WHERE r.parent_code IS NOT NULL)
-         SELECT COUNT(*), COALESCE(SUM(a.fetched_at >= ?1), 0)
+         SELECT COUNT(*),
+                COALESCE(SUM(a.fetched_at >= ?1), 0),
+                COALESCE(SUM(a.content_text IS NOT NULL AND a.content_text != ''), 0),
+                COALESCE(SUM(COALESCE(a.content_source,'none') = 'none'), 0)
          FROM articles a LEFT JOIN topics t ON t.slug=a.topic_slug
          WHERE (a.topic_slug IS NULL OR t.enabled=1)
            AND COALESCE(NULLIF(a.region_code,''),'global') IN (SELECT code FROM up)",
         params![since, region],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     let (sources_enabled, sources_paused): (i64, i64) = db.conn.query_row(
         "SELECT COALESCE(SUM(enabled=1), 0), COALESCE(SUM(enabled=1 AND paused_reason IS NOT NULL), 0) FROM sources",
@@ -742,8 +1146,11 @@ pub fn stats(db: &crate::db::Database, region: Option<&str>) -> rusqlite::Result
         .collect::<rusqlite::Result<HashMap<String, i64>>>()?;
     Ok(Stats {
         collector_enabled: collector_enabled(db),
+        fulltext_auto_enabled: fulltext_auto_enabled(db),
         articles_total,
         articles_24h,
+        articles_with_content,
+        articles_pending_content,
         sources_enabled,
         sources_paused,
         topic_counts,

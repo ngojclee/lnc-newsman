@@ -70,6 +70,7 @@ impl Database {
             (17, include_str!("../migrations/0017_legal_sources.sql")),
             (18, include_str!("../migrations/0018_agent_write.sql")),
             (19, include_str!("../migrations/0019_note_analysis.sql")),
+            (20, include_str!("../migrations/0020_article_content.sql")),
         ] {
             let applied: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -100,7 +101,31 @@ impl Database {
                 params![slug, vi, en],
             )?;
         }
+        db.sync_missing_articles_fts()?;
         Ok(db)
+    }
+
+    /// Backfills `articles_fts` for any rows present in `articles` that are not yet in the
+    /// folded FTS5 index (for example, rows stored before migration 20).
+    pub fn sync_missing_articles_fts(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.title, a.summary, a.content_text
+             FROM articles a
+             WHERE NOT EXISTS (SELECT 1 FROM articles_fts f WHERE CAST(f.article_id AS INTEGER) = a.id)",
+        )?;
+        let missing: Vec<(i64, String, Option<String>, Option<String>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (id, title, summary, content_text) in missing {
+            index_article_fts(
+                &self.conn,
+                id,
+                &title,
+                summary.as_deref(),
+                content_text.as_deref(),
+            )?;
+        }
+        Ok(())
     }
 
     pub fn topics(&self) -> Result<Vec<Topic>> {
@@ -156,6 +181,28 @@ impl Database {
         )?;
         Ok(())
     }
+}
+
+/// Updates the folded FTS5 search row for a single article.
+pub fn index_article_fts(
+    conn: &Connection,
+    article_id: i64,
+    title: &str,
+    summary: Option<&str>,
+    content_text: Option<&str>,
+) -> rusqlite::Result<()> {
+    let id_str = article_id.to_string();
+    conn.execute("DELETE FROM articles_fts WHERE article_id=?1", [&id_str])?;
+    conn.execute(
+        "INSERT INTO articles_fts(article_id,title,summary,content_text) VALUES (?1,?2,?3,?4)",
+        params![
+            id_str,
+            crate::documents::fold_diacritics(title),
+            crate::documents::fold_diacritics(summary.unwrap_or("")),
+            crate::documents::fold_diacritics(content_text.unwrap_or("")),
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

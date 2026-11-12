@@ -87,6 +87,22 @@ async fn feed_server() -> String {
                 tokio::time::sleep(Duration::from_millis(1200)).await;
                 RSS.to_string()
             }),
+        )
+        .route(
+            "/story/1",
+            get(|| async {
+                r#"<!doctype html><html><head>
+                <meta property="og:description" content="Bản tin điều hành chính sách tiền tệ và thanh khoản liên ngân hàng." />
+                </head><body>
+                <nav>Menu điều hướng</nav>
+                <article>
+                  <h1>Ngân hàng trung ương ổn định thanh khoản thị trường mở</h1>
+                  <p>Trong phiên giao dịch sáng nay, nhà điều hành đã bơm ròng thanh khoản kỳ hạn 7 ngày nhằm hỗ trợ mặt bằng lãi suất liên ngân hàng duy trì ổn định quanh vùng mục tiêu.</p>
+                  <p>Lợi suất trái phiếu chính phủ kỳ hạn 10 năm giữ vững xu hướng đi ngang khi áp lực tỷ giá hạ nhiệt rõ rệt trên thị trường quốc tế.</p>
+                </article>
+                <footer>Bản quyền tòa soạn</footer>
+                </body></html>"#
+            }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -230,9 +246,9 @@ async fn collects_dedupes_uses_etag_and_filters_by_topic_tree() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(
-        columns.is_empty(),
-        "publisher description must not be stored"
+    assert_eq!(
+        columns, "publisher body",
+        "clean RSS summary is stored for Reader mode and FTS5"
     );
 
     let app = router(state.clone());
@@ -690,4 +706,78 @@ async fn a_cancelled_run_releases_its_in_flight_slot() {
     );
     let summary = collector::collect(&state, id).await.unwrap();
     assert_eq!(summary.status, "ok");
+}
+
+#[tokio::test]
+async fn extracts_web_article_indexes_fts_and_serves_article_detail() {
+    let base = feed_server().await;
+    let state = state(fetch::Fetcher::allow_loopback_for_tests());
+    let source_id = add_source(&state, "wire", &format!("{base}/feed.xml"), None);
+    collector::collect(&state, source_id).await.unwrap();
+
+    // Point the undated story at our local HTML article endpoint so extraction stays offline.
+    let story_url = format!("{base}/story/1");
+    let article_id: i64 = {
+        let db = state.db.lock().unwrap();
+        db.conn
+            .execute(
+                "UPDATE articles SET canonical_url = ?1 WHERE guid = 'a-2'",
+                params![story_url],
+            )
+            .unwrap();
+        db.conn
+            .query_row("SELECT id FROM articles WHERE guid = 'a-2'", [], |r| r.get(0))
+            .unwrap()
+    };
+
+    let app = router(state.clone());
+
+    // Diacritic-insensitive FTS5 search matches Vietnamese title (`Lãi suất giữ nguyên`).
+    let (status, found) =
+        get_json(&app, "/api/v1/articles?q=lai%20suat", Some("test-api-key")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found["data"].as_array().unwrap().len(), 1);
+    assert_eq!(found["data"][0]["title"], "Lãi suất giữ nguyên");
+
+    // Extract full readable article body from the web page via owner session.
+    let cookie = login(&app).await;
+    let (status, extracted) = post(
+        &app,
+        &format!("/api/articles/{article_id}/extract"),
+        "",
+        &cookie,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{extracted}");
+    assert_eq!(extracted["data"]["content_source"], "web");
+    assert!(extracted["data"]["word_count"].as_u64().unwrap() >= 35);
+    assert!(
+        extracted["data"]["content_text"]
+            .as_str()
+            .unwrap()
+            .contains("lãi suất liên ngân hàng")
+    );
+
+    // Full-text search now matches terms that exist only inside extracted `content_text`.
+    let (status, body_hit) = get_json(
+        &app,
+        "/api/v1/articles?q=lien%20ngan%20hang",
+        Some("test-api-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body_hit["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body_hit["data"][0]["id"], article_id);
+
+    // REST v1 detail endpoint returns stored summary + full text + notes.
+    let (status, detail) = get_json(
+        &app,
+        &format!("/api/v1/articles/{article_id}"),
+        Some("test-api-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["data"]["id"], article_id);
+    assert_eq!(detail["data"]["content_source"], "web");
+    assert!(detail["notes"].is_array());
 }

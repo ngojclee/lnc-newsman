@@ -441,3 +441,65 @@ async fn reader_preferences_tool_exposes_focus_and_schedule_without_secrets() {
     assert_eq!(parsed["data"]["brief_evening_time"], "18:30");
     assert_eq!(parsed["data"]["brief_timezone"], "Asia/Ho_Chi_Minh");
 }
+
+#[tokio::test]
+async fn article_get_and_latest_articles_search_return_stored_content() {
+    let st = state();
+    let article_id: i64 = {
+        let db = st.db.lock().unwrap();
+        let id: i64 = db
+            .conn
+            .query_row("SELECT id FROM articles LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE articles SET summary='Tóm tắt nhanh', content_text='Nội dung toàn văn phân tích vĩ mô chuyên sâu.', content_source='web', word_count=9 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        crate::db::index_article_fts(
+            &db.conn,
+            id,
+            "A visible item",
+            Some("Tóm tắt nhanh"),
+            Some("Nội dung toàn văn phân tích vĩ mô chuyên sâu."),
+        )
+        .unwrap();
+        id
+    };
+    let app = crate::router(st);
+
+    let (status, detail_resp) = rpc(
+        app.clone(),
+        call("article_get", serde_json::json!({"id": article_id})),
+        Some("test-api-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail_resp["result"]["isError"], false, "{detail_resp}");
+    let detail_json: serde_json::Value =
+        serde_json::from_str(detail_resp["result"]["content"][0]["text"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(detail_json["data"]["id"], article_id);
+    assert_eq!(detail_json["data"]["content_source"], "web");
+    assert!(
+        detail_json["data"]["content_text"]
+            .as_str()
+            .unwrap()
+            .contains("phân tích vĩ mô")
+    );
+
+    let (status, search_resp) = rpc(
+        app,
+        call("latest_articles", serde_json::json!({"q": "vi mo"})),
+        Some("test-api-key"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(search_resp["result"]["isError"], false, "{search_resp}");
+    let search_json: serde_json::Value =
+        serde_json::from_str(search_resp["result"]["content"][0]["text"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(search_json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(search_json["data"][0]["id"], article_id);
+}

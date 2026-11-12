@@ -10,10 +10,10 @@ type Lang = 'vi' | 'en'
 type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'alerts' | 'timeline' | 'saved' | 'settings'
 type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: string | null; enabled: boolean }
 type SourceFacet = { slug: string; name: string; tier: string; region: string; articles: number }
-type Stats = { collector_enabled: boolean; articles_total: number; articles_24h: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
+type Stats = { collector_enabled: boolean; fulltext_auto_enabled?: boolean; articles_total: number; articles_24h: number; articles_with_content?: number; articles_pending_content?: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
 type Dashboard = { topics: Topic[]; sources: SourceFacet[]; stats: Stats }
 type Settings = {
-  version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean; connectors_auto_enabled: boolean;
+  version: string; language: Lang; default_reader_mode: ReaderMode; collector_enabled: boolean; fulltext_auto_enabled: boolean; connectors_auto_enabled: boolean;
   focus_profile: string; brief_morning_time: string; brief_evening_time: string; brief_timezone: string;
   telegram_mode: 'relay' | 'direct' | 'off'; telegram_mode_stored: 'relay' | 'direct' | 'off'; telegram_env_override: boolean;
   telegram_ready: boolean; telegram_reason?: string; telegram_chat_id: number | null; telegram_alerts_topic_id: number | null;
@@ -21,7 +21,9 @@ type Settings = {
 }
 type TelegramStatus = { ready: boolean; reason?: string; queue: { pending: number; sending: number; sent: number; failed: number } }
 type Labels = { topics: string[]; entities: string[] }
-type Article = { id: number; title: string; url: string; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string; labels?: Labels }
+type Article = { id: number; title: string; url: string; summary?: string | null; content_source?: string; word_count?: number; published_at: string | null; fetched_at: string | null; topic_slug: string | null; region_code: string | null; source_name: string; source_tier: string; labels?: Labels }
+type ArticleDetail = Article & { content_text: string | null; content_fetched_at: string | null; content_error: string | null; source_slug: string; source_attribution: string }
+type ArticleDetailPayload = { data: ArticleDetail; notes: NoteItem[] }
 type AlertRule = { id: number; slug: string; label_vi: string; label_en: string; enabled: boolean; match_kind: string; match_value: string; level: string; cooldown_seconds: number; quiet_from: string; quiet_to: string; timezone: string; channels: string; last_fired_at: number | null }
 type AlertDelivery = { id: number; rule_slug: string; rule_label_vi: string; rule_label_en: string; article_id: number; article_title: string; article_url: string; level: string; channel: string; title: string; body: string; read: boolean; created_at: number }
 type Region = { code: string; parent_code: string | null; label_vi: string; label_en: string; currency: string; timezone: string; language: string; enabled: boolean; builtin: boolean; managed: boolean; source_count: number }
@@ -49,13 +51,13 @@ type ProviderStatus = { configured: boolean; base_host: string | null; allowed_h
 type LegalSource = { code: string; region: string; name_vi: string; name_en: string; access_kind: string; endpoint: string; access_note: string; licence: string; attribution: string; terms_verdict: string; terms_checked_on: string; terms_url: string; terms_quote: string; terms_note: string; rate_limit_per_day: number; enabled: boolean; pollable: boolean; block_reason: string | null; evidence_age_days: number | null; evidence_stale: boolean }
 type ConnectorStatus = { id: string; provider: string; region: string; enabled: boolean; health: string; last_error: string | null; last_run_at: number | null; next_run_at: number | null; requests_today: number; daily_quota: number; needs_secret: boolean }
 /** The reader filters a link or the sidebar can set. */
-type Filter = { topic: string | null; source: string | null }
+type Filter = { topic: string | null; source: string | null; q?: string }
 
 const copy = {
   vi: {
     today: 'Hôm nay', topics: 'Chủ đề', stories: 'Câu chuyện', reports: 'Báo cáo', alerts: 'Cảnh báo', timeline: 'Dòng thời gian', saved: 'Đã lưu', settings: 'Cài đặt',
     subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Dùng khóa MANAGEMENT_KEY được cấu hình cho ứng dụng.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa cấu hình MANAGEMENT_KEY trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
-    briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật, xếp theo thời gian. Mỗi tin dẫn về bài gốc; Newsman chỉ lưu tiêu đề và đường dẫn.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập tin tự động',
+    briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật — lưu sẵn tóm tắt và toàn văn sạch để đọc ngay trong ứng dụng, tìm kiếm toàn văn hoặc cho Agent phân tích sâu.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập & Lưu trữ nội dung',
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', loadFailed: 'Không tải thêm được — thử lại', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
     alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật; luật có thể gửi thêm vào Telegram nếu kênh đó đang bật.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Kênh trong ứng dụng luôn hoạt động. Telegram chỉ nhận thông báo khi đã bật và cấu hình xong ở khối bên dưới; email/webhook thuộc bước sau.', entities: 'Thực thể',
@@ -76,7 +78,7 @@ const copy = {
     browse: 'Duyệt', browseAll: 'Mọi tin đang đọc', byTopic: 'Chủ đề', byRegion: 'Vùng', bySource: 'Nguồn', quickFilter: 'Lọc nhanh', filterPlaceholder: 'Tên chủ đề hoặc nguồn…', clearFilter: 'Bỏ lọc', showing: 'Đang xem', noMatch: 'Không có mục nào khớp', railLatest: 'Tin mới nhất', railAlerts: 'Cảnh báo gần đây', railWatch: 'Theo dõi', seeAll: 'Xem tất cả', emptyRail: 'Chưa có gì', itemUnit: 'tin', tabbarLabel: 'Điều hướng một tay', themeLabel: 'Nền đọc',
     railBriefs: 'Bản tin phân tích mới nhất', openReports: 'Mở Báo cáo', noBriefsRail: 'Chưa có bản tin phân tích — mở mục Báo cáo để yêu cầu Agent tổng hợp hoặc nhận đồng bộ từ MCP / Obsidian.',
     reportsTitle: 'Báo cáo & Trợ lý Phân tích', reportsSub: 'Đọc bản tin do Agent tổng hợp, đối chiếu bài nguồn trích dẫn, ghi ý kiến phản hồi hai chiều (đồng bộ Obsidian) hoặc yêu cầu phân tích trực tiếp.',
-    askTitle: 'Hỏi & Yêu cầu Agent phân tích', askSub: 'Agent chỉ tổng hợp dựa trên tiêu đề tin đã lưu, chuỗi số liệu, lịch thuế và Hồ sơ trọng tâm của anh — không tự bịa nguồn.',
+    askTitle: 'Hỏi & Yêu cầu Agent phân tích', askSub: 'Agent tổng hợp dựa trên toàn văn & tóm tắt bài báo đã lưu (tìm kiếm FTS5), chuỗi số liệu, lịch thuế và Hồ sơ trọng tâm của anh — không tự bịa nguồn.',
     askPlaceholder: 'Ví dụ: Tóm tắt các diễn biến lãi suất, tỷ giá và chính sách đáng chú ý hôm nay…',
     askChip1: 'Điểm nóng 24h qua', askChip1Prompt: 'Tóm tắt các tin tức và diễn biến quan trọng nhất đang lưu trong Newsman, nhóm theo chủ đề và nêu điểm cần theo dõi.',
     askChip2: 'Vĩ mô & Lãi suất', askChip2Prompt: 'Phân tích bức tranh vĩ mô, lãi suất và chuỗi số liệu mới nhất đang có; nêu rủi ro và cơ hội chính.',
@@ -96,11 +98,23 @@ const copy = {
     connectorRunNow: 'Lấy ngay', connectorRunning: 'Đang lấy…', connectorEnable: 'Bật', connectorDisable: 'Tắt',
     connectorRanOk: (obs: number, docs: number, ev: number) => `Đã lấy dữ liệu: ${obs} điểm số liệu, ${docs} văn bản, ${ev} sự kiện.`,
     connectorErrRegion: 'Vùng của connector này đang tắt — hãy bật vùng ở mục Vùng trước.', connectorErrSecret: 'Thiếu khóa API của nhà cung cấp — hãy lưu khóa ở mục Khóa nhà cung cấp trước.', connectorErrConfig: 'Thiếu cấu hình máy chủ (ví dụ SEC_USER_AGENT).', connectorErrCache: 'Dữ liệu vừa lấy vẫn còn mới trong cửa sổ cache.', connectorErrQuota: 'Đã hết hạn mức truy vấn hôm nay của connector này.',
+    searchArticles: 'Tìm toàn văn bài báo', searchArticlesPlaceholder: 'Tìm tiêu đề hoặc nội dung toàn văn đã lưu (không dấu cũng khớp, vd: lai suat, thue)…', searchGo: 'Tìm',
+    readInApp: 'Đọc ngay', openOriginal: 'Mở bài gốc ↗', closeReader: 'Đóng',
+    extractNow: 'Tải toàn văn sạch', reExtract: 'Tải lại toàn văn', extracting: 'Đang bóc toàn văn sạch từ trang gốc…',
+    contentWeb: 'Đã lưu toàn văn', contentFeed: 'Nội dung RSS', contentSummary: 'Tóm tắt', wordsUnit: 'từ',
+    readMinutes: (m: number) => `${m} phút đọc`,
+    readerNoBody: 'Trang gốc không cung cấp văn bản bài viết tĩnh (có thể là cổng tải tệp PDF/ZIP hoặc yêu cầu JavaScript). Anh có thể mở trực tiếp đường dẫn gốc bên dưới.',
+    articleNotesTitle: 'Ghi chú riêng cho bài báo này', articleNotesPlaceholder: 'Ghi lại điểm đáng chú ý, số liệu hoặc ý tưởng liên hệ từ bài báo…',
+    fulltextAutoOn: 'Đang bật tự động tải & lưu toàn văn sạch', fulltextAutoOff: 'Tự động tải toàn văn đang tắt (chỉ lưu RSS)',
+    fulltextAutoHelp: 'Tự động truy xuất bài gốc ở nền (qua cổng chống SSRF, giãn cách tối thiểu 5 giây/máy chủ), lọc bỏ quảng cáo để lưu văn bản sạch vào SQLite và chỉ mục FTS5.',
+    articlesArchived: 'Bài đã có nội dung', articlesPending: 'Chờ tải toàn văn',
+    backfillBtn: 'Tải toàn văn cho bài cũ (tối đa 10 bài/lượt)', backfilling: 'Đang bóc toàn văn…',
+    backfillDone: (ok: number, attempted: number) => `Đã lưu toàn văn sạch cho ${ok}/${attempted} bài báo.`,
   },
   en: {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
     subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Use the MANAGEMENT_KEY configured for this application.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'MANAGEMENT_KEY is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
-    briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources, newest first. Every item links to the original; Newsman stores only titles and links.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Automatic collection',
+    briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources with stored excerpts and clean extracted full text for distraction-free reading, full-text search and grounded AI analysis.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Collection & Content Archive',
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', loadFailed: 'Could not load more — try again', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
     alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule; a rule can also post to Telegram while that channel is on.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'The in-app channel always works. Telegram receives alerts only once it is switched on and fully configured below; email and webhooks come later.', entities: 'Entities',
@@ -120,7 +134,7 @@ const copy = {
     browse: 'Browse', browseAll: 'Everything visible', byTopic: 'Topics', byRegion: 'Regions', bySource: 'Sources', quickFilter: 'Quick filter', filterPlaceholder: 'Topic or source name…', clearFilter: 'Clear filter', showing: 'Showing', noMatch: 'Nothing matches', railLatest: 'Latest items', railAlerts: 'Recent alerts', railWatch: 'Following', seeAll: 'See all', emptyRail: 'Nothing yet', itemUnit: 'items', tabbarLabel: 'One-handed navigation', themeLabel: 'Reading theme',
     railBriefs: 'Latest briefs', openReports: 'Open Reports', noBriefsRail: 'No briefs stored yet — open Reports to ask the Analyst or sync via MCP / Obsidian.',
     reportsTitle: 'Briefs & Research Analyst', reportsSub: 'Read agent-authored briefs, check cited source articles, leave two-way feedback notes (synced with Obsidian) or run a grounded analysis.',
-    askTitle: 'Ask Newsman Analyst', askSub: 'Grounded strictly in stored headlines, numeric series, declared tax deadlines and your Focus Profile — never invented sources.',
+    askTitle: 'Ask Newsman Analyst', askSub: 'Grounded strictly in stored full-text articles & excerpts (FTS5 search), numeric series, declared tax deadlines and your Focus Profile — never invented sources.',
     askPlaceholder: 'Example: Summarise today’s notable rate, FX and policy developments…',
     askChip1: '24h highlights', askChip1Prompt: 'Summarise the most important stored headlines in Newsman grouped by topic and highlight what to watch next.',
     askChip2: 'Macro & Rates', askChip2Prompt: 'Analyse the macro and interest-rate picture from stored headlines and latest series; note key risks and opportunities.',
@@ -140,6 +154,18 @@ const copy = {
     connectorRunNow: 'Run now', connectorRunning: 'Running…', connectorEnable: 'Enable', connectorDisable: 'Disable',
     connectorRanOk: (obs: number, docs: number, ev: number) => `Fetched: ${obs} observations, ${docs} documents, ${ev} events.`,
     connectorErrRegion: 'This connector’s region is off — enable the region above first.', connectorErrSecret: 'Required provider API key is missing — save it under Provider keys first.', connectorErrConfig: 'Required server configuration is missing (e.g. SEC_USER_AGENT).', connectorErrCache: 'Recent data is still fresh inside the cache window.', connectorErrQuota: 'Today’s request quota for this connector is exhausted.',
+    searchArticles: 'Search stored articles', searchArticlesPlaceholder: 'Search headlines & stored full text (accents optional, e.g. fed rates)…', searchGo: 'Search',
+    readInApp: 'Read', openOriginal: 'Original ↗', closeReader: 'Close',
+    extractNow: 'Extract full text', reExtract: 'Re-extract full text', extracting: 'Extracting clean article text from source…',
+    contentWeb: 'Full text saved', contentFeed: 'RSS content', contentSummary: 'Summary', wordsUnit: 'words',
+    readMinutes: (m: number) => `${m} min read`,
+    readerNoBody: 'This page does not expose static article text (it may be a PDF/ZIP download portal or require JavaScript). You can open the original link below.',
+    articleNotesTitle: 'Personal notes on this article', articleNotesPlaceholder: 'Jot down a takeaway, figure or follow-up from this article…',
+    fulltextAutoOn: 'Automatic clean full-text archiving is on', fulltextAutoOff: 'Automatic full-text archiving is off (RSS only)',
+    fulltextAutoHelp: 'Fetches article pages in the background (SSRF-safe, at least 5s per-host spacing), strips clutter and stores clean readable text in SQLite + FTS5.',
+    articlesArchived: 'Articles with body', articlesPending: 'Pending extraction',
+    backfillBtn: 'Extract full text for existing items (up to 10)', backfilling: 'Extracting batch…',
+    backfillDone: (ok: number, attempted: number) => `Saved clean full text for ${ok}/${attempted} articles.`,
   },
 } as const
 type Copy = (typeof copy)[Lang]
@@ -261,6 +287,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
   // Both are plain filters on /api/articles, so nothing here needs new server state.
   const [filter, setFilter] = useState<Filter>({ topic: null, source: null })
   const [railFilter, setRailFilter] = useState('')
+  const [readingId, setReadingId] = useState<number | null>(null)
   const cycleMode = () => setMode(THEMES[(THEMES.findIndex((theme) => theme.id === mode) + 1) % THEMES.length].id)
   const signOut = async () => { try { await api('/api/auth/logout', { method: 'POST' }); onSignOut() } catch { setError('logout') } }
   const openFilter = (next: Filter) => { setFilter(next); if (page !== 'topics') setRoute('topics') }
@@ -272,7 +299,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
       <BrowseSidebar t={t} lang={lang} dashboard={dashboard} regions={regions} region={region} filter={filter} query={railFilter} setQuery={setRailFilter} onPick={openFilter} />
       <div className="side-divider" />
       <div className="sidebar-footer">
-        <div className="version">v{__APP_VERSION__} <span>· P8 UI</span></div>
+        <div className="version">v{__APP_VERSION__} <span>· Reader + MCP</span></div>
         <button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}><span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>{themeName(mode, lang)}</button>
         <button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button>
       </div>
@@ -289,17 +316,18 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
       {regions && <div className="mobile-region-bar"><Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} /></div>}
       {error && <div className="alert error" role="alert"><strong>{error === 'logout' ? t.failedLogout : t.loadError}</strong><button onClick={() => setError('')}>{t.dismiss}</button></div>}
       <div className="page-content">
-        {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} />}
-        {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} />}
-        {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} />}
+        {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} onOpenArticle={setReadingId} />}
+        {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} onOpenArticle={setReadingId} />}
+        {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} onOpenArticle={setReadingId} />}
         {page === 'market' && <Market t={t} lang={lang} region={region} />}
-        {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} />}
+        {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
         {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>
     <nav className="tabbar" aria-label={t.tabbarLabel}>{ROUTABLE_PAGES.filter((id) => id !== 'market' && id !== 'regions').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+    {readingId !== null && <ArticleReaderModal t={t} lang={lang} articleId={readingId} topics={dashboard?.topics} onClose={() => setReadingId(null)} onUpdated={onCatalogChanged} />}
   </div>
   function setRoute(next: Page) { location.hash = next; setPage(next) }
 }
@@ -410,7 +438,7 @@ function useInfiniteScroll({ hasMore, busy, count, load }: { hasMore: boolean; b
   return { sentinel, failed }
 }
 
-function useArticles(topic: string | null, region: string, source: string | null, pageSize = 30) {
+function useArticles(topic: string | null, region: string, source: string | null, query: string, pageSize = 30) {
   const [items, setItems] = useState<Article[] | null>(null)
   const [error, setError] = useState(false)
   const [more, setMore] = useState(false)
@@ -422,22 +450,20 @@ function useArticles(topic: string | null, region: string, source: string | null
       if (topic) params.set('topic', topic)
       if (source) params.set('source', source)
       if (region) params.set('region', region)
+      if (query.trim()) params.set('q', query.trim())
       const result = await api<{ data: Article[] }>(`/api/articles?${params}`)
       setItems((current) => offset === 0 || !current ? result.data : [...current, ...result.data])
       setMore(result.data.length === pageSize)
       return result.data.length > 0
     } catch { setError(true); return false } finally { setBusy(false) }
   }
-  useEffect(() => { setItems(null); void load(0) }, [topic, region, source])
+  useEffect(() => { setItems(null); void load(0) }, [topic, region, source, query])
   return { items, error, more, busy, load }
 }
-function ArticleList({ t, lang, topic, topics, region, source, limit }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; limit?: number }) {
-  const { items, error, more, busy, load } = useArticles(topic, region ?? '', source ?? null, limit)
+function ArticleList({ t, lang, topic, topics, region, source, query, limit, onOpenArticle }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; query?: string; limit?: number; onOpenArticle?: (id: number) => void }) {
+  const { items, error, more, busy, load } = useArticles(topic, region ?? '', source ?? null, query ?? '', limit)
   // A capped list (a home rail) has nothing more to load, so it never gets a sentinel.
   const paged = !limit
-  // `failed` gates the next attempt, so it cannot be an input to the hook and an output
-  // of it in the same render. The hook decides when to stop; the caller only needs the
-  // resulting sentinel and the flag.
   const { sentinel, failed } = useInfiniteScroll({
     hasMore: paged && more,
     busy,
@@ -446,39 +472,51 @@ function ArticleList({ t, lang, topic, topics, region, source, limit }: { t: Cop
   })
   if (error && !items) return <p className="form-error" role="alert">{t.loadError}</p>
   if (!items) return <p className="muted" role="status">{t.loading}</p>
-  if (items.length === 0) return <div className="empty-card"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div>
+  if (items.length === 0) return <div className="empty-card"><div className="empty-art">✦</div><h3>{query?.trim() ? t.noMatch : t.noStories}</h3><p>{query?.trim() ? t.searchArticlesPlaceholder : t.noStoriesSub}</p></div>
   return <div><div className="article-list">{items.map((item) => {
     const published = formatDate(lang, item.published_at)
     const label = topicLabel(lang, topics, item.topic_slug)
     const extraTopics = (item.labels?.topics ?? []).filter((slug) => slug !== item.topic_slug)
     const entities = item.labels?.entities ?? []
+    const hasFull = item.content_source === 'web' || (item.content_source === 'feed' && (item.word_count ?? 0) > 0)
     return <article className="article-row" key={item.id}>
-      <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>
-      <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
+      <div className="article-row-top">
+        {onOpenArticle
+          ? <button type="button" className="article-open-title" onClick={() => onOpenArticle(item.id)}>{item.title}</button>
+          : <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>}
+        <div className="article-row-actions">
+          {onOpenArticle && <button type="button" className="reader-pill" onClick={() => onOpenArticle(item.id)}>{t.readInApp}</button>}
+          <a className="ext-pill" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>
+        </div>
+      </div>
+      {item.summary && <p className="article-excerpt" onClick={() => onOpenArticle?.(item.id)}>{item.summary}</p>}
+      <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}{item.word_count ? ` · ${item.word_count} ${t.wordsUnit}` : ''}</span>}{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
     </article>
   })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}
-    {/* The sentinel only exists while a page can still arrive; when the observer is
-        unavailable or a load added nothing, the button is the fallback. */}
     {paged && more && !failed && <div ref={sentinel} className="scroll-sentinel" aria-hidden="true">{busy ? t.loading : ''}</div>}
     {paged && more && (failed || typeof IntersectionObserver === 'undefined') && <button className="btn secondary load-more" disabled={busy} onClick={() => void load(items.length)}>{busy ? t.loading : failed ? t.loadFailed : t.loadMore}</button>}
   </div>
 }
 
 /**
- * A home rail: a heading, an optional "see all" and a horizontal strip. Rails are the
- * home page the shared UI plan asks for (Latest / Alerts / Following) and are built
- * only from endpoints that already exist.
+ * A home rail: a heading, an optional "see all" and a responsive card grid.
  */
 function Rail({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return <section className="rail"><div className="rail-head"><h2 className="section-title">{title}</h2>{action}</div><div className="rail-strip">{children}</div></section>
 }
 
-function MiniArticle({ lang, item, topics }: { lang: Lang; item: Article; topics?: Topic[] }) {
-  return <article className="mini-card"><span className="mini-tier">{item.source_tier}</span><a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a><div className="article-meta"><span>{item.source_name}</span>{topicLabel(lang, topics, item.topic_slug) && <span>· {topicLabel(lang, topics, item.topic_slug)}</span>}<span>· {formatDate(lang, item.published_at) ?? formatDate(lang, item.fetched_at) ?? t_none(lang)}</span></div></article>
+function MiniArticle({ t, lang, item, topics, onOpen }: { t: Copy; lang: Lang; item: Article; topics?: Topic[]; onOpen: (id: number) => void }) {
+  const hasFull = item.content_source === 'web' || (item.content_source === 'feed' && (item.word_count ?? 0) > 0)
+  return <article className="mini-card">
+    <div className="mini-head"><span className="mini-tier">{item.source_tier}</span>{hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}</span>}</div>
+    <button type="button" className="mini-open-title" onClick={() => onOpen(item.id)}>{item.title}</button>
+    {item.summary && <p className="mini-excerpt" onClick={() => onOpen(item.id)}>{item.summary}</p>}
+    <div className="article-meta"><span>{item.source_name}</span>{topicLabel(lang, topics, item.topic_slug) && <span>· {topicLabel(lang, topics, item.topic_slug)}</span>}<span>· {formatDate(lang, item.published_at) ?? formatDate(lang, item.fetched_at) ?? t_none(lang)}</span><a className="mini-ext" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a></div>
+  </article>
 }
 function t_none(lang: Lang) { return lang === 'vi' ? 'không rõ ngày' : 'no date' }
 
-function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; onPick: (v: Filter) => void }) {
+function HomeRails({ t, lang, dashboard, region, onPick, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
   const topics = dashboard?.topics ?? []
   const sources = dashboard?.sources ?? []
   const [latest, setLatest] = useState<Article[] | null>(null)
@@ -491,8 +529,6 @@ function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang
     api<{ data: AlertDelivery[] }>('/api/alerts?limit=6').then((payload) => setAlerts(payload.data)).catch(() => setAlerts([]))
     api<{ data: AgentAnalysis[] }>(`/api/v1/analyses?limit=6${suffix}`).then((payload) => setBriefs(payload.data)).catch(() => setBriefs([]))
   }, [region])
-  // "Following" = the enabled source with the most visible items; with no sources it
-  // stays empty rather than guessing.
   useEffect(() => {
     if (!sources.length) { setWatched([]); return }
     const top = sources[0]
@@ -504,28 +540,47 @@ function HomeRails({ t, lang, dashboard, region, onPick }: { t: Copy; lang: Lang
       {!briefs ? <p className="muted">{t.loading}</p> : briefs.length === 0 ? <p className="rail-empty">{t.noBriefsRail}</p> : briefs.map((item) => <article className="mini-card" key={item.id}><span className="mini-tier">{item.stable_key ?? `analysis-${item.id}`}</span><a href="#reports">{item.title}</a><div className="article-meta"><span>{item.author ?? t.mcpOwner}</span>{item.region_code && <span>· {item.region_code}</span>}<span>· {formatDate(lang, new Date(item.updated_at * 1000).toISOString())}</span></div></article>)}
     </Rail>
     <Rail title={t.railLatest} action={<button type="button" className="text-button" onClick={() => onPick({ topic: null, source: null })}>{t.seeAll}</button>}>
-      {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} lang={lang} item={item} topics={topics} />)}
+      {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} />)}
     </Rail>
     <Rail title={t.railAlerts} action={<button type="button" className="text-button" onClick={() => { location.hash = 'alerts' }}>{t.seeAll}</button>}>
-      {!alerts ? <p className="muted">{t.loading}</p> : alerts.length === 0 ? <p className="rail-empty">{t.alertsEmpty} — {t.alertsEmptySub}</p> : alerts.map((item) => <article className="mini-card" key={item.id}><span className={`alert-level ${item.level}`}>{item.level}</span><a href={item.article_url} target="_blank" rel="noopener noreferrer">{item.article_title}</a><div className="article-meta"><span>{lang === 'vi' ? item.rule_label_vi : item.rule_label_en}</span><span>· {formatDate(lang, new Date(item.created_at * 1000).toISOString())}</span></div></article>)}
+      {!alerts ? <p className="muted">{t.loading}</p> : alerts.length === 0 ? <p className="rail-empty">{t.alertsEmpty} — {t.alertsEmptySub}</p> : alerts.map((item) => <article className="mini-card" key={item.id}><span className={`alert-level ${item.level}`}>{item.level}</span><button type="button" className="mini-open-title" onClick={() => onOpenArticle(item.article_id)}>{item.article_title}</button><div className="article-meta"><span>{lang === 'vi' ? item.rule_label_vi : item.rule_label_en}</span><span>· {formatDate(lang, new Date(item.created_at * 1000).toISOString())}</span></div></article>)}
     </Rail>
     <Rail title={t.railWatch} action={sources.length > 0 ? <button type="button" className="text-button" onClick={() => onPick({ topic: null, source: sources[0].slug })}>{sources[0].name}</button> : undefined}>
-      {!watched ? <p className="muted">{t.loading}</p> : watched.length === 0 ? <p className="rail-empty">{t.emptyRail}</p> : watched.map((item) => <MiniArticle key={item.id} lang={lang} item={item} topics={topics} />)}
+      {!watched ? <p className="muted">{t.loading}</p> : watched.length === 0 ? <p className="rail-empty">{t.emptyRail}</p> : watched.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} />)}
     </Rail>
   </>
 }
 
-function Today({ t, lang, dashboard, region, setPage, onPick }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void; onPick: (v: Filter) => void }) {
+function Today({ t, lang, dashboard, region, setPage, onPick, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
   const stats = dashboard?.stats
+  const [quickSearch, setQuickSearch] = useState('')
+  const onSearch = (event: FormEvent) => {
+    event.preventDefault()
+    if (!quickSearch.trim()) return
+    onPick({ topic: null, source: null, q: quickSearch.trim() })
+  }
   return <div className="content-stack">
-    <section className="welcome-grid"><div className="welcome-card"><div className="eyebrow">{new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</div><h2>{t.briefing}</h2><p>{t.briefingSub}</p><div className="welcome-actions"><button className="btn primary" onClick={() => setPage('topics')}>{t.topics} <span>→</span></button><span className="quiet-note">{stats ? (stats.collector_enabled ? t.collectorOn : t.collectorOff) : ''}</span></div></div><div className="signal-card"><span className="signal-ring">◎</span><div><strong>{stats ? stats.articles_24h : '—'}</strong><span>{t.articles24h}</span></div><div className="signal-line" /><span className="muted">{stats ? `${stats.sources_enabled} · ${t.sourcesEnabled}${stats.sources_paused ? ` · ${stats.sources_paused} ${t.sourcesPaused.toLowerCase()}` : ''}` : '—'}</span></div></section>
-    <HomeRails t={t} lang={lang} dashboard={dashboard} region={region} onPick={onPick} />
+    <section className="welcome-grid"><div className="welcome-card"><div className="eyebrow">{new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</div><h2>{t.briefing}</h2><p>{t.briefingSub}</p>
+      <form className="quick-search-bar" onSubmit={onSearch}>
+        <input type="search" value={quickSearch} placeholder={t.searchArticlesPlaceholder} onChange={(e) => setQuickSearch(e.target.value)} aria-label={t.searchArticles} />
+        <button className="btn secondary" disabled={!quickSearch.trim()}>{t.searchGo}</button>
+      </form>
+      <div className="welcome-actions"><button className="btn primary" onClick={() => setPage('topics')}>{t.topics} <span>→</span></button><span className="quiet-note">{stats ? (stats.collector_enabled ? t.collectorOn : t.collectorOff) : ''}</span></div></div><div className="signal-card"><span className="signal-ring">◎</span><div><strong>{stats ? stats.articles_24h : '—'}</strong><span>{t.articles24h}</span></div><div className="signal-line" /><span className="muted">{stats ? `${stats.articles_with_content ?? 0}/${stats.articles_total} ${t.articlesArchived.toLowerCase()} · ${stats.sources_enabled} ${t.sourcesEnabled.toLowerCase()}` : '—'}</span></div></section>
+    <HomeRails t={t} lang={lang} dashboard={dashboard} region={region} onPick={onPick} onOpenArticle={onOpenArticle} />
   </div>
 }
 
-function Topics({ t, lang, dashboard, region, filter, setFilter }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; filter: Filter; setFilter: (v: Filter) => void }) {
+function Topics({ t, lang, dashboard, region, filter, setFilter, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; filter: Filter; setFilter: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
   const topics = dashboard?.topics ?? []
   const sources = dashboard?.sources ?? []
+  const [searchInput, setSearchInput] = useState(filter.q ?? '')
+  useEffect(() => { setSearchInput(filter.q ?? '') }, [filter.q])
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if ((filter.q ?? '') !== searchInput.trim()) setFilter({ ...filter, q: searchInput.trim() || undefined })
+    }, 260)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
   const parentTrail = (topic: Topic): string => {
     const ancestors: string[] = []
     const seen = new Set([topic.slug])
@@ -539,7 +594,6 @@ function Topics({ t, lang, dashboard, region, filter, setFilter }: { t: Copy; la
     }
     return ancestors.join(' / ')
   }
-  // Count a topic together with its descendants, matching the reader filter.
   const total = (slug: string, seen = new Set<string>()): number => {
     if (seen.has(slug)) return 0
     seen.add(slug)
@@ -550,12 +604,14 @@ function Topics({ t, lang, dashboard, region, filter, setFilter }: { t: Copy; la
   const chipLabel = filter.source ? activeSource?.name ?? filter.source : filter.topic ? topicLabel(lang, topics, filter.topic) ?? filter.topic : null
   return <div className="content-stack">
     <div className="chip-row">
-      <button type="button" className={filter.topic === null && filter.source === null ? 'chip active' : 'chip'} onClick={() => setFilter({ topic: null, source: null })}>{t.allTopics}</button>
-      {chipLabel && <button type="button" className="chip active filter-chip" onClick={() => setFilter({ topic: null, source: null })}>{t.showing}: {chipLabel}<span aria-hidden="true"> ×</span></button>}
+      <button type="button" className={filter.topic === null && filter.source === null && !filter.q ? 'chip active' : 'chip'} onClick={() => { setSearchInput(''); setFilter({ topic: null, source: null }) }}>{t.allTopics}</button>
+      {chipLabel && <button type="button" className="chip active filter-chip" onClick={() => setFilter({ topic: null, source: null, q: filter.q })}>{t.showing}: {chipLabel}<span aria-hidden="true"> ×</span></button>}
+      {filter.q && <button type="button" className="chip active filter-chip" onClick={() => { setSearchInput(''); setFilter({ ...filter, q: undefined }) }}>“{filter.q}”<span aria-hidden="true"> ×</span></button>}
     </div>
-    {!filter.source && <div className="topic-grid">{topics.map((topic) => <button type="button" className="topic-card" key={topic.slug} aria-pressed={filter.topic === topic.slug} onClick={() => setFilter({ topic: filter.topic === topic.slug ? null : topic.slug, source: null })}><span className="topic-dot" />{parentTrail(topic) && <p>{parentTrail(topic)} →</p>}<h3>{lang === 'vi' ? topic.label_vi : topic.label_en}</h3><p>{lang === 'vi' ? topic.label_en : topic.label_vi}</p><span className="topic-count">{total(topic.slug)} {t.topicArticles}</span></button>)}</div>}
-    <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{filter.source ? activeSource?.name ?? t.bySource : filter.topic ? topicLabel(lang, topics, filter.topic) : t.latest}</h2></div></section>
-    <ArticleList t={t} lang={lang} topic={filter.topic} topics={topics} region={region} source={filter.source} />
+    <label className="field article-search-field"><span>{t.searchArticles}</span><input type="search" value={searchInput} placeholder={t.searchArticlesPlaceholder} onChange={(e) => setSearchInput(e.target.value)} /></label>
+    {!filter.source && !filter.q && <div className="topic-grid">{topics.map((topic) => <button type="button" className="topic-card" key={topic.slug} aria-pressed={filter.topic === topic.slug} onClick={() => setFilter({ topic: filter.topic === topic.slug ? null : topic.slug, source: null, q: filter.q })}><span className="topic-dot" />{parentTrail(topic) && <p>{parentTrail(topic)} →</p>}<h3>{lang === 'vi' ? topic.label_vi : topic.label_en}</h3><p>{lang === 'vi' ? topic.label_en : topic.label_vi}</p><span className="topic-count">{total(topic.slug)} {t.topicArticles}</span></button>)}</div>}
+    <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{filter.q ? `${t.searchArticles}: “${filter.q}”` : filter.source ? activeSource?.name ?? t.bySource : filter.topic ? topicLabel(lang, topics, filter.topic) : t.latest}</h2></div></section>
+    <ArticleList t={t} lang={lang} topic={filter.topic} topics={topics} region={region} source={filter.source} query={filter.q ?? ''} onOpenArticle={onOpenArticle} />
   </div>
 }
 
@@ -640,6 +696,8 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
   const [error, setError] = useState(false)
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [backfillBusy, setBackfillBusy] = useState(false)
+  const [backfillNote, setBackfillNote] = useState('')
   useEffect(() => { api<Settings>('/api/settings').then(setSettings).catch(() => setError(true)) }, [])
   const save = async () => {
     if (!settings) return
@@ -667,6 +725,22 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       setSettings((current) => current ? { ...current, collector_enabled: result.collector_enabled } : result); onCatalogChanged()
     } catch { setError(true) } finally { setBusy(false) }
   }
+  const toggleFulltext = async () => {
+    if (!settings) return
+    setBusy(true); setError(false)
+    try {
+      const result = await api<Settings>('/api/settings', { method: 'PATCH', body: JSON.stringify({ fulltext_auto_enabled: !settings.fulltext_auto_enabled }) })
+      setSettings((current) => current ? { ...current, fulltext_auto_enabled: result.fulltext_auto_enabled } : result); onCatalogChanged()
+    } catch { setError(true) } finally { setBusy(false) }
+  }
+  const runBackfill = async () => {
+    setBackfillBusy(true); setBackfillNote(''); setError(false)
+    try {
+      const { data } = await api<{ data: { attempted: number; saved: number } }>('/api/admin/articles/backfill?limit=10', { method: 'POST' })
+      setBackfillNote(t.backfillDone(data.saved, data.attempted))
+      onCatalogChanged()
+    } catch { setError(true) } finally { setBackfillBusy(false) }
+  }
   if (!settings) return <div role={error ? 'alert' : 'status'} className="loading-inline">{error ? t.settingsError : t.loading}</div>
   const stats = dashboard?.stats
   const themeOptions = THEMES.map((theme) => ({ value: theme.id, label: lang === 'vi' ? theme.vi : theme.en }))
@@ -678,7 +752,10 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       <div className="theme-grid" role="group" aria-label={t.themeLabel}>{THEMES.map((theme) => <button key={theme.id} type="button" className={mode === theme.id ? 'theme-swatch active' : 'theme-swatch'} style={{ background: theme.bg, color: theme.dark ? '#e8e0d4' : '#332f2a' }} aria-pressed={mode === theme.id} onClick={() => setMode(theme.id)}><span className="swatch-sample" aria-hidden="true">Aa</span><span className="swatch-name">{lang === 'vi' ? theme.vi : theme.en}</span></button>)}</div>
     </section><section className="settings-card"><div className="card-heading"><span className="card-icon">◷</span><div><h3>{t.nextPhase}</h3><p>{t.collectorHelp}</p></div></div>
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
-      {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div></dl>}
+      <div className="switch-row"><div><strong>{settings.fulltext_auto_enabled ? t.fulltextAutoOn : t.fulltextAutoOff}</strong><span>{t.fulltextAutoHelp}</span></div><button type="button" role="switch" className="switch" aria-checked={settings.fulltext_auto_enabled} disabled={busy} onClick={() => void toggleFulltext()} /></div>
+      {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div><div><dt>{t.articlesArchived}</dt><dd>{stats.articles_with_content ?? 0}</dd></div><div><dt>{t.articlesPending}</dt><dd>{stats.articles_pending_content ?? 0}</dd></div></dl>}
+      <div className="btn-row"><button type="button" className="btn secondary" disabled={backfillBusy} onClick={() => void runBackfill()}>{backfillBusy ? t.backfilling : t.backfillBtn}</button></div>
+      {backfillNote && <div className="save-state" role="status">✓ {backfillNote}</div>}
     </section></div>
     <section className="settings-card">
       <div className="card-heading"><span className="card-icon">✦</span><div><h3>{t.focusTitle}</h3><p>{t.focusSub}</p></div></div>
@@ -1104,7 +1181,7 @@ function ConnectorsPanel({ t }: { t: Copy }) {
   </section>
 }
 
-function ReportsPage({ t, lang, region, dashboard }: { t: Copy; lang: Lang; region: string; dashboard: Dashboard | null }) {
+function ReportsPage({ t, lang, region, dashboard, onOpenArticle }: { t: Copy; lang: Lang; region: string; dashboard: Dashboard | null; onOpenArticle: (id: number) => void }) {
   const topics = dashboard?.topics ?? []
   const [items, setItems] = useState<AgentAnalysis[] | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -1234,7 +1311,7 @@ function ReportsPage({ t, lang, region, dashboard }: { t: Copy; lang: Lang; regi
             <div className="brief-body">{detail.data.body}</div>
             <section className="cited-box">
               <h3>{t.citedArticles} ({detail.cited_articles.length})</h3>
-              {detail.cited_articles.length === 0 ? <p className="muted">{t.noCited}</p> : <ul className="cited-list">{detail.cited_articles.map((art) => <li key={art.id}><span className="key-chip">#{art.id}</span><span className="tier-badge">{art.source_tier}</span><a href={art.url} target="_blank" rel="noopener noreferrer">{art.title}</a><span className="muted">({art.source_name})</span></li>)}</ul>}
+              {detail.cited_articles.length === 0 ? <p className="muted">{t.noCited}</p> : <ul className="cited-list">{detail.cited_articles.map((art) => <li key={art.id}><span className="key-chip">#{art.id}</span><span className="tier-badge">{art.source_tier}</span><button type="button" className="cited-open-btn" onClick={() => onOpenArticle(art.id)}>{art.title}</button><span className="muted">({art.source_name})</span><a className="ext-pill" href={art.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a></li>)}</ul>}
             </section>
             <section className="notes-box">
               <div><h3>{t.feedbackTitle} ({detail.notes.length})</h3><p className="muted" style={{ margin: '4px 0 0' }}>{t.feedbackSub}</p></div>
@@ -1255,7 +1332,7 @@ function ReportsPage({ t, lang, region, dashboard }: { t: Copy; lang: Lang; regi
   </div>
 }
 
-function RegionsPage({ t, lang, region }: { t: Copy; lang: Lang; region: string }) {
+function RegionsPage({ t, lang, region, onOpenArticle }: { t: Copy; lang: Lang; region: string; onOpenArticle: (id: number) => void }) {
   const [docs, setDocs] = useState<DocsPayload | null>(null)
   const [tax, setTax] = useState<TaxPayload | null>(null)
   const [query, setQuery] = useState('')
@@ -1273,7 +1350,7 @@ function RegionsPage({ t, lang, region }: { t: Copy; lang: Lang; region: string 
   return <div className="content-stack">
     <section className="section-heading"><div><span className="eyebrow">{t.regionsPage}</span><h2>{t.regionsPage}</h2><p>{t.regionsPageSub}</p></div></section>
     {error && <div className="form-error" role="alert">{t.loadError}</div>}
-    <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionNews}</span><h3>{t.latest}</h3></div></div><ArticleList t={t} lang={lang} topic={null} region={region} /></section>
+    <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionNews}</span><h3>{t.latest}</h3></div></div><ArticleList t={t} lang={lang} topic={null} region={region} onOpenArticle={onOpenArticle} /></section>
     <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionDocs}</span><h3>{t.regionDocs}</h3></div></div>
       <div className="doc-filters">
         <label className="field"><span>{t.searchDocs}</span><input type="search" value={query} placeholder={t.searchHint} onChange={(e) => setQuery(e.target.value)} /><small>{t.searchHint}</small></label>
@@ -1292,6 +1369,143 @@ function RegionsPage({ t, lang, region }: { t: Copy; lang: Lang; region: string 
         <div className="tax-side"><span className={item.due_soon ? 'tax-days due' : 'tax-days'}>{item.due_soon ? t.dueSoon : t.dueIn(item.days_until)}</span><span className={item.verified ? 'catalog-status' : 'catalog-status inactive'}>{item.verified ? t.verified : t.unverified}</span></div>
       </li>)}</ul>}
     </section>
+  </div>
+}
+
+function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: { t: Copy; lang: Lang; articleId: number; topics?: Topic[]; onClose: () => void; onUpdated: () => void }) {
+  const [payload, setPayload] = useState<ArticleDetailPayload | null>(null)
+  const [extracting, setExtracting] = useState(false)
+  const [error, setError] = useState(false)
+  const [noteText, setNoteText] = useState('')
+  const [noteBusy, setNoteBusy] = useState(false)
+  const autoTried = useRef<number | null>(null)
+
+  const load = async (id: number) => {
+    setError(false)
+    try {
+      const next = await api<ArticleDetailPayload>(`/api/v1/articles/${id}`)
+      setPayload(next)
+      if (!next.data.content_text && next.data.content_source === 'none' && autoTried.current !== id) {
+        autoTried.current = id
+        setExtracting(true)
+        try {
+          const extracted = await api<ArticleDetailPayload>(`/api/articles/${id}/extract`, { method: 'POST' })
+          setPayload(extracted)
+          if (extracted.data.content_text) onUpdated()
+        } catch { /* fallback to summary/link cleanly */ } finally { setExtracting(false) }
+      }
+    } catch { setError(true) }
+  }
+
+  useEffect(() => {
+    setPayload(null)
+    void load(articleId)
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [articleId])
+
+  const triggerExtract = async () => {
+    setExtracting(true); setError(false)
+    try {
+      const extracted = await api<ArticleDetailPayload>(`/api/articles/${articleId}/extract`, { method: 'POST' })
+      setPayload(extracted)
+      onUpdated()
+    } catch { setError(true) } finally { setExtracting(false) }
+  }
+
+  const submitNote = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!noteText.trim()) return
+    setNoteBusy(true)
+    try {
+      await api('/api/notes', { method: 'POST', body: JSON.stringify({ article_id: articleId, body: noteText.trim() }) })
+      setNoteText('')
+      const refreshed = await api<ArticleDetailPayload>(`/api/v1/articles/${articleId}`)
+      setPayload(refreshed)
+    } catch { setError(true) } finally { setNoteBusy(false) }
+  }
+
+  const deleteNote = async (noteId: number) => {
+    setNoteBusy(true)
+    try {
+      await api(`/api/notes/${noteId}`, { method: 'DELETE' })
+      const refreshed = await api<ArticleDetailPayload>(`/api/v1/articles/${articleId}`)
+      setPayload(refreshed)
+    } catch { setError(true) } finally { setNoteBusy(false) }
+  }
+
+  const item = payload?.data
+  const notes = payload?.notes ?? []
+  const paragraphs = (item?.content_text ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  const words = item?.word_count ?? 0
+  const minutes = words > 0 ? Math.max(1, Math.round(words / 220)) : 0
+  const topicText = item ? topicLabel(lang, topics, item.topic_slug) : null
+  const stamp = (sec: number) => formatDate(lang, new Date(sec * 1000).toISOString()) ?? ''
+
+  return <div className="reader-backdrop" role="dialog" aria-modal="true" aria-label={item?.title ?? t.readInApp} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div className="reader-sheet">
+      <div className="reader-toolbar">
+        <div className="article-meta">
+          {item && <span className="tier-badge">{item.source_tier}</span>}
+          {item && <strong>{item.source_name}</strong>}
+          {topicText && <span>· {topicText}</span>}
+          {item?.region_code && <span>· {item.region_code}</span>}
+          {words > 0 && <span className="content-badge">{words} {t.wordsUnit} · {t.readMinutes(minutes)}</span>}
+        </div>
+        <div className="reader-toolbar-actions">
+          {item && <button type="button" className="btn secondary compact-btn" disabled={extracting} onClick={() => void triggerExtract()}>{extracting ? t.loading : item.content_text ? t.reExtract : t.extractNow}</button>}
+          {item && <a className="btn secondary compact-btn" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>}
+          <button type="button" className="btn primary compact-btn" onClick={onClose}>{t.closeReader}</button>
+        </div>
+      </div>
+
+      {error && <div className="form-error" role="alert">{t.loadError}</div>}
+      {!item && !error && <p className="muted" role="status">{t.loading}</p>}
+
+      {item && <article className="reader-article">
+        <header className="reader-article-head">
+          <h2>{item.title}</h2>
+          <div className="article-meta">
+            <span>{formatDate(lang, item.published_at) ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span>
+            {item.content_source && <span>· {item.content_source === 'web' ? t.contentWeb : item.content_source === 'feed' ? t.contentFeed : t.contentSummary}</span>}
+            {item.source_attribution && <span>· {item.source_attribution}</span>}
+          </div>
+        </header>
+
+        {extracting && <div className="catalog-notice" role="status">{t.extracting}</div>}
+
+        {item.summary && (!item.content_text || !item.content_text.startsWith(item.summary.slice(0, 80))) && (
+          <blockquote className="reader-lead">{item.summary}</blockquote>
+        )}
+
+        {paragraphs.length > 0 ? (
+          <div className="reader-prose">
+            {paragraphs.map((para, idx) => <p key={idx}>{para}</p>)}
+          </div>
+        ) : !extracting && (
+          <div className="reader-fallback">
+            {!item.summary && <p className="muted">{t.readerNoBody}</p>}
+            <a className="btn primary" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>
+          </div>
+        )}
+
+        <section className="notes-box">
+          <h3>{t.articleNotesTitle} ({notes.length})</h3>
+          {notes.length > 0 && <div className="notes-list">{notes.map((note) => <div className="note-card" key={note.id}>
+            <div className="note-head">
+              <span><strong>{note.author ?? t.mcpOwner}</strong> · {stamp(note.updated_at)}</span>
+              <button type="button" className="text-button" disabled={noteBusy} onClick={() => void deleteNote(note.id)}>{t.removeSecret}</button>
+            </div>
+            <p>{note.body}</p>
+          </div>)}</div>}
+          <form className="login-form" onSubmit={submitNote}>
+            <textarea rows={2} maxLength={4000} required value={noteText} placeholder={t.articleNotesPlaceholder} onChange={(e) => setNoteText(e.target.value)} />
+            <div className="btn-row"><button className="btn secondary" disabled={noteBusy || !noteText.trim()}>{noteBusy ? t.saving : t.feedbackSubmit}</button></div>
+          </form>
+        </section>
+      </article>}
+    </div>
   </div>
 }
 
