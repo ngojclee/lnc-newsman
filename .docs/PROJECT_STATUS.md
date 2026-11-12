@@ -182,6 +182,21 @@ Live at `newsman.lengoc.me`: `/api/app-info` 0.5.0, container `2d0802e6f125` hea
 1. `stack.yml` still defaulted `CONNECTOR_MAX_SCOPES` to `newsman:read`. The code granted writes while the deployed connector advertised a read-only ceiling — a ceiling that disagreed with the owner's decision, and quietly. Fixed in `c6995e2`; the compose default is now both scopes, and a deployment that wants read-only sets the env.
 2. A build of the whole Rust release takes **~15 minutes** on this NAS, and `AutoUpdate.Interval: 1m` means **every push to `main` starts one**. Commit in batches; a handful of small docs commits will occupy the queue for the better part of an hour and delay anything else building on the same daemon.
 
+## 0.5.1 — Obsidian feedback loop, deployed and verified (2026-11-12)
+
+Closes the second half of the Obsidian loop: an opinion written under a forecast in the vault comes back as a note attached to that analysis.
+
+- **Migration 19 rebuilds `newsman_notes`** so a note can target an analysis. SQLite cannot alter a `CHECK`, so the table is copied, dropped and renamed inside the transaction the migration runner already opens; migration 18 is left untouched. The `CHECK` is now "exactly one of three targets".
+- **`note_create` / `notes` take `analysis_id`**; `analyses` gained `stable_key` (`analysis-<id>`, from the immutable row id, so it survives edits) and `updated_since` (ISO date at UTC midnight, or Unix seconds; strictly after; an unusable value is an error rather than a filter that quietly returns everything).
+- **Production verification, all measured after the swap to container `04a2c8ce298f`:**
+  - `/api/app-info` = **0.5.1**; stack hash `7858a9d`.
+  - Row counts **before → after** the migration: notes 0 → 0, analyses 0 → 0, flags 0 → 0, write_log 0 → 0, articles 100 → 100.
+  - Schema is 19, `newsman_notes` has `analysis_id`, and the new `CHECK` is present.
+  - `analyses` returns (empty in production — no analyses exist yet); `updated_since` with `1970-01-01` and `2099-01-01` both filter correctly; `"not a date"` is an `isError`.
+  - `notes {analysis_id: 1}` answers `{data: [], flags: []}` — the third target is readable.
+- **Backup taken before the deploy**: `/data/newsman.db.pre-0.5.1` and `newsman.db-wal.pre-0.5.1` in the previous container. The production tables were empty, so the rebuild had nothing to lose — but the backup stays until the owner says otherwise.
+- **Not verifiable yet, and worth knowing**: the two write-guard cases (`note_create` with a missing `analysis_id`, and with two targets) could not be exercised on production because **the connector is not paired** — every write tool requires a delegated caller, so an owner web session is refused with `this tool requires a delegated caller`. That is a real behaviour, not a bug introduced here: it has been true since 0.5.0 and matches "the author is the verified delegation". Both guards are covered by unit tests and were measured live on a local build.
+
 ## Infinite scroll (2026-11-12, v0.5.0)
 
 Owner's request: drop the "Xem thêm" button and load the next page when the list reaches the bottom.
