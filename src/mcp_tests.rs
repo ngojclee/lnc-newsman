@@ -305,3 +305,46 @@ async fn a_notification_is_accepted_without_a_body() {
         );
     }
 }
+
+/// The discovery filter is the tool-level gate, and it must behave the same as the
+/// call gate: a caller whose scopes satisfy no tool learns nothing from `tools/list`.
+/// Tested at the function so the rule is pinned even though today the envelope already
+/// refuses any scope but the read one.
+#[test]
+fn tools_list_is_filtered_by_the_callers_scopes() {
+    let all = tools().len();
+    let none = crate::connector::Caller {
+        client_id: "agent-x".into(),
+        app_id: None,
+        scopes: Vec::new(),
+    };
+    let read = crate::connector::Caller {
+        client_id: "agent-x".into(),
+        app_id: None,
+        scopes: vec![crate::connector::READ_SCOPE.to_string()],
+    };
+    // A reader (no delegation) sees everything, unchanged from before the connector.
+    assert_eq!(
+        tools()
+            .iter()
+            .filter(|tool| crate::connector::scope_allows(None, tool.name))
+            .count(),
+        all
+    );
+    assert_eq!(
+        tools()
+            .iter()
+            .filter(|tool| crate::connector::scope_allows(Some(&read), tool.name))
+            .count(),
+        all,
+        "the read scope reaches every tool there is"
+    );
+    assert_eq!(
+        tools()
+            .iter()
+            .filter(|tool| crate::connector::scope_allows(Some(&none), tool.name))
+            .count(),
+        0,
+        "no scope means no tools, and no tool means no data"
+    );
+}
