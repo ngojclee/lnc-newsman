@@ -186,6 +186,19 @@ Yêu cầu qua lane Finance Overview, theo `.docs/legal-sources.md` (repo `lnc-l
 - [x] **217 test xanh** (13 test legal + 1 test hình dạng feed govinfo thật), clippy `-D warnings` sạch, UI build sạch.
 - [ ] Còn chờ chủ dự án: (a) đọc bằng chứng điều khoản trong thẻ Cài đặt rồi quyết có bật govinfo; (b) nếu muốn Légifrance → đăng ký PISTE lấy khóa + trả lời hạn mức; (c) EUR-Lex và vbpl.vn chỉ mở khi đọc được điều khoản của trang (hoặc có kênh công bố chính thức).
 
+### Bật govinfo trên production — chặn bởi egress của NAS (12/11/2026)
+
+Chủ dự án duyệt bật govinfo. Đã làm đúng thứ tự và **hoàn lại trạng thái tắt** sau khi phát hiện chặn:
+
+- [x] Bật vùng `us` → 200; bật `govinfo` → 200. Registry đúng, source collector **`legal-govinfo` (id 6, T1, 12 giờ/lần, chủ đề politics)** được tạo tự động như thiết kế.
+- [x] Lượt fetch đầu: `{"status":"error","error":"timeout","items_new":0}` sau **10 575 ms** — đúng bằng `connect_timeout` 10 s của `fetch::Fetcher`. `consecutive_failures = 1`, tự tạm dừng ở 5.
+- [ ] **Nguyên nhân không nằm ở Newsman**: container `lnc-newsman` (172.31.0.2) không mở được TCP ra ngoài. Đo từ chính container: `1.1.1.1:443` fail, `8.8.8.8:53` fail, `104.17.120.181:443` (govinfo) fail, gateway `172.31.0.1` từ chối. DNS vẫn phân giải được (cả IPv4 và IPv6), nên đây là chặn ở tầng chuyển tiếp/NAT chứ không phải DNS.
+- **Đối chứng** (cùng lúc, cùng host, cùng lệnh): `immich_server` 172.19.0.5 → **200**; `kavita` 172.21.0.2 → **200**; `vaultwarden` 172.22.0.2 → **200**; `lazylibrarian` 172.18.0.4 → **200**; `fail2ban` 172.28.0.2 → **200**; `couchdb` 172.17.0.2 → **200**. Ngược lại `lnc-library` 172.29.0.2 → **FAIL**, `lnc-cwa-trial` 172.30.0.2 → **FAIL**. Container network `host` (`wolweb`) ra ngoài **OK**.
+- Cả ba mạng hỏng (`172.29`, `172.30`, `172.31`) đều được tạo trong ~40 giờ gần đây (12/11 12:36, 12/11 00:21, 12/11 16:12); các mạng còn chạy được đều cũ hơn. Từ trong `lnc-newsman` gọi **cùng host** `172.18.0.3:8081` thì **OPEN**, nhưng gọi LAN `10.20.1.105:9443`, firewall `10.20.0.1` hay `1.1.1.1:443` đều **FAIL** — tức nó không ra khỏi bridge được, dù `container→container` cùng host vẫn thông. Bridge đều `up`, `carrier=1`, `mtu=1500`; `ip_forward=1` và `forwarding=1` cho mọi bridge ⇒ loại trừ MTU và loại trừ thiếu forwarding toàn cục.
+- **Chưa chốt được cơ chế**: `iptables -t nat -S` trong netns của `netbird-nas` chỉ thấy chain rỗng, nhưng lệnh đó cảnh báo "iptables-legacy tables present" và ASUS ADM dùng iptables kiểu khác — nên **không kết luận** là thiếu luật `MASQUERADE`. Cần người quản trị NAS đọc luật NAT thật (hoặc `docker network inspect` + thử đổi bridge) trước khi sửa.
+- [x] Đã **tắt lại** `govinfo` và vùng `us` (200 cả hai). Bốn nguồn luật trở về `enabled=false`, đúng như bản phát hành 0.4.2. Không có bài nào được lưu, không có cấu hình nào bị đổi ngoài hai công tắc vừa hoàn lại.
+- [ ] **Cần chủ dự án / hạ tầng**: khôi phục NAT cho các bridge mới trên NAS Saigon (ASUSTOR ADM, Docker 29.6.2) — hoặc cho Newsman chạy `network_mode: host` như `lnc-social-dl`/`wolweb`. Không tự sửa firewall/NAT của NAS: ngoài phạm vi và không có phê duyệt cho thay đổi hạ tầng dùng chung. Sau khi thông, bật lại chỉ là hai nút và lượt fetch sẽ lưu ~100 public law như đã chứng minh ở local.
+
 ## Rà soát giao diện cuối (checklist dùng chung, mục U)
 
 Nhận từ lane Library (`.docs/task.md` bên đó, mục "U — Rà soát giao diện cuối"). Nguyên tắc: app cho người đọc cuối — không lỗi cân đối, không chữ kiểu ghi chú kỹ thuật.
