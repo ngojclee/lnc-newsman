@@ -206,13 +206,26 @@ pub fn resolve(state: &SharedState) -> Resolved {
             None => (DEFAULT_AUDIENCE.to_string(), Source::Unset),
         },
     };
-    // The ceiling can only ever narrow: an admin value cannot grant a scope this
-    // build does not implement, because the tool table is the final word.
-    let max_scopes = cfg
+    // The ceiling can only ever narrow. Whatever an operator types into
+    // `CONNECTOR_MAX_SCOPES` is intersected with the one scope this build implements,
+    // so a typo (`newsman:read `, `newsman:write`, a scope copied from another app)
+    // cannot make every delegated call fail with an unexplained 403. The admin endpoint
+    // still refuses an unsupported scope outright so the mistake is visible there; env
+    // is deploy-time and has no such moment, so it is filtered instead.
+    let requested = cfg
         .max_scopes
         .clone()
         .or_else(|| stored_setting(state, MAX_SCOPES_KEY).map(|value| split_scopes(&value)))
         .unwrap_or_else(|| vec![READ_SCOPE.to_string()]);
+    let max_scopes: Vec<String> = requested
+        .into_iter()
+        .filter(|scope| scope == READ_SCOPE)
+        .collect();
+    let max_scopes = if max_scopes.is_empty() {
+        vec![READ_SCOPE.to_string()]
+    } else {
+        max_scopes
+    };
     Resolved {
         bearer,
         delegation_secret,

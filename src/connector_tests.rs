@@ -425,17 +425,14 @@ fn a_scope_outside_the_ceiling_is_forbidden() {
     assert_eq!(body["error"], DENIED_DELEGATION);
 }
 
+/// With a single supported scope, a caller granted any *other* scope is refused at
+/// the envelope: the ceiling is the read scope and nothing else, so "granted something
+/// this app cannot use" is exactly "scope outside the ceiling". The tool-level filter
+/// still matters for a future build that adds a second scope; today this test pins
+/// the shape of that refusal so the two gates cannot silently diverge.
 #[test]
-fn a_signed_caller_without_the_read_scope_sees_no_tools() {
+fn a_signed_caller_without_the_read_scope_is_refused() {
     let state = state_with_connector();
-    // Valid signature, valid scope string, but a scope this app cannot use to read:
-    // the call is authenticated and then filtered, which is the tool-level gate rather
-    // than the envelope gate.
-    let mut wide = state_with_connector();
-    std::sync::Arc::get_mut(&mut wide)
-        .expect("state is not shared yet")
-        .connector
-        .max_scopes = Some(vec![READ_SCOPE.into(), "other:read".into()]);
     let sh = signed(
         SECRET,
         DEFAULT_AUDIENCE,
@@ -445,16 +442,14 @@ fn a_signed_caller_without_the_read_scope_sees_no_tools() {
         now(),
         None,
     );
-    let app = crate::router(wide);
+    let app = crate::router(state);
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (status, body) =
         runtime.block_on(async move { send(app, hub_request(&sh, tools_list())).await });
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        names(&body).is_empty(),
-        "a caller with no read scope must discover nothing: {body}"
-    );
-    drop(state);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], DENIED_DELEGATION);
+    // And with no caller at all (a reader key), every tool is still visible.
+    assert!(crate::connector::scope_allows(None, "regions"));
 }
 
 #[test]
@@ -599,4 +594,28 @@ fn an_unpaired_connector_refuses_every_hub_call() {
         StatusCode::UNAUTHORIZED,
         "an unpaired connector is indistinguishable from a wrong token: {body}"
     );
+}
+
+/// An operator typing a bad value into `CONNECTOR_MAX_SCOPES` must not silently make
+/// every delegated call fail: the ceiling is intersected with what this build
+/// implements. The admin endpoint refuses the same value outright, because there a
+/// person is watching and the mistake should be visible.
+#[test]
+fn a_nonsense_env_ceiling_narrows_to_the_real_scope() {
+    for ceiling in [
+        vec!["newsman:write".to_string(), "fleet:read".to_string()],
+        vec![READ_SCOPE.to_string(), "other:read".to_string()],
+        Vec::new(),
+    ] {
+        let mut state = state_with_connector();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("not shared")
+            .connector
+            .max_scopes = Some(ceiling.clone());
+        assert_eq!(
+            resolve(&state).max_scopes,
+            vec![READ_SCOPE.to_string()],
+            "{ceiling:?} must narrow to the one scope this build implements"
+        );
+    }
 }
