@@ -207,6 +207,10 @@ Ba nguồn **không** dùng để kết luận "không có build":
 | `GET /api/endpoints/2/docker/events?type=image` | Trả **rỗng** cả khi build đang chạy — đã kiểm, vô dụng làm bằng chứng phủ định |
 | `AutoUpdate.Interval` | Là chu kỳ poll, không phải "mỗi push một webhook" |
 
+**Cả "log không nhích trong 20 giây" cũng không phải bằng chứng**: `cargo build --release`
+ở bước cuối im lặng nhiều phút. Tôi đã dùng đúng phép đo đó để kết luận "build đã chết" và
+sai — build vẫn chạy bình thường.
+
 Nguồn **đúng** — log của container Portainer, đọc qua Docker proxy (read-only):
 
 ```
@@ -216,9 +220,18 @@ GET /api/endpoints/2/docker/containers/<portainer-id>/logs?stdout=1&stderr=1&tai
 Trả về frame 8-byte (4 byte stream + 4 byte big-endian length) rồi tới payload. Build đang
 chạy thì thấy buildkit ở đó, ví dụ `#25 186.9 Compiling lnc-newsman v0.5.0 (/src)`.
 
-Cũng đừng kết luận từ `ConfigHash` một mình: trong lúc build, nó vẫn ghi **commit cũ**
-(`5c9c945`) trong khi head đã là `e255d20` — Portainer cập nhật hash khi build xong, không
-phải khi bắt đầu.
+Cũng đừng kết luận từ `ConfigHash` một mình: trong lúc build, nó vẫn ghi **commit cũ** —
+Portainer cập nhật hash khi build xong, không phải khi bắt đầu. `Status: 3` còn tệ hơn: một
+stack đã build xong và swap container vẫn có thể còn `Status=3` một lúc.
+
+**Và một biến thể nữa, do session Library chỉ ra:** "tôi không lấy được lock" không phải
+"lock bị kẹt". Một lệnh thất bại lặp lại trông giống hệt một hệ thống hỏng. Cách phân biệt
+là tìm một thao tác **khác** chứng minh tài nguyên còn dùng được — ví dụ `PUT
+/api/stacks/108/git/redeploy` trả 200 — chứ không lặp lại thao tác đã thất bại.
+
+**Phép đo đáng dùng là loại mà kết quả âm là bằng chứng thật.** Có image mới xuất hiện,
+hoặc container bị thay (id khác đi) — đó là bằng chứng không thể nhiễu. "Không có gì mới"
+thì có hàng chục cách giải thích.
 
 ## P7 Telegram channel (2026-11-12, v0.4.1)
 
