@@ -163,6 +163,36 @@ fn the_relay_body_is_a_bot_api_call_with_the_topic() {
     assert!(plain.get("message_thread_id").is_none());
 }
 
+/// Contract check against the fleet relay as it is deployed (cygnus-gateway 0.3.0.0,
+/// `app/server.js` `handleSend`). The gateway accepts either a flat Bot-API body or
+/// `{method, payload}`; we send the latter, never a `bot` field — an api key may be
+/// pinned to one bot, and naming another bot is a 403 there.
+#[test]
+fn the_relay_request_matches_the_gateway_send_contract() {
+    let body = relay_body(-1001, Some(9), "title
+https://example.test/a");
+    let keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        vec!["method", "payload"],
+        "the gateway reads `payload` when present and rejects an unknown method"
+    );
+    assert_eq!(body["method"], "sendMessage");
+    assert!(
+        body.get("bot").is_none(),
+        "a pinned api key must not be overridden by a bot field"
+    );
+    // The gateway forwards `payload` verbatim to the Bot API, so the fields it requires
+    // are exactly the ones we set.
+    let payload = body["payload"].as_object().unwrap();
+    assert!(payload.contains_key("chat_id"));
+    assert!(payload.contains_key("text"));
+    assert!(payload.contains_key("message_thread_id"));
+    // `Bearer <cyg_* api key>` is what we send on the request; the token never enters
+    // the body, so it cannot be forwarded to Telegram in a log or an error message.
+    assert!(!body.to_string().contains("token"));
+}
+
 #[test]
 fn the_message_is_the_title_and_link_and_fits_telegram() {
     let text = alert_text("  Bitcoin hits a record  ", "https://example.test/a");

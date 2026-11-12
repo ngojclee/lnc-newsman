@@ -122,7 +122,7 @@ Cập nhật: 12/11/2026 (v0.4.1 — P7 kênh Telegram relay/direct, sửa sideb
 
 ## P7 — kênh Telegram (12/11/2026, v0.4.1)
 
-- [x] Khám phá API thật trước khi viết client: `telegram.lengoc.me` = `cygnus-gateway` 0.2.5.1, `POST /send` `{bot?, method, payload}`, auth `Authorization: Bearer <api key>`; `payload` là nguyên văn body Bot API nên `message_thread_id` (forum topic) đi qua được, không cần sửa relay.
+- [x] Khám phá API thật trước khi viết client: `telegram.lengoc.me` = `cygnus-gateway` (đọc 0.2.5.1, live 0.3.0.0 — đường gửi không đổi), `POST /send` `{method, payload}` hoặc body Bot API phẳng, auth `Authorization: Bearer <cyg_* api key>` / `x-token`; `payload` đi nguyên văn nên `message_thread_id` (forum topic) dùng được, không cần sửa relay. Không có `/api/send`; key có thể **ghim 1 bot** nên client không gửi trường `bot`. Có test hợp đồng khóa hình dạng request.
 - [x] `telegram_mode` = `relay | direct | off` (`env_or_cfg`: `TELEGRAM_MODE` thắng setting); `TELEGRAM_RELAY_BASE_URL` chỉ https; `TELEGRAM_ALLOWED_HOSTS`; host relay fleet luôn được phép.
 - [x] Secret ghi-một-chiều trong vault: `telegram-relay-token`, `telegram-bot-token`; `Endpoint` có `Debug` tự viết để log không in URL chứa token; API chỉ trả "đã có / chưa có".
 - [x] Migration 16 `alert_telegram_outbox`; sweep chỉ ghi hàng đợi, flusher 30s gửi ngoài khoá DB, claim `pending → sending` trước khi gọi nên mỗi cảnh báo gửi tối đa một lần, hàng kẹt sau 300s được lấy lại, 5 lần thử rồi `failed`.
