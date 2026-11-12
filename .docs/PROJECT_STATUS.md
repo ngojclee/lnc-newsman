@@ -169,6 +169,17 @@ Owner's decision: let an outside agent write analyses and notes through the Busi
 - **Tests: 254** (11 write tests + 1 argument test), clippy `-D warnings` clean, UI build clean. Measured over real HTTP: no scope → `-32601`, with scope → note stored and attributed to the client id, forged author → refused, bad citation → refused, audit row present, reader API key path unchanged.
 - Migration **18** is additive only (four `CREATE TABLE`, no `DROP`, no `DELETE`); verified applying cleanly on a fresh database before deploying.
 
+## Infinite scroll (2026-11-12, v0.5.0)
+
+Owner's request: drop the "Xem thêm" button and load the next page when the list reaches the bottom.
+
+- One hook, `useInfiniteScroll`, used by every paginated list. The REST API is offset-based, so **only the trigger changed** — no cursor, no new endpoint.
+- **One attempt per rendered page**: the observer disconnects on firing and the effect rebuilds it only after the list grew or a load finished, so a sentinel left in view cannot fire twice.
+- **A load that adds nothing stops the loop** and brings the button back with "Không tải thêm được — thử lại". A failed request must not become an invisible spin.
+- The sentinel is rendered only when a page can still arrive (a capped home rail never gets one), and a browser without `IntersectionObserver` keeps the button.
+- **Measured in a real browser** against 120 stored articles: 30 → 60 → 120 while scrolling, switching section resets instead of appending, and a failing page request restores the button and stops.
+- **Tooling note worth keeping**: the in-app browser pane **defers `IntersectionObserver` callbacks** for a hidden page and while the page is scrolled by script — a control observer on a fully visible element also reported zero. The count only moves with a real scroll (`computer{action:"scroll"}`) and the pane displayed. Do not conclude the code is broken from a scripted measurement.
+
 ## P7 Telegram channel (2026-11-12, v0.4.1)
 
 Requested by the owner through the UI lane: alerts into Telegram, two configuration paths, one decision shared with LNC Library (`.docs/l8-agent-chat-telegram.md`, part B).
