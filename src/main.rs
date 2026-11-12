@@ -10,12 +10,15 @@ mod collector_tests;
 mod config;
 mod connectors;
 mod db;
+#[cfg(test)]
+mod docs_tests;
 mod documents;
 mod feed;
 mod fetch;
 mod filings;
 mod hub;
 mod llm;
+mod mcp;
 mod providers;
 mod regions;
 mod secrets;
@@ -202,7 +205,10 @@ fn router(state: SharedState) -> Router {
             axum::routing::put(secrets::put).delete(secrets::remove),
         )
         .route("/api/admin/tax-rules", get(tax::declared_rules))
-        .route("/api/admin/alerts/rules", get(alerts::list_rules).post(alerts::put_rule))
+        .route(
+            "/api/admin/alerts/rules",
+            get(alerts::list_rules).post(alerts::put_rule),
+        )
         .route(
             "/api/admin/alerts/rules/{slug}",
             axum::routing::put(alerts::toggle_rule),
@@ -255,6 +261,8 @@ fn router(state: SharedState) -> Router {
         .route("/api/v1/companies/{id}/facts", get(filings::list_facts))
         .route("/api/v1/tax-calendar", get(tax::list_calendar))
         .route("/api/v1/articles", get(collector::articles))
+        // P8: read-only MCP over the same data, same credentials as REST v1.
+        .route("/mcp", post(mcp::handle).get(mcp::get_info))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session_or_api,
@@ -451,9 +459,7 @@ async fn login(
     let peer = peer
         .map(|axum::Extension(ConnectInfo(addr))| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".into());
-    let forwarded_for = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok());
+    let forwarded_for = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let client = auth::client_key(&peer, forwarded_for, &state.cfg.trusted_proxies);
     if !state
         .login_limiter
@@ -543,7 +549,7 @@ async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> Respons
 
 async fn api_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     Json(
-        serde_json::json!({"ok":true,"service":"lnc-newsman","version":state.cfg.version,"api":"v1","mcp_available":false,"phase":"P1-collector"}),
+        serde_json::json!({"ok":true,"service":"lnc-newsman","version":state.cfg.version,"api":"v1","mcp_available":true,"phase":"P1-collector"}),
     )
 }
 fn settings_payload(state: &SharedState) -> anyhow::Result<SettingsResponse> {
@@ -712,11 +718,7 @@ mod tests {
     }
     /// A request carrying a socket peer (what a real server always has) and an
     /// optional X-Forwarded-For, for the login-throttle tests.
-    fn req_from(
-        peer: &str,
-        forwarded_for: Option<&str>,
-        body: &str,
-    ) -> Request<Body> {
+    fn req_from(peer: &str, forwarded_for: Option<&str>, body: &str) -> Request<Body> {
         let mut builder = Request::builder()
             .method("POST")
             .uri("/api/auth/login")

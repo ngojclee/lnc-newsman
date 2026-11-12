@@ -587,12 +587,22 @@ fn labels_for(
           ORDER BY CASE origin WHEN 'human' THEN 0 WHEN 'llm' THEN 1 ELSE 2 END, value",
     )?;
     let rows = stmt.query_map([json], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
     for row in rows {
         let (id, kind, value) = row?;
-        let Some(labels) = out.get_mut(&id) else { continue };
-        let bucket = if kind == "topic" { &mut labels.topics } else { &mut labels.entities };
+        let Some(labels) = out.get_mut(&id) else {
+            continue;
+        };
+        let bucket = if kind == "topic" {
+            &mut labels.topics
+        } else {
+            &mut labels.entities
+        };
         if !bucket.contains(&value) {
             bucket.push(value);
         }
@@ -659,7 +669,10 @@ pub struct SourceFacet {
     pub articles: i64,
 }
 
-pub fn source_facets(db: &crate::db::Database, region: Option<&str>) -> rusqlite::Result<Vec<SourceFacet>> {
+pub fn source_facets(
+    db: &crate::db::Database,
+    region: Option<&str>,
+) -> rusqlite::Result<Vec<SourceFacet>> {
     let mut stmt = db.conn.prepare(
         "WITH RECURSIVE up(code) AS (
            SELECT code FROM regions

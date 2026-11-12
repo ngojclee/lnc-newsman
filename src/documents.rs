@@ -271,12 +271,31 @@ pub async fn list_documents(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let result = (|| -> anyhow::Result<Vec<DocumentRow>> {
+    match list(&db, region.as_deref(), topic, query, limit) {
+        Ok(data) => {
+            Json(serde_json::json!({ "data": data, "effective": effective })).into_response()
+        }
+        Err(err) => internal_error(err),
+    }
+}
+
+/// The listing both `/api/v1/documents` and the MCP tool use. `q` runs on the folded
+/// FTS index first; hits are then filtered by the same region/topic rules, so a search
+/// can never leak a row a plain listing would hide.
+pub fn list(
+    db: &db::Database,
+    region: Option<&str>,
+    topic: Option<&str>,
+    query: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<DocumentRow>> {
+    let effective = regions::effective(db, region)?;
+    (|| -> anyhow::Result<Vec<DocumentRow>> {
         // Search runs on the folded FTS index first; the identifiers it returns are then
         // filtered by the same region/topic rules as a plain listing, so a hidden region
         // can never leak through a search hit.
         let matched_keys: Vec<String> = match query {
-            Some(text) => search(&db, text, limit.saturating_mul(4).max(50))?
+            Some(text) => search(db, text, limit.saturating_mul(4).max(50))?
                 .into_iter()
                 .map(|(provider, number)| format!("{provider}\u{1}{number}"))
                 .collect(),
@@ -316,13 +335,7 @@ pub async fn list_documents(
             },
         )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })();
-    match result {
-        Ok(data) => {
-            Json(serde_json::json!({ "data": data, "effective": effective })).into_response()
-        }
-        Err(err) => internal_error(err),
-    }
+    })()
 }
 
 #[cfg(test)]

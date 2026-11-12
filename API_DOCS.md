@@ -105,10 +105,46 @@ The built-in pack (`global`, `eu`, `eu/fr`, `us`, `vn`) is embedded in the binar
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/status` | Service version, `phase: "P1-collector"` and `mcp_available: false` |
+| GET | `/api/status` | Service version, `phase: "P1-collector"` and `mcp_available: true` |
 | GET | `/api/v1/topics` | Enabled topics only |
 | GET | `/api/v1/regions` | Enabled regions only, plus the effective set: `{ data, effective }` |
-| GET | `/api/v1/articles` | Newest first. Query: `topic` (includes descendant topics), `region` (that region plus its ancestors; 400 `invalid_region` if the region is unknown or disabled), `limit` 1–100 (default 50), `offset` 0–10,000. Fields: `id`, `title`, `url`, `published_at`, `fetched_at`, `topic_slug`, `region_code`, `source_name`, `source_tier`. Items under disabled topics or outside the effective region set are hidden |
+| GET | `/api/v1/articles` | Newest first. Query: `topic` (includes descendant topics), `source` (one source slug, applied on top of the same visibility rules), `region` (that region plus its ancestors; 400 `invalid_region` if the region is unknown or disabled), `limit` 1–100 (default 50), `offset` 0–10,000. Fields: `id`, `title`, `url`, `published_at`, `fetched_at`, `topic_slug`, `region_code`, `source_name`, `source_tier`. Items under disabled topics or outside the effective region set are hidden |
+
+## Alerts (P7 foundation)
+
+Session only — an alert inbox is per person, so a read-only API key cannot read it.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/alerts` | Inbox, newest first. Query: `unread=1` to narrow, `limit` 1–200. Answers `{ data, unread }` |
+| POST | `/api/alerts/{id}/read` | Marks one delivery read; answers `{"changed": boolean}` |
+| POST | `/api/alerts/read-all` | Marks every unread delivery read; answers `{"changed": n}` |
+| GET | `/api/admin/alerts/rules` | Every rule, enabled or not, plus the channel list this build can deliver |
+| POST | `/api/admin/alerts/rules` | Upserts a rule. A channel other than `in-app` is refused with 400 `channel_not_implemented` |
+| PUT | `/api/admin/alerts/rules/{slug}` | `{ "enabled": boolean }` |
+| POST | `/api/admin/alerts/sweep` | Runs one sweep now; answers `{ created, skips }` |
+
+A delivery is written at most once per (rule, article) — enforced by a UNIQUE row, not by sweep bookkeeping. Quiet-hour skips are logged and **do not** consume the event, so it fires after the window. Matching reuses the reader's enabled-region and enabled-topic predicates.
+
+## MCP endpoint (P8, offline part)
+
+`POST /mcp` speaks JSON-RPC 2.0 and accepts the same credentials as REST v1 (session cookie or a read-only API key). `GET /mcp` answers 405 `stream_not_supported`: this server does not open a server-sent event stream.
+
+Methods: `initialize` (protocol `2025-06-18`, `serverInfo.name` = `lnc-newsman`), `ping`, `tools/list`, `tools/call`. A JSON-RPC batch is answered in order. An unknown method returns `-32601`; an unknown tool returns `-32602`; a bad tool argument is reported **inside** the result as `isError: true`, so a client can show the message without treating it as a transport failure.
+
+Every tool is read-only and answers through the same function the matching REST endpoint calls, so it can never expose a row REST hides. A tool that needs provider or phase data that does not exist yet is **not listed** — a missing tool is better than one answering "no data" for months.
+
+| Tool | Arguments | Same data as |
+|---|---|---|
+| `newsman__regions` | — | `GET /api/v1/regions` |
+| `newsman__topics` | — | `GET /api/v1/topics` |
+| `newsman__latest_articles` | `region?`, `topic?`, `limit?` 1–100 | `GET /api/v1/articles` |
+| `newsman__documents` | `region?`, `topic?`, `q?`, `limit?` 1–100 | `GET /api/v1/documents` |
+| `newsman__tax_calendar` | `region?`, `horizon_days?` 1–366 | `GET /api/v1/tax-calendar` |
+| `newsman__series` | `region?`, `limit?` 1–500 | `GET /api/v1/series` |
+| `newsman__observations` | `code` (required), `limit?` 1–200 | `GET /api/v1/series/{code}/observations` |
+
+Still to come with their phases: `newsman__market_snapshot` (needs live provider data), `newsman__region_brief` (P6) and a write surface (none is planned — administration stays on the session-authenticated web UI).
 
 ## Secrets and connectors (P2 foundation)
 
@@ -160,10 +196,12 @@ Configuration is environment-only: `HUB_BASE_URL`, `HUB_ALLOWED_HOSTS` (comma-se
 
 `MANAGEMENT_KEY` is currently **environment-managed**, not a bootstrap-to-runtime store. Changing it requires restart and invalidates old cookie signatures. The server stores only hashes of signed random session tokens, with expiry and logout revocation in SQLite. `COOKIE_SECURE` defaults to `true`; set it to `false` only for isolated HTTP testing. Login throttling is process-local and keyed by the TCP peer by default. When the request arrives from a socket peer listed in
 `TRUSTED_PROXIES` (comma-separated IPs, e.g. the Caddy edge `10.20.0.3`), the key becomes the right-most valid address in
-`X-Forwarded-For` — the one that proxy appended. Earlier entries are caller-supplied and are ignored, and a malformed value
+`X-Forwarded-For` — the one that proxy appended. **Measured 2026-11-12:** in the deployed stack the socket peer is the Docker
+bridge gateway (`172.31.0.1`) for both the domain and the published port, so a `TRUSTED_PROXIES` naming the edge never matches
+and all callers share one bucket. See `.docs/PROJECT_STATUS.md` for the measurement and the options; nothing was changed. Earlier entries are caller-supplied and are ignored, and a malformed value
 falls back to the proxy's own address. Empty `TRUSTED_PROXIES` trusts nobody, which means a shared reverse proxy makes every
 user share one limit. Multi-replica coordination, management key rotation UI, encrypted provider secrets, audit chain and independent reader accounts remain unimplemented. The application is not production-ready.
 
 ## Planned only
 
-Stories, reports, alerts, timeline, search, LLM/Agent Hub integration, `/mcp`, the pack files for P2–P4 and every data connector are not implemented. Do not configure clients against those paths yet.
+Stories, reports, timeline, in-app search across items, the Hub registration of `/mcp` (the endpoint itself exists), the pack files for P2–P4 that have no loader yet, and every live data connector are not implemented. Do not configure clients against those paths yet.

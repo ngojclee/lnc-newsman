@@ -29,8 +29,7 @@ pub const CHANNEL_IN_APP: &str = "in-app";
 /// Channels named by the plan but not implemented in this phase. Kept in one place so
 /// the API can reject them explicitly instead of silently accepting a channel nothing
 /// delivers to.
-pub const UNIMPLEMENTED_CHANNELS: &[&str] =
-    &["telegram", "email", "webhook", "imap", "slack"];
+pub const UNIMPLEMENTED_CHANNELS: &[&str] = &["telegram", "email", "webhook", "imap", "slack"];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Rule {
@@ -114,12 +113,7 @@ pub fn in_quiet_hours(quiet_from: &str, quiet_to: &str, now: u32) -> bool {
 
 /// Decide what a rule does with an article. `last_fired` is the rule's own timestamp,
 /// `already_delivered` comes from the UNIQUE delivery row.
-pub fn decide(
-    rule: &Rule,
-    now: i64,
-    in_quiet: bool,
-    already_delivered: bool,
-) -> Outcome {
+pub fn decide(rule: &Rule, now: i64, in_quiet: bool, already_delivered: bool) -> Outcome {
     if !rule.enabled {
         return Outcome::Skip("disabled");
     }
@@ -206,9 +200,10 @@ pub fn matching_articles(
          ORDER BY a.id DESC LIMIT :lim"
     );
     let mut stmt = db.conn.prepare(&sql)?;
-    let rows = stmt.query_map(named_params!{":mv": rule.match_value, ":lim": limit}, |r| {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-    })?;
+    let rows = stmt.query_map(
+        named_params! {":mv": rule.match_value, ":lim": limit},
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     rows.collect()
 }
 
@@ -224,7 +219,11 @@ pub fn sweep(db: &db::Database, now: i64) -> anyhow::Result<(usize, Vec<(String,
         }
         // Re-read the rule's own firing time per article: once it fires, the cooldown
         // starts, so a single sweep cannot deliver a burst from one rule.
-        let quiet = in_quiet_hours(&rule.quiet_from, &rule.quiet_to, minutes_of_day(&rule.timezone, now));
+        let quiet = in_quiet_hours(
+            &rule.quiet_from,
+            &rule.quiet_to,
+            minutes_of_day(&rule.timezone, now),
+        );
         for (article_id, title, url) in matching_articles(db, &rule, 200)? {
             let delivered: bool = db
                 .conn
@@ -405,7 +404,12 @@ pub fn validate(input: &RuleInput) -> Result<(), &'static str> {
     }
     // Only the in-app channel exists. A stored channel nothing delivers to would look
     // like a working notification while sending nothing, so it is refused outright.
-    for channel in input.channels.split(',').map(str::trim).filter(|c| !c.is_empty()) {
+    for channel in input
+        .channels
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         if channel != CHANNEL_IN_APP {
             return Err("channel_not_implemented");
         }
@@ -490,10 +494,16 @@ pub struct InboxQuery {
     limit: Option<i64>,
 }
 
-pub async fn list_inbox(State(state): State<SharedState>, Query(query): Query<InboxQuery>) -> Response {
+pub async fn list_inbox(
+    State(state): State<SharedState>,
+    Query(query): Query<InboxQuery>,
+) -> Response {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let db = state.db.lock().expect("database lock poisoned");
-    match (inbox(&db, query.unread.unwrap_or(0) == 1, limit), unread_count(&db)) {
+    match (
+        inbox(&db, query.unread.unwrap_or(0) == 1, limit),
+        unread_count(&db),
+    ) {
         (Ok(data), Ok(unread)) => {
             Json(serde_json::json!({"data": data, "unread": unread})).into_response()
         }
@@ -616,7 +626,10 @@ mod tests {
 
     #[test]
     fn a_disabled_rule_never_fires() {
-        assert_eq!(decide(&rule(false, None, 0), 100, false, false), Outcome::Skip("disabled"));
+        assert_eq!(
+            decide(&rule(false, None, 0), 100, false, false),
+            Outcome::Skip("disabled")
+        );
     }
 
     #[test]
@@ -651,14 +664,21 @@ mod tests {
     #[test]
     fn quiet_hours_outrank_the_cooldown_without_marking_delivery() {
         let r = rule(true, Some(1_000), 600);
-        assert_eq!(decide(&r, 10_000, true, false), Outcome::Skip("quiet_hours"));
+        assert_eq!(
+            decide(&r, 10_000, true, false),
+            Outcome::Skip("quiet_hours")
+        );
     }
 
     #[test]
     fn timezone_shifts_the_local_minute() {
         // 2026-01-01T00:30:00Z is 07:30 in Vietnam.
         let t = 1_767_227_400; // 2026-01-01T00:30:00Z
-        assert!(in_quiet_hours("07:00", "08:00", minutes_of_day("Asia/Ho_Chi_Minh", t)));
+        assert!(in_quiet_hours(
+            "07:00",
+            "08:00",
+            minutes_of_day("Asia/Ho_Chi_Minh", t)
+        ));
         assert!(!in_quiet_hours("07:00", "08:00", minutes_of_day("UTC", t)));
     }
 

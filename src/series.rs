@@ -411,38 +411,45 @@ pub async fn list_series(
         Ok(codes) => codes,
         Err(err) => return internal_error(err),
     };
-    let result = (|| -> rusqlite::Result<Vec<SeriesRow>> {
-        let mut stmt = db.conn.prepare(
-            "SELECT code,provider,region,label_vi,label_en,unit,frequency,attribution FROM series
-             WHERE enabled=1 AND region IN (SELECT value FROM json_each(?1))
-             ORDER BY region,code LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(
-            params![
-                serde_json::to_string(&effective).unwrap_or_else(|_| "[]".into()),
-                limit
-            ],
-            |r| {
-                Ok(SeriesRow {
-                    code: r.get(0)?,
-                    provider: r.get(1)?,
-                    region: r.get(2)?,
-                    label_vi: r.get(3)?,
-                    label_en: r.get(4)?,
-                    unit: r.get(5)?,
-                    frequency: r.get(6)?,
-                    attribution: r.get(7)?,
-                })
-            },
-        )?;
-        rows.collect()
-    })();
-    match result {
+    match list_in(&db, &effective, limit) {
         Ok(data) => {
             Json(serde_json::json!({ "data": data, "effective": effective })).into_response()
         }
         Err(err) => internal_error(err),
     }
+}
+
+/// Enabled series whose region is in `effective`. Shared by `/api/v1/series` and the
+/// MCP `newsman__series` tool so both obey the same visibility rules.
+pub fn list_in(
+    db: &db::Database,
+    effective: &[String],
+    limit: i64,
+) -> rusqlite::Result<Vec<SeriesRow>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT code,provider,region,label_vi,label_en,unit,frequency,attribution FROM series
+         WHERE enabled=1 AND region IN (SELECT value FROM json_each(?1))
+         ORDER BY region,code LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            serde_json::to_string(effective).unwrap_or_else(|_| "[]".into()),
+            limit
+        ],
+        |r| {
+            Ok(SeriesRow {
+                code: r.get(0)?,
+                provider: r.get(1)?,
+                region: r.get(2)?,
+                label_vi: r.get(3)?,
+                label_en: r.get(4)?,
+                unit: r.get(5)?,
+                frequency: r.get(6)?,
+                attribution: r.get(7)?,
+            })
+        },
+    )?;
+    rows.collect()
 }
 
 pub async fn list_observations(

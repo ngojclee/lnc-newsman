@@ -24,7 +24,10 @@ mod tests {
         seen.dedup();
         assert_eq!(seen.len(), READER_MODES.len(), "duplicate reader mode");
         for dark in DARK_MODES {
-            assert!(READER_MODES.contains(&dark), "{dark} is not an offered mode");
+            assert!(
+                READER_MODES.contains(&dark),
+                "{dark} is not an offered mode"
+            );
         }
         assert!(READER_MODES.len() >= DARK_MODES.len());
     }

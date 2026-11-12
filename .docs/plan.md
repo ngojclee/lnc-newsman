@@ -256,12 +256,12 @@ log. Chỉ cột "đã nghiệm thu" mới được coi là xong.
 | P1.5 | Cây vùng + region pack | P1 (danh mục nguồn) | Thêm thư mục vùng mới → xuất hiện ở trạng thái tắt sau khi nạp; chọn FR trả cả EU; 39 test | đã làm + chủ dự án duyệt; **nguồn thật chưa nghiệm thu** |
 | P2 | Kho secret, khung connector, chuỗi thời gian, connector đầu | P1.5 (vùng) | Xem 5.3 | đã làm + duyệt; **nhà cung cấp thật chưa nghiệm thu** |
 | P3 | Văn bản chính thức & thuế, lịch thuế | P1.5 | Xem 5.4 | nền tảng đã làm + duyệt; **hạn nộp chưa xác minh** |
-| P4 | Chứng khoán: chỉ số, watchlist, công bố | P2 (series) + P3 (documents) | Xem 5.5 | **đề xuất**, chưa làm |
+| P4 | Chứng khoán: chỉ số, watchlist, công bố | P2 (series) + P3 (documents) | Xem 5.5 | nền tảng filings **đã làm** (kho + connector EDGAR, chưa chạy thật); **watchlist/chỉ số chưa làm** |
 | P5 | Phân loại + tóm tắt bằng LLM, gom story | P1 (bài) + P2 (secret cho khóa LLM) | Xem 5.6 | nền tảng offline **đã làm** (nhãn luật + API + UI, đo 96%/84%); **chưa có LLM thật, chưa tóm tắt/gom story** |
 | P6 | Phân tích/nhận định + báo cáo + scorecard | P5 (phân loại) + P2 (số liệu) | Xem 5.7 | **đề xuất** |
 | P7 | Cảnh báo: chuông, Telegram, email, webhook | P5 + P6 (nội dung để cảnh báo) | Xem 5.8 | nền tảng offline **đã làm** (luật + hộp thư trong app); **Telegram/email/webhook chưa làm** |
 | P8 | REST v1 đầy đủ + `/mcp` + đăng ký Hub | P4–P7 (các endpoint nguồn) | Xem 5.9 | **đề xuất** |
-| P9 | Phát hành lên `10.20.2.1` | P0–P8 theo phạm vi phát hành | Xem 5.10 | **một phần đã làm**: stack repo-build + HTTPS nội bộ đang chạy; sao lưu/khôi phục chưa thử |
+| P9 | Phát hành lên `10.20.2.1` | P0–P8 theo phạm vi phát hành | Xem 5.10 | **một phần đã làm**: stack repo-build + HTTPS nội bộ đang chạy (v0.4.0); sao lưu/khôi phục chưa thử |
 
 Thứ tự bắt buộc: `P0 → P1 → P1.5 → (P2 ━ P3) → P4` và `P1 → P5 → (P6 → P7) → P8 → P9`.
 P2 và P3 độc lập với nhau (chỉ cùng phụ thuộc P1.5), nên đổi thứ tự được. P5 chỉ cần P1 và một
@@ -406,6 +406,14 @@ Thiếu (2) thì trạng thái là "đã làm + test giả lập", không phải
 - **Đầu vào**: P4–P7 (nguồn dữ liệu cho từng endpoint).
 - **Nghiệm thu đo được**: gọi được `newsman__market_snapshot` và `newsman__region_brief` qua Hub
   với đúng 1 khóa; mọi endpoint v1 trả 401 khi không có khóa; OpenAPI/API_DOCS khớp 100% route.
+
+**Đã làm 12/11/2026 (phần offline)**: `POST /mcp` (JSON-RPC 2.0) với 7 tool chỉ-đọc dùng chung
+hàm truy vấn với REST v1 — `regions`, `topics`, `latest_articles`, `documents`, `tax_calendar`,
+`series`, `observations`; không có tool ghi và không có tool cho dữ liệu chưa tồn tại
+(`market_snapshot` chờ dữ liệu thật, `region_brief` thuộc P6). Cùng credential với v1 (session
+hoặc API key chỉ-đọc); `GET /mcp` trả 405 thay vì giả vờ mở stream. Test `src/docs_tests.rs`
+đối chiếu mọi route trong `src/main.rs` với `API_DOCS.md` — lệch một dòng là `cargo test` đỏ.
+Còn lại: đăng ký endpoint lên Agent Hub (cần khóa Hub của chủ dự án).
 - **Rollback**: gỡ connector khỏi Hub; REST v1 không phụ thuộc MCP.
 
 ### 5.10 P9 — phát hành (đề xuất, chưa làm)

@@ -130,6 +130,34 @@ Cập nhật: 11/11/2026 (v0.2.0 — P7 nền tảng cảnh báo offline, P5 nh�
 - [x] `.docs/mobile-apk-plan.md` — **chỉ kế hoạch**: Capacitor vs Tauri 2, màn hình nhập server + kiểm `/health`, API base URL, bearer vs cookie cross-site, cleartext Android, iOS cần macOS; 6 câu hỏi cho chủ dự án.
 - [ ] Build APK thật — **chờ chủ dự án quyết** cách xác thực và phân phối.
 
+## Đồng bộ giao diện với Library (12/11/2026, v0.4.0)
+
+- [x] 6 nền dùng chung (Giấy, Sepia, Xám dịu, Xanh dịu, Đêm, Đen) đặt trên `:root[data-mode]`; `theme-color` đổi theo nền; danh sách mã trùng với `src/themes.rs` (server kiểm `default_reader_mode`).
+- [x] Thanh tab dưới đáy dưới 900px thay sidebar, dùng đúng tên biến/lớp của Library (`--tabbar-h`, `--safe-*`, `--touch`, `.tabbar`, `.tab`).
+- [x] Một lớp `.btn-row` cho mọi hàng nút; `.actions-row` giữ làm bí danh.
+- [x] Sidebar desktop có khối duyệt: lọc nhanh + Chủ đề/Vùng/Nguồn kèm số đếm; chip bỏ lọc ở trang Chủ đề.
+- [x] Trang chủ dạng dải ngang: Mới nhất, Cảnh báo gần đây, Theo dõi — dựng từ endpoint sẵn có.
+- [x] Backend: `GET /api/articles?source=<slug>`; `/api/dashboard` trả số tin theo nguồn.
+- [x] Kiểm trình duyệt thật 1280×800 và 375×812, cả 6 nền, không tràn ngang.
+- [x] `.docs/mobile-apk-plan.md` viết lại cho khớp Library: Capacitor, màn hình địa chỉ server, bearer chỉ-đọc, không cookie cross-site, iOS = PWA; 6 quyết định dùng chung.
+
+## Đo TRUSTED_PROXIES trên production (12/11/2026)
+
+- [x] Đo trong container (`/proc/net/tcp`, chỉ ESTABLISHED): peer TCP là `172.31.0.1` (gateway Docker) cho **cả** đường domain lẫn `http://10.20.2.1:8462`. Vậy `TRUSTED_PROXIES=10.20.0.3` chưa từng khớp, limiter dùng chung một bucket trên production.
+- [x] Ghi kết quả + 4 phương án (chưa áp dụng phương án nào) vào `PROJECT_STATUS.md`.
+- [ ] Chủ dự án chọn phương án cho limiter (trust gateway / host network / đổi khoá đếm / nới hạn mức).
+
+## P8 phần offline — `/mcp` (12/11/2026, v0.4.0)
+
+- [x] `POST /mcp` JSON-RPC 2.0: `initialize`, `ping`, `tools/list`, `tools/call`, batch; cùng credential với REST v1; `GET /mcp` → 405 `stream_not_supported`.
+- [x] 7 tool chỉ-đọc `newsman__*` (regions, topics, latest_articles, documents, tax_calendar, series, observations) — gọi chung hàm với `/api/v1/*`; không có tool ghi, không có tool cho dữ liệu chưa tồn tại.
+- [x] Lỗi: method lạ `-32601`, tool lạ `-32602`, tham số/vùng sai → `result.isError = true` (không phải lỗi transport).
+- [x] Tách `documents::list`, `series::list_in`, `regions::payload` để REST và MCP dùng chung một truy vấn.
+- [x] `src/docs_tests.rs`: route ↔ `API_DOCS.md` khớp 100%, `mcp_available` khớp route `/mcp`; bổ sung các route alerts còn thiếu trong tài liệu.
+- [x] 192 test xanh (7 MCP + 2 tài liệu), clippy `-D warnings` sạch.
+- [x] Kiểm tay trên bản local: `initialize` → protocol `2025-06-18`, `serverInfo.name` `lnc-newsman`; không khóa → 401; `tools/list` 7 tên; gọi `latest_articles` → `isError:false`.
+- [ ] Đăng ký `/mcp` lên Agent Hub — **chờ khóa Hub của chủ dự án**.
+
 ## P6–P9
 
 Xem bảng giai đoạn trong `plan.md` mục 5: P2 kho secret + connector (Bitcoin/on-chain, vĩ mô), P3 văn bản chính thức & thuế, P4 chứng khoán, P5 LLM, P6 phân tích & nhận định, P7 cảnh báo, P8 REST/MCP/Hub, P9 triển khai NAS. Các quyết định cần anh chốt nằm ở `plan.md` mục 8.

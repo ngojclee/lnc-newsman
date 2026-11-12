@@ -31,13 +31,20 @@ fn seed_article(db: &crate::db::Database, title: &str, topic: &str, entity: Opti
         .unwrap();
     let source = db
         .conn
-        .query_row("SELECT id FROM sources WHERE slug='s'", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT id FROM sources WHERE slug='s'", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .unwrap();
     db.conn
         .execute(
             "INSERT INTO articles(canonical_url,title,source_id,topic_slug,fetched_at,region_code)
              VALUES (?1,?2,?3,?4,0,'global')",
-            params![format!("https://example.test/{title}"), title, source, topic],
+            params![
+                format!("https://example.test/{title}"),
+                title,
+                source,
+                topic
+            ],
         )
         .unwrap();
     let id = db.conn.last_insert_rowid();
@@ -97,7 +104,10 @@ fn a_second_matching_event_waits_for_the_cooldown() {
     // 100 s later: inside the 600 s cooldown, so the new article is skipped, not lost.
     let (created, skips) = sweep(&db, 1_100).unwrap();
     assert_eq!(created, 0);
-    assert!(skips.contains(&("cooldown".to_string(), 1)), "skips: {skips:?}");
+    assert!(
+        skips.contains(&("cooldown".to_string(), 1)),
+        "skips: {skips:?}"
+    );
     // After the window the same article fires.
     let (created, _) = sweep(&db, 1_700).unwrap();
     assert_eq!(created, 1);
@@ -113,7 +123,10 @@ fn quiet_hours_leave_the_event_for_after_the_window() {
     let late = 23 * 3600;
     let (created, skips) = sweep(&db, late).unwrap();
     assert_eq!(created, 0);
-    assert!(skips.contains(&("quiet_hours".to_string(), 1)), "skips: {skips:?}");
+    assert!(
+        skips.contains(&("quiet_hours".to_string(), 1)),
+        "skips: {skips:?}"
+    );
     // 08:00 UTC the next day is outside the window: the same article now delivers.
     let (created, _) = sweep(&db, 8 * 3600).unwrap();
     assert_eq!(created, 1, "a quiet skip must not consume the event");
@@ -156,7 +169,10 @@ fn keyword_and_topic_rules_only_match_their_own_subject() {
     seed_article(&db, "Wheat prices fall", "macro", None);
     save(&db, "kw", "keyword", "bitcoin", ("", ""));
     let (created, _) = sweep(&db, 1_000).unwrap();
-    assert_eq!(created, 1, "only the Bitcoin title matches the keyword rule");
+    assert_eq!(
+        created, 1,
+        "only the Bitcoin title matches the keyword rule"
+    );
     let items = inbox(&db, false, 10).unwrap();
     assert!(items[0].article_title.contains("Bitcoin"));
     // Marking read moves it out of the unread inbox and back with unread=0.
@@ -182,7 +198,10 @@ fn the_skip_log_explains_why_nothing_was_sent() {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
-    assert_eq!((rule.as_str(), article.as_str(), reason.as_str()), ("btc", "held back", "quiet_hours"));
+    assert_eq!(
+        (rule.as_str(), article.as_str(), reason.as_str()),
+        ("btc", "held back", "quiet_hours")
+    );
     // A successful delivery clears the stale skip row for that pair.
     let (created, _) = sweep(&db, 8 * 3600).unwrap();
     assert_eq!(created, 1);
