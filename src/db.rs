@@ -71,6 +71,9 @@ impl Database {
             (18, include_str!("../migrations/0018_agent_write.sql")),
             (19, include_str!("../migrations/0019_note_analysis.sql")),
             (20, include_str!("../migrations/0020_article_content.sql")),
+            (21, crate::agent_bridge::MIGRATION_0021_SQL),
+            (22, crate::agent_bridge::MIGRATION_0022_SQL),
+            (23, crate::agent_bridge::MIGRATION_0023_SQL),
         ] {
             let applied: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -101,6 +104,7 @@ impl Database {
                 params![slug, vi, en],
             )?;
         }
+        crate::agent_bridge::seed_defaults(&db.conn)?;
         db.sync_missing_articles_fts()?;
         Ok(db)
     }

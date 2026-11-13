@@ -78,6 +78,8 @@ fn caller(client: &str, scopes: &[&str]) -> Caller {
         client_id: client.to_string(),
         app_id: None,
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        delegated_user: None,
+        resource_ctx: None,
     }
 }
 

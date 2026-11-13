@@ -1,13 +1,16 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { AgentsWorkspace } from './AgentsWorkspace.tsx'
+import { AGENT_COPY } from './agentTypes.ts'
 import { CatalogManager } from './CatalogManager'
+import { CompanionDrawer } from './CompanionDrawer.tsx'
 import { Select } from './Select'
 import { appLinks } from './appLinks'
 import { THEMES, ReaderMode, applyMode, isMode } from './themes'
 import './style.css'
 
 type Lang = 'vi' | 'en'
-type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'alerts' | 'timeline' | 'saved' | 'settings'
+type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'agents' | 'alerts' | 'timeline' | 'saved' | 'settings'
 type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: string | null; enabled: boolean }
 type SourceFacet = { slug: string; name: string; tier: string; region: string; articles: number }
 type Stats = { collector_enabled: boolean; fulltext_auto_enabled?: boolean; articles_total: number; articles_24h: number; articles_with_content?: number; articles_pending_content?: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
@@ -110,6 +113,10 @@ const copy = {
     articlesArchived: 'Bài đã có nội dung', articlesPending: 'Chờ tải toàn văn',
     backfillBtn: 'Tải toàn văn cho bài cũ (tối đa 10 bài/lượt)', backfilling: 'Đang bóc toàn văn…',
     backfillDone: (ok: number, attempted: number) => `Đã lưu toàn văn sạch cho ${ok}/${attempted} bài báo.`,
+    reportsSalonTitle: 'Hội thảo Đa Trợ lý & Không gian Tòa soạn',
+    reportsSalonSub: 'Mở Bàn tròn đa trợ lý có trí nhớ vùng/chủ đề, Bảng trắng tóm tắt vòng thảo luận và kỹ năng được cấp từ Hub.',
+    reportsSalonBtn: 'Mở Hội thảo Đa Trợ lý',
+    ...AGENT_COPY.vi,
   },
   en: {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
@@ -166,6 +173,10 @@ const copy = {
     articlesArchived: 'Articles with body', articlesPending: 'Pending extraction',
     backfillBtn: 'Extract full text for existing items (up to 10)', backfilling: 'Extracting batch…',
     backfillDone: (ok: number, attempted: number) => `Saved clean full text for ${ok}/${attempted} articles.`,
+    reportsSalonTitle: 'Multi-Agent Salon & Newsroom Workspaces',
+    reportsSalonSub: 'Open the multi-agent roundtable with region/topic scoping, whiteboard synthesis, and Hub-granted skills.',
+    reportsSalonBtn: 'Open Multi-Agent Salon',
+    ...AGENT_COPY.en,
   },
 } as const
 type Copy = (typeof copy)[Lang]
@@ -192,8 +203,8 @@ const isLocal = () => location.hostname === '127.0.0.1' || location.hostname ===
  * placeholder, so the phone tab bar offers only real destinations and the rest stay
  * in the desktop sidebar until their phase lands.
  */
-const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'alerts', 'settings']
-const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'alerts', 'timeline', 'saved', 'settings']
+const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'agents', 'alerts', 'settings']
+const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'agents', 'alerts', 'timeline', 'saved', 'settings']
 function currentPage(): Page { const hash = location.hash.slice(1) as Page; return pages.includes(hash) ? hash : 'today' }
 
 function App() {
@@ -279,7 +290,7 @@ function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLa
   </section></main>
 }
 
-const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
+const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', agents: '✦', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
 
 function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions, region, setRegion, onRegionsChanged, error, setError, onCatalogChanged, onSignOut }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; setMode: (v: ReaderMode) => void; page: Page; setPage: (v: Page) => void; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; setRegion: (v: string) => void; onRegionsChanged: () => void; error: string; setError: (v: string) => void; onCatalogChanged: () => void; onSignOut: () => void }) {
   const t = copy[lang]
@@ -320,9 +331,10 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} onOpenArticle={setReadingId} />}
         {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} onOpenArticle={setReadingId} />}
         {page === 'market' && <Market t={t} lang={lang} region={region} />}
-        {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} />}
+        {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} onOpenAgents={() => setRoute('agents')} />}
+        {page === 'agents' && <AgentsWorkspace lang={lang} onOpenArticle={setReadingId} onOpenRegions={() => setRoute('regions')} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
-        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}
+        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} onOpenAgentsModels={() => { try { sessionStorage.setItem('lnc-newsman-agents-surface', 'models') } catch { /* ignore */ } setRoute('agents') }} regions={regions} dashboard={dashboard} />}
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>
@@ -691,7 +703,7 @@ function AlertRulesManager({ t, lang }: { t: Copy; lang: Lang }) {
   </section>
 }
 function EmptyPage({ t }: { t: Copy }) { return <div className="content-stack"><div className="empty-card"><div className="empty-art">✦</div><h3>{t.emptyTitle}</h3><p>{t.emptySub}</p></div></div> }
-function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onRegionsChanged, regions, dashboard }: { t: Copy; lang: Lang; mode: ReaderMode; setMode: (v: ReaderMode) => void; setLang: (v: Lang) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
+function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onRegionsChanged, onOpenAgentsModels, regions, dashboard }: { t: Copy; lang: Lang; mode: ReaderMode; setMode: (v: ReaderMode) => void; setLang: (v: Lang) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; onOpenAgentsModels: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [error, setError] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -764,6 +776,20 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
         <label className="field"><span>{t.morningTime}</span><input maxLength={5} placeholder="07:30" value={settings.brief_morning_time} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_morning_time: e.target.value }) }} /></label>
         <label className="field"><span>{t.eveningTime}</span><input maxLength={5} placeholder="18:00" value={settings.brief_evening_time} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_evening_time: e.target.value }) }} /></label>
         <label className="field"><span>{t.briefTz}</span><input maxLength={64} placeholder="Asia/Ho_Chi_Minh" value={settings.brief_timezone} onChange={(e) => { setSaved(false); setSettings({ ...settings, brief_timezone: e.target.value }) }} /></label>
+      </div>
+    </section>
+    <section className="settings-card">
+      <div className="card-heading">
+        <span className="card-icon">✦</span>
+        <div>
+          <h3>{t.settingsAgentsCardTitle}</h3>
+          <p>{t.settingsAgentsCardSub}</p>
+        </div>
+      </div>
+      <div className="btn-row">
+        <button type="button" className="btn secondary" onClick={onOpenAgentsModels}>
+          ✦ {t.settingsAgentsCardBtn}
+        </button>
       </div>
     </section>
     <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><ConnectorHubPanel t={t} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
@@ -1181,7 +1207,7 @@ function ConnectorsPanel({ t }: { t: Copy }) {
   </section>
 }
 
-function ReportsPage({ t, lang, region, dashboard, onOpenArticle }: { t: Copy; lang: Lang; region: string; dashboard: Dashboard | null; onOpenArticle: (id: number) => void }) {
+function ReportsPage({ t, lang, region, dashboard, onOpenArticle, onOpenAgents }: { t: Copy; lang: Lang; region: string; dashboard: Dashboard | null; onOpenArticle: (id: number) => void; onOpenAgents: () => void }) {
   const topics = dashboard?.topics ?? []
   const [items, setItems] = useState<AgentAnalysis[] | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -1197,6 +1223,7 @@ function ReportsPage({ t, lang, region, dashboard, onOpenArticle }: { t: Copy; l
   const [noteText, setNoteText] = useState('')
   const [noteBusy, setNoteBusy] = useState(false)
   const [error, setError] = useState(false)
+  const [companionOpen, setCompanionOpen] = useState(false)
 
   const loadList = async (pickId?: number) => {
     try {
@@ -1270,6 +1297,15 @@ function ReportsPage({ t, lang, region, dashboard, onOpenArticle }: { t: Copy; l
   const stamp = (sec: number) => formatDate(lang, new Date(sec * 1000).toISOString()) ?? ''
   return <div className="content-stack">
     <section className="section-heading"><div><span className="eyebrow">{t.reports}</span><h2>{t.reportsTitle}</h2><p>{t.reportsSub}</p></div></section>
+    <div className="reports-salon-banner">
+      <div>
+        <strong>✦ {t.reportsSalonTitle}</strong>
+        <p>{t.reportsSalonSub}</p>
+      </div>
+      <button type="button" className="btn primary" onClick={onOpenAgents}>
+        ✦ {t.reportsSalonBtn}
+      </button>
+    </div>
     <form className="research-card" onSubmit={submitResearch}>
       <div><h3>{t.askTitle}</h3><p className="muted" style={{ margin: '4px 0 0' }}>{t.askSub}</p></div>
       <div className="chip-row">
@@ -1305,9 +1341,25 @@ function ReportsPage({ t, lang, region, dashboard, onOpenArticle }: { t: Copy; l
           </div>
           {detail && <article className="brief-reader">
             <header className="brief-reader-head">
-              <div className="article-meta"><span className="key-chip">{detail.data.stable_key ?? `analysis-${detail.data.id}`}</span><span className="tier-badge">{detail.data.kind}</span><span>{detail.data.author ?? t.mcpOwner}</span>{detail.data.region_code && <span>· {detail.data.region_code}</span>}{detail.data.topic_slug && <span>· {detail.data.topic_slug}</span>}<span>· {stamp(detail.data.updated_at)}</span></div>
+              <div className="brief-reader-top">
+                <div className="article-meta"><span className="key-chip">{detail.data.stable_key ?? `analysis-${detail.data.id}`}</span><span className="tier-badge">{detail.data.kind}</span><span>{detail.data.author ?? t.mcpOwner}</span>{detail.data.region_code && <span>· {detail.data.region_code}</span>}{detail.data.topic_slug && <span>· {detail.data.topic_slug}</span>}<span>· {stamp(detail.data.updated_at)}</span></div>
+                <button type="button" className={companionOpen ? 'btn primary compact-btn' : 'btn secondary compact-btn'} onClick={() => setCompanionOpen((v) => !v)}>{t.companionToggleReportBtn}</button>
+              </div>
               <h2>{detail.data.title}</h2>
             </header>
+            <CompanionDrawer
+              open={companionOpen}
+              onClose={() => setCompanionOpen(false)}
+              lang={lang}
+              kind="report"
+              reportId={detail.data.id}
+              title={detail.data.title}
+              sourceAttribution={detail.data.author ?? t.mcpOwner}
+              region={detail.data.region_code ?? region}
+              topic={detail.data.topic_slug}
+              contentText={detail.data.body ?? null}
+              onOpenArticle={onOpenArticle}
+            />
             <div className="brief-body">{detail.data.body}</div>
             <section className="cited-box">
               <h3>{t.citedArticles} ({detail.cited_articles.length})</h3>
@@ -1378,6 +1430,7 @@ function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: 
   const [error, setError] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [noteBusy, setNoteBusy] = useState(false)
+  const [companionOpen, setCompanionOpen] = useState(false)
   const autoTried = useRef<number | null>(null)
 
   const load = async (id: number) => {
@@ -1454,11 +1507,29 @@ function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: 
           {words > 0 && <span className="content-badge">{words} {t.wordsUnit} · {t.readMinutes(minutes)}</span>}
         </div>
         <div className="reader-toolbar-actions">
+          {item && <button type="button" className={companionOpen ? 'btn primary compact-btn' : 'btn secondary compact-btn'} onClick={() => setCompanionOpen((v) => !v)}>{t.companionToggleBtn}</button>}
           {item && <button type="button" className="btn secondary compact-btn" disabled={extracting} onClick={() => void triggerExtract()}>{extracting ? t.loading : item.content_text ? t.reExtract : t.extractNow}</button>}
           {item && <a className="btn secondary compact-btn" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>}
           <button type="button" className="btn primary compact-btn" onClick={onClose}>{t.closeReader}</button>
         </div>
       </div>
+
+      {item && (
+        <CompanionDrawer
+          open={companionOpen}
+          onClose={() => setCompanionOpen(false)}
+          lang={lang}
+          kind="article"
+          articleId={articleId}
+          title={item.title}
+          sourceAttribution={item.source_attribution || item.source_name}
+          region={item.region_code}
+          topic={item.topic_slug}
+          contentText={item.content_text}
+          excerpt={item.summary ?? null}
+          onOpenArticle={(id) => void load(id)}
+        />
+      )}
 
       {error && <div className="form-error" role="alert">{t.loadError}</div>}
       {!item && !error && <p className="muted" role="status">{t.loading}</p>}

@@ -1,11 +1,13 @@
 {
   "name": "lnc-newsman-ui",
   "private": true,
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --experimental-strip-types src/agentBridge.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "4.1.13",

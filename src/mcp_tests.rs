@@ -319,11 +319,15 @@ fn tools_list_is_filtered_by_the_callers_scopes() {
         client_id: "agent-x".into(),
         app_id: None,
         scopes: Vec::new(),
+        delegated_user: None,
+        resource_ctx: None,
     };
     let read = crate::connector::Caller {
         client_id: "agent-x".into(),
         app_id: None,
         scopes: vec![crate::connector::READ_SCOPE.to_string()],
+        delegated_user: None,
+        resource_ctx: None,
     };
     // A reader (no delegation) sees everything, unchanged from before the connector.
     assert_eq!(

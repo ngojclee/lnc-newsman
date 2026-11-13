@@ -1,3 +1,6 @@
+mod agent_bridge;
+#[cfg(test)]
+mod agent_bridge_tests;
 mod alerts;
 mod auth;
 mod catalog;
@@ -86,9 +89,12 @@ struct AppState {
     pack: Mutex<regions::PackStatus>,
     /// True once the alert sweeper has been started; set exactly once, by login.
     alerts_running: AtomicBool,
+    /// Astraea App-Scoped Conversational Agents Bridge & Hub Standby runtime.
+    pub(crate) agent_bridge: Arc<agent_bridge::AgentBridgeRuntime>,
 }
 impl AppState {
     fn new(cfg: config::Config, db: db::Database, fetcher: fetch::Fetcher) -> Self {
+        let agent_bridge = agent_bridge::AgentBridgeRuntime::new(&db);
         Self {
             cfg,
             db: Mutex::new(db),
@@ -112,6 +118,7 @@ impl AppState {
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),
+            agent_bridge,
         }
     }
 }
@@ -228,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
     collector::spawn_scheduler(state.clone());
     collector::spawn_content_worker(state.clone());
     connectors::spawn_scheduler(state.clone());
+    agent_bridge::spawn_background_workers(state.clone());
     tracing::info!(%addr, data_dir = %state.cfg.data_dir.display(), "starting lnc-newsman");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
@@ -346,6 +354,102 @@ fn router(state: SharedState) -> Router {
             "/api/admin/articles/backfill",
             post(collector::backfill_handler),
         )
+        .route(
+            "/api/app-agents/bridge-config",
+            get(agent_bridge::get_bridge_config).put(agent_bridge::put_bridge_config),
+        )
+        .route(
+            "/api/app-agents/bridge-config/probe",
+            post(agent_bridge::post_bridge_probe),
+        )
+        .route("/api/app-agents/models", get(agent_bridge::get_models))
+        .route(
+            "/api/app-agents/workspaces",
+            get(agent_bridge::get_workspaces).post(agent_bridge::post_workspace),
+        )
+        .route(
+            "/api/app-agents/workspaces/{id}",
+            axum::routing::put(agent_bridge::put_workspace)
+                .delete(agent_bridge::delete_workspace),
+        )
+        .route("/api/app-agents/skills", get(agent_bridge::get_skills))
+        .route(
+            "/api/app-agents/skills/sync",
+            post(agent_bridge::post_skills_sync),
+        )
+        .route(
+            "/api/app-agents/skills/access-requests",
+            get(agent_bridge::get_skill_access_requests)
+                .post(agent_bridge::post_skill_access_request),
+        )
+        .route(
+            "/api/app-agents/skills/{slug}",
+            get(agent_bridge::get_skill).patch(agent_bridge::patch_skill),
+        )
+        .route("/api/app-agents/agents", get(agent_bridge::get_agents))
+        .route(
+            "/api/app-agents/agents/{slug}",
+            axum::routing::put(agent_bridge::put_agent).delete(agent_bridge::delete_agent),
+        )
+        .route(
+            "/api/app-agents/threads",
+            get(agent_bridge::get_threads).post(agent_bridge::post_thread),
+        )
+        .route(
+            "/api/app-agents/threads/{id}",
+            axum::routing::patch(agent_bridge::patch_thread).delete(agent_bridge::delete_thread),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/messages",
+            get(agent_bridge::get_thread_messages),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/turns",
+            post(agent_bridge::post_thread_turn),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/stream",
+            get(agent_bridge::get_thread_stream),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/whiteboard",
+            get(agent_bridge::get_whiteboard)
+                .post(agent_bridge::post_whiteboard)
+                .delete(agent_bridge::delete_whiteboard_query),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/whiteboard/{code}",
+            axum::routing::delete(agent_bridge::delete_whiteboard_path),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/round-summary",
+            post(agent_bridge::post_round_summary),
+        )
+        .route(
+            "/api/app-agents/schedules",
+            get(agent_bridge::get_schedules).post(agent_bridge::post_schedule),
+        )
+        .route(
+            "/api/app-agents/schedules/{id}",
+            axum::routing::patch(agent_bridge::patch_schedule)
+                .delete(agent_bridge::delete_schedule),
+        )
+        .route(
+            "/api/app-agents/schedules/{id}/run-now",
+            post(agent_bridge::post_schedule_run_now),
+        )
+        .route(
+            "/api/app-agents/telegram/config",
+            get(agent_bridge::get_telegram_config).put(agent_bridge::put_telegram_config),
+        )
+        .route(
+            "/api/app-agents/telegram/routes",
+            get(agent_bridge::get_telegram_routes).post(agent_bridge::post_telegram_route),
+        )
+        .route(
+            "/api/app-agents/telegram/routes/{id}",
+            axum::routing::delete(agent_bridge::delete_telegram_route),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -389,6 +493,14 @@ fn router(state: SharedState) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/app-info", get(app_info))
+        .route(
+            "/api/app-agents/telegram/webhook/direct",
+            post(agent_bridge::webhook_direct),
+        )
+        .route(
+            "/api/app-agents/telegram/webhook/cygnus",
+            post(agent_bridge::webhook_cygnus),
+        )
         .route("/login.html", get(shell))
         .route("/", get(root))
         .route("/admin", get(admin))
@@ -448,6 +560,10 @@ async fn csrf_guard(req: Request, next: Next) -> Response {
     // other route keeps the guard it had.
     if connector::presents_connector_bearer(req.headers())
         || (req.uri().path() == "/mcp" && auth::cookie_value(req.headers()).is_none())
+        || matches!(
+            req.uri().path(),
+            "/api/app-agents/telegram/webhook/direct" | "/api/app-agents/telegram/webhook/cygnus"
+        )
     {
         return next.run(req).await;
     }
@@ -871,6 +987,8 @@ mod tests {
     use tower::ServiceExt;
 
     fn state() -> SharedState {
+        let db = db::Database::in_memory().unwrap();
+        let agent_bridge = agent_bridge::AgentBridgeRuntime::new(&db);
         Arc::new(AppState {
             cfg: config::Config {
                 data_dir: ".".into(),
@@ -884,7 +1002,7 @@ mod tests {
                 secure_cookie: true,
                 version: "test",
             },
-            db: Mutex::new(db::Database::in_memory().unwrap()),
+            db: Mutex::new(db),
             login_limiter: Mutex::new(auth::LoginLimiter::default()),
             started_at: now(),
             fetcher: fetch::Fetcher::public_only(),
@@ -905,6 +1023,7 @@ mod tests {
             llm_enabled: false,
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),
+            agent_bridge,
         })
     }
     fn req(

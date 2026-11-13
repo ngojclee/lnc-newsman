@@ -6,11 +6,19 @@
         "lnc-internal-app-blueprint",
         "lnc-agents-creator",
         "release-portainer-app",
-        "lnc-icon",
+        "lnc-portainer",
+        "business-mcp-connector",
+        "lnc-obsidian",
+        "lnc-notebooklm",
+        "lnc-market-desk-protocol",
+        "lnc-market-data-feeds",
+        "lnc-quant-backtesting",
+        "lnc-quant-risk-analytics",
+        "lnc-best-of-n",
         "lnm-ui-ux",
         "lnc-ln-ui-engine",
-        "business-mcp-connector",
-        "lnc-portainer"
+        "lnc-icon",
+        "lnc-app-agents"
       ]
     }
   ]

@@ -138,6 +138,12 @@ impl Fetcher {
         self
     }
 
+    /// Same guards, with a custom per-request timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Tests talk to a loopback feed server; production code never builds this.
     #[cfg(test)]
     pub fn allow_loopback_for_tests() -> Self {
@@ -336,6 +342,167 @@ impl Fetcher {
     ) -> Result<FetchOutcome, FetchError> {
         self.get_inner(url, &Validators::default(), Some((name, value)))
             .await
+    }
+
+    /// Perform an outbound JSON API request (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`)
+    /// with the exact same DNS resolution, public-IP / allowlist check, IP pinning,
+    /// redirect re-validation and body size limits. Extra headers are sent only on the
+    /// initial hop so credentials never cross an origin redirect.
+    pub async fn request_json(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> Result<FetchOutcome, FetchError> {
+        const MAX_JSON_REQUEST_BYTES: usize = 256 * 1024;
+        if let Some(payload) = body
+            && payload.len() > MAX_JSON_REQUEST_BYTES
+        {
+            return Err(FetchError::TooLarge);
+        }
+        let mut current = self.target(url)?;
+        let mut redirects_made = 0usize;
+        for _ in 0..=MAX_REDIRECTS {
+            let addrs = self.resolve(&current).await?;
+            let mut builder = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(self.timeout)
+                .user_agent(self.user_agent.as_deref().unwrap_or(USER_AGENT));
+            if let Some(Host::Domain(domain)) = current.host() {
+                builder = builder.resolve_to_addrs(domain, &addrs);
+            }
+            let client = builder.build().map_err(|_| FetchError::Network)?;
+            let req_method = if redirects_made == 0 {
+                method.clone()
+            } else {
+                reqwest::Method::GET
+            };
+            let mut request = client
+                .request(req_method, current.clone())
+                .header(ACCEPT, "application/json");
+            if body.is_some() && redirects_made == 0 {
+                request = request.header(CONTENT_TYPE, "application/json");
+            }
+            if redirects_made == 0 {
+                for (name, value) in headers {
+                    request = request.header(*name, *value);
+                }
+            }
+            if let Some(payload) = body
+                && redirects_made == 0
+            {
+                request = request.body(payload.to_string());
+            }
+            let mut response = request.send().await.map_err(classify)?;
+            let status = response.status();
+            if status.is_redirection() {
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or(FetchError::InvalidUrl)?;
+                let next = current.join(location).map_err(|_| FetchError::InvalidUrl)?;
+                current = self.target(next.as_str())?;
+                redirects_made += 1;
+                continue;
+            }
+            if !status.is_success() {
+                return Err(FetchError::HttpStatus(status.as_u16()));
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(classify)? {
+                if bytes.len() + chunk.len() > MAX_BODY_BYTES {
+                    return Err(FetchError::TooLarge);
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            return Ok(FetchOutcome::Body {
+                bytes,
+                final_url: current,
+                validators: Validators::default(),
+            });
+        }
+        Err(FetchError::TooManyRedirects)
+    }
+
+    pub async fn post_json_with_headers(
+        &self,
+        url: &str,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<FetchOutcome, FetchError> {
+        self.request_json(reqwest::Method::POST, url, Some(body), headers)
+            .await
+    }
+
+    pub async fn get_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<FetchOutcome, FetchError> {
+        self.request_json(reqwest::Method::GET, url, None, headers)
+            .await
+    }
+
+    /// Open a streaming SSE response (`Accept: text/event-stream`) with DNS + public-IP
+    /// / allowlist validation and IP pinning, refusing redirects so credentials stay on
+    /// the verified origin.
+    #[allow(dead_code)]
+    pub async fn open_sse_stream(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest::Response, FetchError> {
+        let current = self.target(url)?;
+        let addrs = self.resolve(&current).await?;
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent(self.user_agent.as_deref().unwrap_or(USER_AGENT));
+        if let Some(Host::Domain(domain)) = current.host() {
+            builder = builder.resolve_to_addrs(domain, &addrs);
+        }
+        let client = builder.build().map_err(|_| FetchError::Network)?;
+        let mut request = client
+            .get(current)
+            .header(ACCEPT, "text/event-stream");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.map_err(classify)?;
+        if !response.status().is_success() {
+            return Err(FetchError::HttpStatus(response.status().as_u16()));
+        }
+        Ok(response)
+    }
+
+    /// Validate a `ws://` or `wss://` endpoint against the exact same port, public-IP,
+    /// and per-host private allowlist rules as HTTP, returning the resolved socket
+    /// addresses so the caller connects directly without a second DNS lookup.
+    pub async fn resolve_ws_target(&self, raw: &str) -> Result<(Url, Vec<SocketAddr>), FetchError> {
+        let mut ws_url = Url::parse(raw.trim()).map_err(|_| FetchError::InvalidUrl)?;
+        if !matches!(ws_url.scheme(), "ws" | "wss")
+            || !ws_url.username().is_empty()
+            || ws_url.password().is_some()
+            || ws_url.host().is_none()
+        {
+            return Err(FetchError::InvalidUrl);
+        }
+        ws_url.set_fragment(None);
+        let http_equiv_str = if let Some(rest) = ws_url.as_str().strip_prefix("wss://") {
+            format!("https://{rest}")
+        } else if let Some(rest) = ws_url.as_str().strip_prefix("ws://") {
+            format!("http://{rest}")
+        } else {
+            return Err(FetchError::InvalidUrl);
+        };
+        let checked = self.target(&http_equiv_str)?;
+        let addrs = self.resolve(&checked).await?;
+        Ok((ws_url, addrs))
     }
 
     fn target(&self, value: &str) -> Result<Url, FetchError> {

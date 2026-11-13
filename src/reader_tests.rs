@@ -174,6 +174,8 @@ async fn owner_notes_are_protected_from_agent_edits_and_deletable_by_owner() {
             crate::connector::READ_SCOPE.into(),
             crate::connector::WRITE_SCOPE.into(),
         ],
+        delegated_user: None,
+        resource_ctx: None,
     };
     let created = write::analysis_create(
         &state,

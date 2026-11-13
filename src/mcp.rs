@@ -58,7 +58,8 @@ const READ_TOOLS: &[&str] = &[
 ];
 
 /// Tools that write, each limited to the app's own analytic data — a note, an analysis,
-/// a flag. None of them can reach a source, a region, a connector, a secret or an alert.
+/// a flag, or a gated brief proposal. None of them can reach a source, a region, a
+/// connector, a secret or an alert.
 const WRITE_TOOLS: &[&str] = &[
     "note_create",
     "note_update",
@@ -66,7 +67,12 @@ const WRITE_TOOLS: &[&str] = &[
     "analysis_create",
     "analysis_update",
     "article_flag",
+    "brief_propose",
 ];
+
+/// High-impact write tools that queue a pending human approval instead of publishing
+/// directly (`tier: "write_gated"`).
+const GATED_TOOLS: &[&str] = &["brief_propose"];
 
 /// The scope needed to call `tool`, or `None` when the name is not a tool we publish.
 /// An unknown name denying here is what makes "unlisted tool" and "missing scope" the
@@ -86,6 +92,10 @@ pub fn tool_scope(tool: &str) -> Option<&'static str> {
 /// intermediate caller cannot supply an author, and by the docs check.
 pub fn is_write_tool(name: &str) -> bool {
     WRITE_TOOLS.contains(&name.strip_prefix("newsman__").unwrap_or(name))
+}
+
+pub fn is_gated_tool(name: &str) -> bool {
+    GATED_TOOLS.contains(&name.strip_prefix("newsman__").unwrap_or(name))
 }
 
 fn empty_object() -> Value {
@@ -306,6 +316,27 @@ pub fn tools() -> Vec<Tool> {
                 "additionalProperties": false
             }),
         },
+        Tool {
+            name: "brief_propose",
+            description: "Propose a grounded newsroom brief or summary for owner review instead of publishing immediately (`tier: write_gated`). Returns `approval_required` metadata with `action_type: \"newsman.brief.publish\"`.",
+            input: json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Proposed brief headline, at most 300 characters."},
+                    "body": {"type": "string", "description": "Proposed brief markdown body, at most 20000 characters."},
+                    "kind": {"type": "string", "enum": ["brief", "summary"], "default": "brief"},
+                    "topic_slug": {"type": "string"},
+                    "region_code": {"type": "string"},
+                    "source_article_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": "Stored visible article ids cited in this proposal, at most 200."
+                    }
+                },
+                "required": ["title", "body"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -365,8 +396,231 @@ fn tool_error(message: &str) -> Value {
 fn tool_text(payload: Value) -> Value {
     json!({
         "content": [{"type": "text", "text": payload.to_string()}],
+        "structuredContent": payload,
         "isError": false
     })
+}
+
+/// Resolved row-level filter derived from a verified `v4s` `ResourceCtx`.
+/// Never constructed from LLM tool arguments.
+#[derive(Debug, Clone, Default)]
+pub struct AllowedScope {
+    regions: Option<std::collections::HashSet<String>>,
+    topics: Option<std::collections::HashSet<String>>,
+}
+
+impl AllowedScope {
+    pub fn resolve(
+        db: &crate::db::Database,
+        ctx: Option<&crate::connector::ResourceCtx>,
+    ) -> Result<Self, String> {
+        let Some(ctx) = ctx else {
+            return Ok(Self::default());
+        };
+        let regions = if let Some(ref raw_regions) = ctx.regions {
+            let mut set = std::collections::HashSet::new();
+            let seeds: Vec<String> = raw_regions
+                .iter()
+                .map(|r| r.trim().to_ascii_lowercase())
+                .filter(|r| !r.is_empty())
+                .collect();
+            for seed in &seeds {
+                set.insert(seed.clone());
+                // Include descendant regions in the tree (e.g. `eu` includes `eu/fr`),
+                // never sibling or parent regions (`vn` never includes `us` or `global`).
+                let mut stmt = db
+                    .conn
+                    .prepare(
+                        "WITH RECURSIVE down(code) AS (
+                           SELECT code FROM regions WHERE LOWER(code) = ?1
+                           UNION
+                           SELECT r.code FROM regions r JOIN down ON LOWER(r.parent_code) = LOWER(down.code)
+                         )
+                         SELECT LOWER(code) FROM down",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([seed], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for r in rows {
+                    set.insert(r.map_err(|e| e.to_string())?);
+                }
+            }
+            Some(set)
+        } else {
+            None
+        };
+
+        let topics = if let Some(ref raw_topics) = ctx.topics {
+            let mut set = std::collections::HashSet::new();
+            let seeds: Vec<String> = raw_topics
+                .iter()
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect();
+            for seed in &seeds {
+                set.insert(seed.clone());
+                let mut stmt = db
+                    .conn
+                    .prepare(
+                        "WITH RECURSIVE down(slug) AS (
+                           SELECT slug FROM topics WHERE LOWER(slug) = ?1
+                           UNION
+                           SELECT t.slug FROM topics t JOIN down ON LOWER(t.parent_slug) = LOWER(down.slug)
+                         )
+                         SELECT LOWER(slug) FROM down",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([seed], |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for t in rows {
+                    set.insert(t.map_err(|e| e.to_string())?);
+                }
+            }
+            Some(set)
+        } else {
+            None
+        };
+
+        Ok(Self { regions, topics })
+    }
+
+    pub fn allows_region(&self, region_code: Option<&str>) -> bool {
+        let Some(ref allowed) = self.regions else {
+            return true;
+        };
+        let norm = region_code
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("global")
+            .to_ascii_lowercase();
+        allowed.contains(&norm)
+    }
+
+    pub fn check_requested_region(&self, requested: Option<&str>) -> Result<(), String> {
+        if let Some(code) = requested
+            && !self.allows_region(Some(code))
+        {
+            return Err(format!(
+                "region `{code}` is outside caller resource_ctx scope"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn allows_topic(&self, primary: Option<&str>, extra: &[String]) -> bool {
+        let Some(ref allowed) = self.topics else {
+            return true;
+        };
+        if let Some(slug) = primary.map(str::trim).filter(|s| !s.is_empty())
+            && allowed.contains(&slug.to_ascii_lowercase())
+        {
+            return true;
+        }
+        extra
+            .iter()
+            .any(|t| allowed.contains(&t.trim().to_ascii_lowercase()))
+    }
+
+    pub fn check_requested_topic(&self, requested: Option<&str>) -> Result<(), String> {
+        if let Some(slug) = requested
+            && !self.allows_topic(Some(slug), &[])
+        {
+            return Err(format!(
+                "topic `{slug}` is outside caller resource_ctx scope"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn check_article(&self, db: &crate::db::Database, article_id: i64) -> Result<(), String> {
+        if self.regions.is_none() && self.topics.is_none() {
+            return Ok(());
+        }
+        let Some(detail) = crate::collector::get_article(db, article_id).map_err(|e| e.to_string())? else {
+            return Err(format!("article `{article_id}` not found or not visible"));
+        };
+        if !self.allows_region(detail.region_code.as_deref())
+            || !self.allows_topic(detail.topic_slug.as_deref(), &detail.labels.topics)
+        {
+            return Err(format!(
+                "article `{article_id}` is outside caller resource_ctx scope"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn check_document(&self, db: &crate::db::Database, document_id: i64) -> Result<(), String> {
+        if self.regions.is_none() && self.topics.is_none() {
+            return Ok(());
+        }
+        use rusqlite::OptionalExtension;
+        let row: Option<(String, String)> = db
+            .conn
+            .query_row(
+                "SELECT region, COALESCE(topic,'') FROM documents WHERE id=?1",
+                [document_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((region, topic)) = row else {
+            return Err(format!("no document `{document_id}`"));
+        };
+        if !self.allows_region(Some(&region)) || !self.allows_topic(Some(&topic), &[]) {
+            return Err(format!(
+                "document `{document_id}` is outside caller resource_ctx scope"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn check_analysis(&self, db: &crate::db::Database, analysis_id: i64) -> Result<(), String> {
+        if self.regions.is_none() && self.topics.is_none() {
+            return Ok(());
+        }
+        use rusqlite::OptionalExtension;
+        let row: Option<(Option<String>, Option<String>)> = db
+            .conn
+            .query_row(
+                "SELECT region_code, topic_slug FROM newsman_analyses WHERE id=?1",
+                [analysis_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((region, topic)) = row else {
+            return Err(format!("no analysis `{analysis_id}`"));
+        };
+        if !self.allows_region(region.as_deref()) || !self.allows_topic(topic.as_deref(), &[]) {
+            return Err(format!(
+                "analysis `{analysis_id}` is outside caller resource_ctx scope"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Direct helper used by `agent_bridge` (Reverse Relay + Hub Standby tool loop) so every
+/// tool execution goes through `reject_unknown_arguments` + `AllowedScope` + `dispatch`.
+pub fn call_tool_direct(
+    state: &SharedState,
+    caller: Option<&Caller>,
+    name: &str,
+    arguments: &Value,
+) -> Value {
+    let bare = name.strip_prefix("newsman__").unwrap_or(name);
+    let Some(tool) = tools().into_iter().find(|t| t.name == bare) else {
+        return tool_error(UNKNOWN_TOOL);
+    };
+    if !scope_allows(caller, bare) {
+        return tool_error(UNKNOWN_TOOL);
+    }
+    if let Err(message) = reject_unknown_arguments(&tool, arguments) {
+        return tool_error(&message);
+    }
+    call_tool(state, caller, bare, arguments)
 }
 
 fn string_arg(arguments: &Value, key: &str) -> Option<String> {
@@ -413,11 +667,28 @@ fn dispatch(
         .db
         .lock()
         .map_err(|_| "database lock poisoned".to_string())?;
+    let allowed = AllowedScope::resolve(&db, caller.and_then(|c| c.resource_ctx()))?;
     match name {
-        "regions" => crate::regions::payload(&db, true).map_err(|err| err.to_string()),
+        "regions" => {
+            let mut val = crate::regions::payload(&db, true).map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() {
+                if let Some(arr) = val.get_mut("data").and_then(Value::as_array_mut) {
+                    arr.retain(|item| allowed.allows_region(item.get("code").and_then(Value::as_str)));
+                }
+                if let Some(eff) = val.get_mut("effective").and_then(Value::as_array_mut) {
+                    eff.retain(|item| allowed.allows_region(item.as_str()));
+                }
+            }
+            Ok(val)
+        }
         "topics" => db
             .topics()
-            .map(|topics| json!({"data": topics}))
+            .map(|mut topics| {
+                if allowed.topics.is_some() {
+                    topics.retain(|t| allowed.allows_topic(Some(&t.slug), &[]));
+                }
+                json!({"data": topics})
+            })
             .map_err(|err| err.to_string()),
         "reader_preferences" => crate::reader::mcp_preferences(&db)
             .map(|prefs| json!({"data": prefs}))
@@ -427,22 +698,36 @@ fn dispatch(
             let topic = string_arg(arguments, "topic");
             let q = string_arg(arguments, "q");
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
+            allowed.check_requested_region(region.as_deref())?;
+            allowed.check_requested_topic(topic.as_deref())?;
             if let Some(code) = region.as_deref()
                 && !matches!(crate::regions::region_enabled(&db, code), Ok(true))
             {
                 return Err(format!("region `{code}` is not enabled"));
             }
-            crate::collector::list_articles_filtered(
+            let fetch_limit = if allowed.regions.is_some() || allowed.topics.is_some() {
+                100
+            } else {
+                limit
+            };
+            let mut data = crate::collector::list_articles_filtered(
                 &db,
                 topic.as_deref(),
                 region.as_deref(),
                 None,
                 q.as_deref(),
-                limit,
+                fetch_limit,
                 0,
             )
-            .map(|data| json!({"data": data}))
-            .map_err(|err| err.to_string())
+            .map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() || allowed.topics.is_some() {
+                data.retain(|a| {
+                    allowed.allows_region(a.region_code.as_deref())
+                        && allowed.allows_topic(a.topic_slug.as_deref(), &a.labels.topics)
+                });
+                data.truncate(limit as usize);
+            }
+            Ok(json!({"data": data}))
         }
         "article_get" => {
             let id = arguments
@@ -451,7 +736,16 @@ fn dispatch(
                 .filter(|&n| n >= 1)
                 .ok_or_else(|| "`id` must be a positive integer".to_string())?;
             match crate::collector::get_article(&db, id) {
-                Ok(Some(detail)) => Ok(json!({"data": detail})),
+                Ok(Some(detail)) => {
+                    if !allowed.allows_region(detail.region_code.as_deref())
+                        || !allowed.allows_topic(detail.topic_slug.as_deref(), &detail.labels.topics)
+                    {
+                        return Err(format!(
+                            "article `{id}` is outside caller resource_ctx scope"
+                        ));
+                    }
+                    Ok(json!({"data": detail}))
+                }
                 Ok(None) => Err(format!("article `{id}` not found or not visible")),
                 Err(err) => Err(err.to_string()),
             }
@@ -461,31 +755,51 @@ fn dispatch(
             let topic = string_arg(arguments, "topic");
             let q = string_arg(arguments, "q");
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
+            allowed.check_requested_region(region.as_deref())?;
+            allowed.check_requested_topic(topic.as_deref())?;
             if let Some(code) = region.as_deref()
                 && !matches!(crate::regions::region_enabled(&db, code), Ok(true))
             {
                 return Err(format!("region `{code}` is not enabled"));
             }
-            crate::documents::list(
+            let fetch_limit = if allowed.regions.is_some() || allowed.topics.is_some() {
+                100
+            } else {
+                limit
+            };
+            let mut data = crate::documents::list(
                 &db,
                 region.as_deref(),
                 topic.as_deref(),
                 q.as_deref(),
-                limit,
+                fetch_limit,
             )
-            .map(|data| json!({"data": data}))
-            .map_err(|err| err.to_string())
+            .map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() || allowed.topics.is_some() {
+                data.retain(|doc| {
+                    allowed.allows_region(Some(&doc.region))
+                        && allowed.allows_topic(Some(&doc.topic), &[])
+                });
+                data.truncate(limit as usize);
+            }
+            Ok(json!({"data": data}))
         }
         "tax_calendar" => {
             let region = string_arg(arguments, "region");
             let horizon = int_arg(arguments, "horizon_days", 120, 1, 366)?;
+            allowed.check_requested_region(region.as_deref())?;
             if let Some(code) = region.as_deref()
                 && !matches!(crate::regions::region_enabled(&db, code), Ok(true))
             {
                 return Err(format!("region `{code}` is not enabled"));
             }
-            let data = crate::tax::calendar(&db, region.as_deref(), crate::now() as i64, horizon)
-                .map_err(|err| err.to_string())?;
+            let mut data =
+                crate::tax::calendar(&db, region.as_deref(), crate::now() as i64, horizon)
+                    .map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() {
+                data.retain(|item| allowed.allows_region(Some(&item.region)));
+            }
+            // Preserve legal/tax disclaimers and `verified` flags verbatim!
             Ok(json!({
                 "data": data,
                 "disclaimer_vi": crate::tax::DISCLAIMER_VI,
@@ -496,6 +810,7 @@ fn dispatch(
         "series" => {
             let region = string_arg(arguments, "region");
             let limit = int_arg(arguments, "limit", 100, 1, 500)?;
+            allowed.check_requested_region(region.as_deref())?;
             if let Some(code) = region.as_deref()
                 && !matches!(crate::regions::region_enabled(&db, code), Ok(true))
             {
@@ -503,9 +818,12 @@ fn dispatch(
             }
             let effective =
                 crate::regions::effective(&db, region.as_deref()).map_err(|err| err.to_string())?;
-            crate::series::list_in(&db, &effective, limit)
-                .map(|data| json!({"data": data}))
-                .map_err(|err| err.to_string())
+            let mut data = crate::series::list_in(&db, &effective, limit)
+                .map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() {
+                data.retain(|row| allowed.allows_region(Some(&row.region)));
+            }
+            Ok(json!({"data": data}))
         }
         "observations" => {
             let code = string_arg(arguments, "code").ok_or("`code` is required")?;
@@ -513,6 +831,11 @@ fn dispatch(
             let stored = crate::series::series(&db, &code)
                 .map_err(|err| err.to_string())?
                 .ok_or_else(|| format!("no series `{code}`"))?;
+            if !allowed.allows_region(Some(&stored.region)) {
+                return Err(format!(
+                    "series `{code}` is outside caller resource_ctx scope"
+                ));
+            }
             if !matches!(
                 crate::regions::region_enabled(&db, &stored.region),
                 Ok(true)
@@ -538,9 +861,16 @@ fn dispatch(
                     "provide exactly one of `article_id`, `document_id` or `analysis_id`".into(),
                 );
             }
+            if let Some(id) = article {
+                allowed.check_article(&db, id)?;
+            }
+            if let Some(id) = document {
+                allowed.check_document(&db, id)?;
+            }
+            if let Some(id) = analysis {
+                allowed.check_analysis(&db, id)?;
+            }
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
-            // A note list is more useful with the flags on the same article, and the
-            // flag list already exists per article; one round trip instead of two.
             let flags = match article {
                 Some(id) => crate::write::flags_for(&db, id).map_err(|err| err.to_string())?,
                 None => Vec::new(),
@@ -553,11 +883,8 @@ fn dispatch(
             let topic = string_arg(arguments, "topic");
             let region = string_arg(arguments, "region");
             let limit = int_arg(arguments, "limit", 20, 1, 100)?;
-            // The caller passes an ISO date (`2026-11-12` or a full timestamp); stored
-            // rows use Unix seconds, so the date is converted here. A bare date means
-            // "from the start of that day in UTC", which is what a date-only filter
-            // should mean and is stated in the tool description. A Unix integer is also
-            // accepted so a caller that already holds one need not format it.
+            allowed.check_requested_region(region.as_deref())?;
+            allowed.check_requested_topic(topic.as_deref())?;
             let updated_since = match arguments.get("updated_since") {
                 None | Some(Value::Null) => None,
                 Some(value) => Some(parse_updated_since(value)?),
@@ -567,9 +894,27 @@ fn dispatch(
             {
                 return Err(format!("region `{code}` is not enabled"));
             }
-            crate::write::analysis_list(&db, topic.as_deref(), region.as_deref(), updated_since, limit)
-                .map(|data| json!({"data": data}))
-                .map_err(|err| err.to_string())
+            let fetch_limit = if allowed.regions.is_some() || allowed.topics.is_some() {
+                100
+            } else {
+                limit
+            };
+            let mut data = crate::write::analysis_list(
+                &db,
+                topic.as_deref(),
+                region.as_deref(),
+                updated_since,
+                fetch_limit,
+            )
+            .map_err(|err| err.to_string())?;
+            if allowed.regions.is_some() || allowed.topics.is_some() {
+                data.retain(|row| {
+                    allowed.allows_region(row.get("region_code").and_then(Value::as_str))
+                        && allowed.allows_topic(row.get("topic_slug").and_then(Value::as_str), &[])
+                });
+                data.truncate(limit as usize);
+            }
+            Ok(json!({"data": data}))
         }
         "write_log" => {
             let limit = int_arg(arguments, "limit", 50, 1, 200)?;
@@ -577,10 +922,17 @@ fn dispatch(
                 .map(|data| json!({"data": data}))
                 .map_err(|err| err.to_string())
         }
+        "brief_propose" => {
+            let Some(caller) = caller else {
+                return Err("this tool requires a delegated caller".into());
+            };
+            propose_brief(&db, caller, arguments, &allowed)
+        }
         // Every write tool needs the verified caller: without one there is no author
         // to attribute the row to, and the audit trail would have a hole.
         name if is_write_tool(name) => {
-            // The lock above covers the read tools; a write helper takes it itself.
+            // Check row-level ResourceCtx on targets before releasing lock for write helpers.
+            enforce_write_scope(&db, name, arguments, &allowed)?;
             drop(db);
             let Some(caller) = caller else {
                 return Err("this tool requires a delegated caller".into());
@@ -597,6 +949,219 @@ fn dispatch(
         }
         other => Err(format!("unknown tool `{other}`")),
     }
+}
+
+fn enforce_write_scope(
+    db: &crate::db::Database,
+    tool_name: &str,
+    arguments: &Value,
+    allowed: &AllowedScope,
+) -> Result<(), String> {
+    if allowed.regions.is_none() && allowed.topics.is_none() {
+        return Ok(());
+    }
+    match tool_name {
+        "note_create" => {
+            if let Some(aid) = int_arg_opt(arguments, "article_id")? {
+                allowed.check_article(db, aid)?;
+            }
+            if let Some(did) = int_arg_opt(arguments, "document_id")? {
+                allowed.check_document(db, did)?;
+            }
+            if let Some(xid) = int_arg_opt(arguments, "analysis_id")? {
+                allowed.check_analysis(db, xid)?;
+            }
+        }
+        "note_update" | "note_delete" => {
+            if let Some(nid) = int_arg_opt(arguments, "id")? {
+                use rusqlite::OptionalExtension;
+                let target: Option<(Option<i64>, Option<i64>, Option<i64>)> = db
+                    .conn
+                    .query_row(
+                        "SELECT article_id, document_id, analysis_id FROM newsman_notes WHERE id=?1",
+                        [nid],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                if let Some((aid, did, xid)) = target {
+                    if let Some(a) = aid {
+                        allowed.check_article(db, a)?;
+                    }
+                    if let Some(d) = did {
+                        allowed.check_document(db, d)?;
+                    }
+                    if let Some(x) = xid {
+                        allowed.check_analysis(db, x)?;
+                    }
+                }
+            }
+        }
+        "analysis_create" => {
+            let region = string_arg(arguments, "region_code");
+            let topic = string_arg(arguments, "topic_slug");
+            allowed.check_requested_region(region.as_deref())?;
+            allowed.check_requested_topic(topic.as_deref())?;
+            if allowed.regions.is_some() && region.is_none() {
+                return Err("region_code is required when caller resource_ctx restricts regions".into());
+            }
+            if allowed.topics.is_some() && topic.is_none() {
+                return Err("topic_slug is required when caller resource_ctx restricts topics".into());
+            }
+            if let Some(arr) = arguments.get("source_article_ids").and_then(Value::as_array) {
+                for item in arr {
+                    if let Some(aid) = item.as_i64() {
+                        allowed.check_article(db, aid)?;
+                    }
+                }
+            }
+        }
+        "analysis_update" => {
+            if let Some(xid) = int_arg_opt(arguments, "id")? {
+                allowed.check_analysis(db, xid)?;
+            }
+            if let Some(arr) = arguments.get("source_article_ids").and_then(Value::as_array) {
+                for item in arr {
+                    if let Some(aid) = item.as_i64() {
+                        allowed.check_article(db, aid)?;
+                    }
+                }
+            }
+        }
+        "article_flag" => {
+            if let Some(aid) = int_arg_opt(arguments, "article_id")? {
+                allowed.check_article(db, aid)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn propose_brief(
+    db: &crate::db::Database,
+    caller: &Caller,
+    arguments: &Value,
+    allowed: &AllowedScope,
+) -> Result<Value, String> {
+    use rusqlite::{OptionalExtension, params};
+    let title = string_arg(arguments, "title").ok_or("`title` is required")?;
+    if title.chars().count() > crate::write::MAX_TITLE_CHARS {
+        return Err("too_long".into());
+    }
+    let body = string_arg(arguments, "body").ok_or("`body` is required")?;
+    if body.chars().count() > crate::write::MAX_ANALYSIS_CHARS {
+        return Err("too_long".into());
+    }
+    let kind = match string_arg(arguments, "kind").as_deref() {
+        None | Some("brief") => "brief",
+        Some("summary") => "summary",
+        Some(_) => return Err("`kind` must be brief or summary".into()),
+    };
+    let topic = string_arg(arguments, "topic_slug");
+    let region = string_arg(arguments, "region_code");
+    allowed.check_requested_region(region.as_deref())?;
+    allowed.check_requested_topic(topic.as_deref())?;
+    if allowed.regions.is_some() && region.is_none() {
+        return Err("region_code is required when caller resource_ctx restricts regions".into());
+    }
+    if allowed.topics.is_some() && topic.is_none() {
+        return Err("topic_slug is required when caller resource_ctx restricts topics".into());
+    }
+    if let Some(code) = region.as_deref()
+        && !matches!(crate::regions::region_enabled(db, code), Ok(true))
+    {
+        return Err(format!("region `{code}` is not enabled"));
+    }
+    if let Some(slug) = topic.as_deref() {
+        let known: Option<i64> = db
+            .conn
+            .query_row(
+                "SELECT 1 FROM topics WHERE slug=?1 AND enabled=1",
+                [slug],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|err| err.to_string())?;
+        if known.is_none() {
+            return Err(format!("topic `{slug}` is not enabled"));
+        }
+    }
+    let mut cited_ids: Vec<i64> = Vec::new();
+    if let Some(raw_ids) = arguments.get("source_article_ids")
+        && !raw_ids.is_null()
+    {
+        let arr = raw_ids.as_array().ok_or("invalid_sources")?;
+        if arr.len() > crate::write::MAX_SOURCES {
+            return Err("too_many_sources".into());
+        }
+        for item in arr {
+            let aid = item
+                .as_i64()
+                .filter(|v| *v > 0)
+                .ok_or("invalid_sources")?;
+            allowed.check_article(db, aid)?;
+            let exists: Option<i64> = db
+                .conn
+                .query_row("SELECT 1 FROM articles WHERE id=?1", [aid], |r| r.get(0))
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if exists.is_none() {
+                return Err(format!("no article `{aid}` to cite"));
+            }
+            if !cited_ids.contains(&aid) {
+                cited_ids.push(aid);
+            }
+        }
+    }
+    let now = crate::now() as i64;
+    let cited_json = serde_json::to_string(&cited_ids).unwrap_or_else(|_| "[]".into());
+    db.conn
+        .execute(
+            "INSERT INTO app_agent_brief_proposals (
+                kind, title, topic_slug, region_code, body, source_article_ids,
+                author_client, status, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending_approval',?8,?8)",
+            params![
+                kind,
+                title,
+                topic,
+                region,
+                body,
+                cited_json,
+                caller.client_id,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    let proposal_id = db.conn.last_insert_rowid();
+    let request_ref = format!("apr_brief_{proposal_id}");
+    let summary = format!("Đề xuất xuất bản bản tin '{}' (#{proposal_id})", title);
+    let _ = db.conn.execute(
+        "INSERT INTO newsman_write_log(at,client_id,app_id,tool,record_kind,record_id,outcome,note)
+         VALUES (?1,?2,?3,'brief_propose','brief_proposal',?4,'pending_approval',?5)",
+        params![
+            now,
+            caller.client_id,
+            caller.app_id,
+            proposal_id,
+            request_ref
+        ],
+    );
+    Ok(json!({
+        "ok": true,
+        "status": "pending_approval",
+        "proposal_id": proposal_id,
+        "title": title,
+        "kind": kind,
+        "topic_slug": topic,
+        "region_code": region,
+        "approval_required": {
+            "action_type": "newsman.brief.publish",
+            "summary": summary,
+            "request_ref": request_ref,
+        }
+    }))
 }
 
 /// Turn an `updated_since` argument into Unix seconds. Accepts an ISO date, a full

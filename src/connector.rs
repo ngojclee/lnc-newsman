@@ -33,14 +33,25 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hmac::{Hmac, Mac};
-use serde::Deserialize;
-use sha2::Sha256;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
 /// The `audience` the Hub signs for. Compiled in so a missing header cannot widen it.
 pub const DEFAULT_AUDIENCE: &str = "lnc-newsman";
+
+pub const HEADER_CLIENT_ID: &str = "x-mcp-hub-client-id";
+pub const HEADER_SCOPES: &str = "x-mcp-hub-client-scopes";
+pub const HEADER_TIMESTAMP: &str = "x-mcp-hub-client-timestamp";
+pub const HEADER_NONCE: &str = "x-mcp-hub-client-nonce";
+pub const HEADER_SIGNATURE: &str = "x-mcp-hub-client-signature";
+pub const HEADER_APP_ID: &str = "x-mcp-hub-app-id";
+pub const HEADER_VERSION: &str = "x-mcp-hub-version";
+pub const HEADER_AUDIENCE: &str = "x-mcp-hub-audience";
+pub const HEADER_DELEGATED_USER: &str = "x-mcp-hub-delegated-user";
+pub const HEADER_RESOURCE_CTX: &str = "x-mcp-hub-resource-ctx";
 
 /// Reading: articles, documents, tax, series, plus the notes and analyses other
 /// callers stored. Every read tool requires it.
@@ -71,6 +82,124 @@ const MAX_NONCES: usize = 10_000;
 
 pub const DENIED_BEARER: &str = "connector_auth_required";
 pub const DENIED_DELEGATION: &str = "delegation_denied";
+pub const DENIED_AUDIENCE: &str = "audience_denied";
+pub const DENIED_SCOPE: &str = "scope_denied";
+
+/// Row-level resource context bound inside a `v4s` capability envelope for Newsman.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceCtx {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regions: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topics: Option<Vec<String>>,
+}
+
+impl ResourceCtx {
+    pub fn is_unrestricted(&self) -> bool {
+        self.regions.is_none() && self.topics.is_none()
+    }
+}
+
+/// JSON capability grant envelope for `v4s` (used over Outbound Reverse Relay WSS and HTTP).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct V4sGrant {
+    pub version: String,
+    pub audience: String,
+    pub caller_agent: String,
+    #[serde(default)]
+    pub delegated_user: String,
+    pub app_id: String,
+    pub timestamp: i64,
+    pub nonce: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub resource_ctx: serde_json::Value,
+    pub signature: String,
+}
+
+/// Canonicalize JSON recursively with lexicographically sorted object keys and compact
+/// serialization (no insignificant whitespace). Null canonicalizes to `"{}"`.
+pub fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "{}".to_string(),
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|k| {
+                    let k_json = serde_json::to_string(k).unwrap_or_default();
+                    let v_json = canonical_json(&map[k]);
+                    format!("{k_json}:{v_json}")
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        serde_json::Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", parts.join(","))
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+pub fn resource_ctx_canonical_json(ctx: &ResourceCtx) -> String {
+    let val = serde_json::to_value(ctx).unwrap_or_else(|_| serde_json::json!({}));
+    canonical_json(&val)
+}
+
+pub fn resource_ctx_hash(canonical_ctx_json: &str) -> String {
+    let digest = Sha256::digest(canonical_ctx_json.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn envelope_v4s(
+    audience: &str,
+    caller_agent: &str,
+    delegated_user: &str,
+    app_id: &str,
+    timestamp: i64,
+    nonce: &str,
+    sorted_scopes: &[String],
+    canonical_resource_ctx_json: &str,
+) -> String {
+    let ctx_hash = resource_ctx_hash(canonical_resource_ctx_json);
+    format!(
+        "v4s\n{audience}\n{caller_agent}\n{delegated_user}\n{app_id}\n{timestamp}\n{nonce}\n{}\n{ctx_hash}",
+        sorted_scopes.join(",")
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sign_v4s(
+    secret: &str,
+    audience: &str,
+    caller_agent: &str,
+    delegated_user: &str,
+    app_id: &str,
+    timestamp: i64,
+    nonce: &str,
+    scopes: &[String],
+    resource_ctx: &ResourceCtx,
+) -> String {
+    let mut sorted = scopes.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    let canonical_ctx = resource_ctx_canonical_json(resource_ctx);
+    let payload = envelope_v4s(
+        audience,
+        caller_agent,
+        delegated_user,
+        app_id,
+        timestamp,
+        nonce,
+        &sorted,
+        &canonical_ctx,
+    );
+    sign(secret, &payload).unwrap_or_default()
+}
 
 /// The environment half of `env_or_cfg`. A value here wins over the stored one.
 #[derive(Clone, Default)]
@@ -271,10 +400,22 @@ impl Denied {
             code: DENIED_BEARER,
         }
     }
-    fn delegation() -> Self {
+    pub fn delegation() -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
             code: DENIED_DELEGATION,
+        }
+    }
+    pub fn audience() -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: DENIED_AUDIENCE,
+        }
+    }
+    pub fn scope() -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: DENIED_SCOPE,
         }
     }
     pub fn response(&self) -> Response {
@@ -286,30 +427,87 @@ impl Denied {
     }
 }
 
-/// A verified Hub caller. Only ever built by [`authenticate`], which is why carrying
-/// one is proof the signature was checked.
+/// A verified Hub caller. Only ever built by [`authenticate`] or [`verify_v4s_grant`],
+/// which is why carrying one is proof the signature was checked.
 #[derive(Debug, Clone)]
 pub struct Caller {
     pub client_id: String,
-    /// Present only for a verified v4 assertion. Never taken from tool arguments.
+    /// Present only for a verified v4 / v4s assertion. Never taken from tool arguments.
     pub app_id: Option<String>,
     pub scopes: Vec<String>,
+    pub delegated_user: Option<String>,
+    pub resource_ctx: Option<ResourceCtx>,
 }
 
 impl Caller {
     pub fn has_scope(&self, scope: &str) -> bool {
-        self.scopes.iter().any(|granted| granted == scope)
+        if self.scopes.iter().any(|granted| granted == scope || granted == "newsman:*") {
+            return true;
+        }
+        if scope == READ_SCOPE {
+            return self
+                .scopes
+                .iter()
+                .any(|g| g.starts_with("newsman:") && (g.ends_with(":read") || g.ends_with(":write")));
+        }
+        if scope == WRITE_SCOPE {
+            return self
+                .scopes
+                .iter()
+                .any(|g| g.starts_with("newsman:") && g.ends_with(":write"));
+        }
+        false
+    }
+
+    pub fn allows_tool(&self, tool_name: &str, required_coarse_scope: &str) -> bool {
+        let bare = tool_name.strip_prefix("newsman__").unwrap_or(tool_name);
+        if self.scopes.iter().any(|g| g == "newsman:*") {
+            return true;
+        }
+        // Fine-grained v4s scope check when domain scopes (`newsman:<domain>:read|write`) are used:
+        let has_domain_scopes = self.scopes.iter().any(|g| {
+            g.starts_with("newsman:") && g != READ_SCOPE && g != WRITE_SCOPE
+        });
+        if has_domain_scopes {
+            let domain_needed: &[&str] = match bare {
+                "regions" | "topics" | "reader_preferences" | "latest_articles" | "article_get" => {
+                    &["newsman:articles:read", "newsman:*:read", READ_SCOPE]
+                }
+                "documents" => &["newsman:documents:read", "newsman:*:read", READ_SCOPE],
+                "tax_calendar" => &["newsman:tax:read", "newsman:*:read", READ_SCOPE],
+                "series" | "observations" => &["newsman:series:read", "newsman:*:read", READ_SCOPE],
+                "notes" => &["newsman:notes:read", "newsman:articles:read", "newsman:*:read", READ_SCOPE],
+                "analyses" | "write_log" => &["newsman:analyses:read", "newsman:briefs:read", "newsman:*:read", READ_SCOPE],
+                "note_create" | "note_update" | "note_delete" | "article_flag" => {
+                    &["newsman:notes:write", "newsman:*:write", WRITE_SCOPE]
+                }
+                "analysis_create" | "analysis_update" | "brief_propose" => {
+                    &["newsman:briefs:write", "newsman:analyses:write", "newsman:*:write", WRITE_SCOPE]
+                }
+                _ => &[],
+            };
+            return self
+                .scopes
+                .iter()
+                .any(|g| domain_needed.contains(&g.as_str()));
+        }
+        if required_coarse_scope == WRITE_SCOPE {
+            return self.has_scope(WRITE_SCOPE) && self.has_scope(READ_SCOPE);
+        }
+        self.has_scope(required_coarse_scope)
+    }
+
+    pub fn resource_ctx(&self) -> Option<&ResourceCtx> {
+        self.resource_ctx.as_ref()
     }
 }
 
 /// True when the request carries the `Bearer` credential the connector path uses.
-/// This is what excludes a browser request from that path: a session or a reader key
-/// may only arrive with `x-api-key`, never as a bearer, so a cookie request can not be
-/// talked into being treated as a Hub call.
 pub fn presents_connector_bearer(headers: &HeaderMap) -> bool {
     header_str(headers, "authorization")
         .is_some_and(|value| value.starts_with("Bearer "))
-        && header_str(headers, "x-mcp-hub-client-signature").is_some()
+        && (header_str(headers, HEADER_SIGNATURE).is_some()
+            || header_str(headers, "x-lnc-v4s-grant").is_some())
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -320,8 +518,12 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
-fn constant_time_eq(left: &str, right: &str) -> bool {
+pub fn constant_time_eq(left: &str, right: &str) -> bool {
     bool::from(left.as_bytes().ct_eq(right.as_bytes()))
+}
+
+pub fn secret_eq(left: &str, right: &str) -> bool {
+    constant_time_eq(left, right)
 }
 
 fn valid_client_id(value: &str) -> bool {
@@ -410,6 +612,123 @@ fn claim_nonce(state: &SharedState, nonce: &str, now: u64) -> bool {
     true
 }
 
+fn valid_v4s_id(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-'))
+}
+
+fn valid_v4s_nonce(value: &str) -> bool {
+    (8..=128).contains(&value.len())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':'))
+}
+
+fn v4s_scope_within_ceiling(scope: &str, max_scopes: &[String]) -> bool {
+    if max_scopes.iter().any(|m| m == scope || m == "newsman:*") {
+        return true;
+    }
+    if scope.starts_with("newsman:") && scope.ends_with(":read") {
+        return max_scopes.iter().any(|m| m == READ_SCOPE);
+    }
+    if scope.starts_with("newsman:") && scope.ends_with(":write") {
+        return max_scopes.iter().any(|m| m == WRITE_SCOPE);
+    }
+    false
+}
+
+/// Verify a `v4s` capability grant (`version == "v4s"`, `audience == expected_audience`,
+/// `app_id == expected_audience`, `|now - ts| <= 90s`, single-use nonce, constant-time
+/// HMAC-SHA256 over the 9-line canonical payload including `sha256_hex(canonical_resource_ctx)`).
+pub fn verify_v4s_grant(
+    state: &SharedState,
+    secret: &str,
+    expected_audience: &str,
+    max_scopes: &[String],
+    grant: &V4sGrant,
+    now_unix: i64,
+) -> Result<Caller, Denied> {
+    if grant.version.trim() != "v4s" {
+        return Err(Denied::delegation());
+    }
+    let expected_aud = expected_audience.trim();
+    if expected_aud.is_empty()
+        || grant.audience.trim() != expected_aud
+        || grant.app_id.trim() != expected_aud
+    {
+        return Err(Denied::audience());
+    }
+    if !valid_v4s_id(grant.caller_agent.trim(), 96)
+        || (!grant.delegated_user.trim().is_empty()
+            && !valid_v4s_id(grant.delegated_user.trim(), 96))
+        || !valid_v4s_nonce(grant.nonce.trim())
+    {
+        return Err(Denied::delegation());
+    }
+    if (now_unix - grant.timestamp).unsigned_abs() > MAX_SKEW_SECONDS {
+        return Err(Denied::delegation());
+    }
+    let mut sorted_scopes: Vec<String> = grant
+        .scopes
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    sorted_scopes.sort();
+    sorted_scopes.dedup();
+    if sorted_scopes.is_empty() || sorted_scopes.iter().any(|s| !valid_scope(s)) {
+        return Err(Denied::delegation());
+    }
+    if sorted_scopes
+        .iter()
+        .any(|s| !v4s_scope_within_ceiling(s, max_scopes))
+    {
+        return Err(Denied::scope());
+    }
+
+    let ctx_val = if grant.resource_ctx.is_null() {
+        serde_json::json!({})
+    } else {
+        grant.resource_ctx.clone()
+    };
+    let canonical_ctx = canonical_json(&ctx_val);
+    let payload = envelope_v4s(
+        grant.audience.trim(),
+        grant.caller_agent.trim(),
+        grant.delegated_user.trim(),
+        grant.app_id.trim(),
+        grant.timestamp,
+        grant.nonce.trim(),
+        &sorted_scopes,
+        &canonical_ctx,
+    );
+    let Some(expected_sig) = sign(secret, &payload) else {
+        return Err(Denied::delegation());
+    };
+    let supplied_sig = grant.signature.trim().to_ascii_lowercase();
+    if !constant_time_eq(&expected_sig, &supplied_sig) {
+        return Err(Denied::delegation());
+    }
+    let parsed_ctx: ResourceCtx =
+        serde_json::from_value(ctx_val).map_err(|_| Denied::delegation())?;
+    let now_u64 = now_unix.max(0) as u64;
+    if !claim_nonce(state, grant.nonce.trim(), now_u64) {
+        return Err(Denied::delegation());
+    }
+
+    Ok(Caller {
+        client_id: grant.caller_agent.trim().to_string(),
+        app_id: Some(grant.app_id.trim().to_string()),
+        scopes: sorted_scopes,
+        delegated_user: (!grant.delegated_user.trim().is_empty())
+            .then(|| grant.delegated_user.trim().to_string()),
+        resource_ctx: Some(parsed_ctx),
+    })
+}
+
 /// Verify the connector bearer and the delegation signature, in that order. Order
 /// matters: the bearer is the cheap check, and failing it must not advertise whether
 /// a signature would have been accepted.
@@ -428,6 +747,68 @@ pub fn authenticate(state: &SharedState, headers: &HeaderMap) -> Result<Caller, 
         .unwrap_or_default();
     if supplied.is_empty() || !constant_time_eq(supplied, expected_bearer) {
         return Err(Denied::unauthorized());
+    }
+
+    if let Some(raw_grant) = header_str(headers, "x-lnc-v4s-grant") {
+        let grant: V4sGrant = serde_json::from_str(raw_grant).map_err(|_| Denied::delegation())?;
+        return verify_v4s_grant(
+            state,
+            secret,
+            &resolved.audience,
+            &resolved.max_scopes,
+            &grant,
+            crate::now() as i64,
+        );
+    }
+
+    let is_v4s = header_str(headers, HEADER_VERSION) == Some("v4s")
+        || headers.contains_key(HEADER_RESOURCE_CTX)
+        || headers.contains_key(HEADER_DELEGATED_USER);
+    if is_v4s {
+        if let Some(ver) = header_str(headers, HEADER_VERSION)
+            && ver != "v4s"
+        {
+            return Err(Denied::delegation());
+        }
+        let caller_agent =
+            header_str(headers, HEADER_CLIENT_ID).ok_or_else(Denied::delegation)?;
+        let delegated_user = header_str(headers, HEADER_DELEGATED_USER).unwrap_or_default();
+        let app_id = header_str(headers, HEADER_APP_ID).ok_or_else(Denied::audience)?;
+        let audience = header_str(headers, HEADER_AUDIENCE).unwrap_or(&resolved.audience);
+        let scopes_raw = header_str(headers, HEADER_SCOPES).ok_or_else(Denied::delegation)?;
+        let raw_ts = header_str(headers, HEADER_TIMESTAMP).ok_or_else(Denied::delegation)?;
+        let nonce = header_str(headers, HEADER_NONCE).ok_or_else(Denied::delegation)?;
+        let signature = header_str(headers, HEADER_SIGNATURE).ok_or_else(Denied::delegation)?;
+        let timestamp: i64 = raw_ts.parse().map_err(|_| Denied::delegation())?;
+        let resource_ctx: serde_json::Value = match header_str(headers, HEADER_RESOURCE_CTX) {
+            Some(raw) => serde_json::from_str(raw).map_err(|_| Denied::delegation())?,
+            None => serde_json::json!({}),
+        };
+        let grant = V4sGrant {
+            version: "v4s".to_string(),
+            audience: audience.to_string(),
+            caller_agent: caller_agent.to_string(),
+            delegated_user: delegated_user.to_string(),
+            app_id: app_id.to_string(),
+            timestamp,
+            nonce: nonce.to_string(),
+            scopes: scopes_raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect(),
+            resource_ctx,
+            signature: signature.to_string(),
+        };
+        return verify_v4s_grant(
+            state,
+            secret,
+            &resolved.audience,
+            &resolved.max_scopes,
+            &grant,
+            crate::now() as i64,
+        );
     }
 
     let client_id = header_str(headers, "x-mcp-hub-client-id").ok_or_else(Denied::delegation)?;
@@ -492,6 +873,8 @@ pub fn authenticate(state: &SharedState, headers: &HeaderMap) -> Result<Caller, 
         client_id: client_id.to_string(),
         app_id: app_id.map(str::to_string),
         scopes,
+        delegated_user: None,
+        resource_ctx: None,
     })
 }
 
@@ -640,8 +1023,5 @@ pub fn scope_allows(caller: Option<&Caller>, tool: &str) -> bool {
     let Some(scope) = crate::mcp::tool_scope(tool) else {
         return false;
     };
-    if scope == WRITE_SCOPE {
-        return caller.has_scope(WRITE_SCOPE) && caller.has_scope(READ_SCOPE);
-    }
-    caller.has_scope(scope)
+    caller.allows_tool(tool, scope)
 }

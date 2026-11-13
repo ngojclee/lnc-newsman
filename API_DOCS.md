@@ -234,6 +234,7 @@ These write **only** the app's own analytic data. None of them can reach a sourc
 | `analysis_create` | `title` (≤300), `body` (≤20000), `kind?` (`brief`/`summary`), `topic_slug?`, `region_code?`, `source_article_ids?` (≤200) | Stores a brief or summary |
 | `analysis_update` | `id`, any of `title` / `body` / `source_article_ids` | Changes **your own** brief |
 | `article_flag` | `article_id`, `label` (≤60) | Marks an article; repeating a label is idempotent |
+| `brief_propose` | `title` (≤300), `body` (≤20000), `kind?` (`brief`/`summary`), `topic_slug?`, `region_code?`, `source_article_ids?` (≤200) | Queues a gated brief publication proposal (`status: "pending_approval"`) with `approval_required: { action_type: "newsman.brief.publish", summary, request_ref }` instead of publishing directly |
 
 Rules that hold for every write tool:
 
@@ -296,6 +297,54 @@ Only metadata and structured numbers are stored; filing bodies are never fetched
 `GET /api/admin/provider` returns `configured`, `base_host` (host only), `allowed_hosts`, the three model aliases, `agent`, `timeout_seconds`, `tokens_used_today`, `daily_budget`, `calls_today` and `has_secret` — never the key and never the full base URL. `POST /api/admin/provider/check` performs a single `GET {HUB_BASE_URL}/models` with the Hub key as a bearer header and returns the model ids; it generates no content and bills no tokens.
 
 Configuration is environment-only: `HUB_BASE_URL`, `HUB_ALLOWED_HOSTS` (comma-separated exact host names that may resolve to private addresses), `HUB_MODEL_CLASSIFY`, `HUB_MODEL_SUMMARISE`, `HUB_MODEL_ANALYSE`, `HUB_AGENT_ID`, `HUB_TIMEOUT_SECONDS`, `LLM_DAILY_TOKEN_BUDGET`. The Hub key is the write-only secret `hub-api-key`. See `.docs/hub-integration.md`.
+
+## App-scoped agents (Studio, Editorial Rooms, Reverse Relay & Telegram)
+
+App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner-created blueprints) operate under zero-trust `v4s` capability envelopes (`audience == "lnc-newsman"`, `app_id == "lnc-newsman"`, 90 s freshness, single-use nonce, and canonical SHA-256 `ResourceCtx { regions, topics }` binding) over both the outbound reverse relay (`lnc-app-bridge.v1`) and HTTP `POST /mcp` (`X-MCP-Hub-Version: v4s` or `X-LNC-V4S-Grant`). When Astraea is offline or unconfigured, turns execute locally in `hub_standby` mode with the 4-mode discussion orchestrator (`parallel_panel`, `sequential_build`, `cross_debate`, `mention_or_lead` capped at 3 peer hops) and a 512-event SSE ring buffer emitting `seat_state`, `text`, `reasoning`, `tool`, `tool_result`, `result`, and `error`. All secrets are sealed exclusively via `LNC_MASTER_KEY` (`src/secrets.rs`), and all outbound HTTP and WebSocket connections pass through `fetch::Fetcher`.
+
+| Endpoint | Auth & CSRF | Purpose |
+|---|---|---|
+| `GET /api/app-agents/bridge-config` | Session | Read non-secret bridge settings, `mode` (`astraea_relay` or `hub_standby`), `relay_connected`, `astraea_reachable`, `secret_store_open`, `task_models` (`thread_title`, `round_summary`, `companion_brief`, `tax_doc_digest`), and redacted `has_*` flags |
+| `PUT /api/app-agents/bridge-config` | Session + CSRF | Update bridge URLs, default model, `task_models`, allowed private hosts, and write-only secrets (returns 503 `secret_store_not_configured` if `LNC_MASTER_KEY` is unset when writing a secret) |
+| `POST /api/app-agents/bridge-config/probe` | Session + CSRF | Probe Hub, Astraea health, and LLM models list endpoint via `fetch::Fetcher` (never calls chat completions), returning `{ ok, probed_at, hub, astraea, llm }` without echoing secrets |
+| `GET /api/app-agents/models` | Session | List available model aliases from LNC Agent Hub or standby defaults |
+| `GET /api/app-agents/workspaces` | Session | List newsroom workspaces (seeded `newsroom-general` and `vn-macro-tax-desk` plus custom workspaces) |
+| `POST /api/app-agents/workspaces` | Session + CSRF | Create a workspace (`custom_instructions_md`, `resource_ctx`, `default_skill_slugs`, `default_agent_slugs`, `default_discussion_mode`, `is_default`) |
+| `PUT /api/app-agents/workspaces/{id}` | Session + CSRF | Create or update a workspace |
+| `DELETE /api/app-agents/workspaces/{id}` | Session + CSRF | Delete a workspace (unlinks `workspace_id` on existing threads) |
+| `GET /api/app-agents/skills` | Session | List cached Hub/builtin skills (`display_name`, `granted`, local `enabled`, `group_slugs`, `body_md`, safe `body_preview`) and merged `groups` (`display_name`, `description`, `category`, `icon`, `granted_count`/`total_count`, `granted`) |
+| `POST /api/app-agents/skills/sync` | Session + CSRF | Sync skills, `groups[]`, and approval statuses (`skill-access-requests`) from LNC Agent Hub via `fetch::Fetcher`, preserving local `enabled`, clearing `body_md` when `granted` is revoked, and returning `sync_mode` + `access_requests`; degrades cleanly when offline |
+| `GET /api/app-agents/skills/{slug}` | Session | Fetch a single cached skill playbook |
+| `PATCH /api/app-agents/skills/{slug}` | Session + CSRF | Toggle local `enabled` state only (never elevates Hub `granted`) |
+| `GET /api/app-agents/skills/access-requests` | Session | List recorded skill/group access requests (`status`, `hub_request_id`, `approval_request_id`, `reviewed_by`, `review_note`) |
+| `POST /api/app-agents/skills/access-requests` | Session + CSRF | Idempotently submit/upsert a Hub skill or `skill_group` access request (forwards to Hub via `fetch::Fetcher` for `"pending"` + `approval_request_id`, or records `recorded_local` when offline/404) |
+| `GET /api/app-agents/agents` | Session | List newsroom agent blueprints (`AppAgentConfig`, including `enabled_skills` and `enabled_skill_groups`) |
+| `PUT /api/app-agents/agents/{slug}` | Session + CSRF | Create or update an agent blueprint (`vault://` secret references only; optional Hub binding sync) |
+| `DELETE /api/app-agents/agents/{slug}` | Session + CSRF | Delete an agent blueprint |
+| `GET /api/app-agents/threads` | Session | List direct and group editorial threads (`?article_id=&report_id=&workspace_id=`) |
+| `POST /api/app-agents/threads` | Session + CSRF | Create a direct or group thread with `discussion_mode`, `member_slugs`, optional `workspace_id`, `pinned_skills`, and `model_override` |
+| `PATCH /api/app-agents/threads/{id}` | Session + CSRF | Update thread title, members, lead, `discussion_mode`, `workspace_id`, `pinned_skills`, or `model_override` |
+| `DELETE /api/app-agents/threads/{id}` | Session + CSRF | Delete a thread and cascade its messages and whiteboard notes |
+| `GET /api/app-agents/threads/{id}/messages` | Session | List persisted thread messages, reasoning, merged tool pills, and context snapshots |
+| `POST /api/app-agents/threads/{id}/turns` | Session + CSRF | Execute a direct or multi-agent turn (`text`, `idempotency_key`, `mentions`, optional `skill_slugs`, `model_override`, and 16 KiB-bounded `active_view_context`) |
+| `GET /api/app-agents/threads/{id}/stream` | Session | Subscribe to SSE turn events with `Last-Event-ID` / `?since_seq=` replay |
+| `GET /api/app-agents/threads/{id}/whiteboard` | Session | List pinned whiteboard notes for a thread |
+| `POST /api/app-agents/threads/{id}/whiteboard` | Session + CSRF | Pin a note onto the thread whiteboard |
+| `DELETE /api/app-agents/threads/{id}/whiteboard` | Session + CSRF | Delete a whiteboard note by `?id=` query parameter |
+| `DELETE /api/app-agents/threads/{id}/whiteboard/{code}` | Session + CSRF | Delete a whiteboard note by path id |
+| `POST /api/app-agents/threads/{id}/round-summary` | Session + CSRF | Synthesize the latest discussion round onto the whiteboard |
+| `GET /api/app-agents/schedules` | Session | List recurring interval or 5-field cron agent schedules |
+| `POST /api/app-agents/schedules` | Session + CSRF | Create a recurring agent schedule |
+| `PATCH /api/app-agents/schedules/{id}` | Session + CSRF | Update or toggle a schedule |
+| `DELETE /api/app-agents/schedules/{id}` | Session + CSRF | Delete a schedule |
+| `POST /api/app-agents/schedules/{id}/run-now` | Session + CSRF | Trigger an immediate schedule turn |
+| `GET /api/app-agents/telegram/config` | Session | Read conversational Telegram transport (`direct_poll`, `direct_webhook`, `cygnus_poll`, `cygnus_webhook`), `chat_policy` (`open`, `mention`, `topics_only`), and `has_*` flags |
+| `PUT /api/app-agents/telegram/config` | Session + CSRF | Update conversational Telegram transport, policy, URLs, and write-only secrets |
+| `GET /api/app-agents/telegram/routes` | Session | List conversational Telegram chat/topic-to-agent bindings |
+| `POST /api/app-agents/telegram/routes` | Session + CSRF | Create a conversational Telegram route (`chat_id`, optional `message_thread_id`, `agent_slug`, `policy`) |
+| `DELETE /api/app-agents/telegram/routes/{id}` | Session + CSRF | Delete a conversational Telegram route |
+| `POST /api/app-agents/telegram/webhook/direct` | `X-Telegram-Bot-Api-Secret-Token` | Receive inbound Telegram Bot API webhook updates (constant-time secret check; separate from `src/telegram.rs` alert outbox) |
+| `POST /api/app-agents/telegram/webhook/cygnus` | `x-gateway-key` | Receive inbound Cygnus gateway webhook envelopes (constant-time key check; preserves `message_thread_id`) |
 
 ## Security and deployment limitations
 
