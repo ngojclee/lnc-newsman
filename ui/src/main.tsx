@@ -302,7 +302,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
   const cycleMode = () => setMode(THEMES[(THEMES.findIndex((theme) => theme.id === mode) + 1) % THEMES.length].id)
   const signOut = async () => { try { await api('/api/auth/logout', { method: 'POST' }); onSignOut() } catch { setError('logout') } }
   const openFilter = (next: Filter) => { setFilter(next); if (page !== 'topics') setRoute('topics') }
-  return <div className="app-shell">
+  return <div className={`app-shell page-${page}`}>
     <aside className="sidebar">
       <div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
       <div className="app-switch" aria-label="Chuyển ứng dụng / Switch app">{appLinks('newsman', isLocal()).map((link) => <a key={link.id} className={link.id === 'newsman' ? 'app-switch-link active' : 'app-switch-link'} href={link.href} aria-current={link.id === 'newsman' ? 'page' : undefined}><span aria-hidden="true">{link.icon}</span>{link.label}</a>)}</div>
@@ -1497,7 +1497,7 @@ function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: 
   const stamp = (sec: number) => formatDate(lang, new Date(sec * 1000).toISOString()) ?? ''
 
   return <div className="reader-backdrop" role="dialog" aria-modal="true" aria-label={item?.title ?? t.readInApp} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-    <div className="reader-sheet">
+    <div className="reader-sheet reader-shell">
       <div className="reader-toolbar">
         <div className="article-meta">
           {item && <span className="tier-badge">{item.source_tier}</span>}

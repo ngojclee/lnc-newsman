@@ -1,6 +1,8 @@
 import {
   AGENT_COPY,
   DEFAULT_SEED_AGENTS,
+  formatBridgeModeLabel,
+  formatDiscussionModeShort,
   NEWSMAN_APP_TOOLS,
   type HubSkillGroupSummary,
   type HubSkillSummary,
@@ -364,4 +366,65 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   assertEqual(disjointScope.disjointRegions, true)
 }
 
-console.log('8/8 agentBridge tests passed')
+// 9. Zero raw <select> elements across ui/src/**/*.tsx + localized short badges
+{
+  const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+    readdirSync: (
+      p: string,
+      opts: { withFileTypes: true },
+    ) => Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>
+    readFileSync: (p: string, enc: string) => string
+  }
+  const urlMod = (await import(/* @vite-ignore */ 'node:' + 'url')) as {
+    fileURLToPath: (u: string) => string
+  }
+  const pathMod = (await import(/* @vite-ignore */ 'node:' + 'path')) as {
+    dirname: (p: string) => string
+    join: (...p: string[]) => string
+    relative: (from: string, to: string) => string
+  }
+
+  const srcRoot = pathMod.dirname(urlMod.fileURLToPath(import.meta.url))
+  const collectTsxFiles = (dir: string): string[] => {
+    const out: string[] = []
+    for (const entry of fsMod.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = pathMod.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        out.push(...collectTsxFiles(fullPath))
+      } else if (entry.isFile() && entry.name.endsWith('.tsx')) {
+        out.push(fullPath)
+      }
+    }
+    return out
+  }
+
+  const tsxFiles = collectTsxFiles(srcRoot)
+  assertOk(tsxFiles.length >= 6, 'Must scan all UI .tsx components under ui/src')
+  const offenders: string[] = []
+  for (const file of tsxFiles) {
+    const content = fsMod.readFileSync(file, 'utf8')
+    if (/<select\b/.test(content)) {
+      offenders.push(pathMod.relative(srcRoot, file))
+    }
+  }
+  assertDeepEqual(
+    offenders,
+    [],
+    'Zero raw <select> elements may remain in ui/src/**/*.tsx (all must use custom Select)',
+  )
+
+  assertEqual(formatDiscussionModeShort('parallel_panel', AGENT_COPY.vi), 'Song song')
+  assertEqual(formatDiscussionModeShort('parallel_panel', AGENT_COPY.en), 'Parallel')
+  assertEqual(formatDiscussionModeShort('cross_debate', AGENT_COPY.vi), 'Tranh biện')
+  assertEqual(formatDiscussionModeShort('cross_debate', AGENT_COPY.en), 'Debate')
+  assertEqual(
+    formatBridgeModeLabel({ mode: 'astraea_relay', relay_connected: true }, AGENT_COPY.en),
+    AGENT_COPY.en.bridgeRelayOnline,
+  )
+  assertEqual(
+    formatBridgeModeLabel({ mode: 'hub_standby', relay_connected: false }, AGENT_COPY.vi),
+    AGENT_COPY.vi.bridgeHubStandby,
+  )
+}
+
+console.log('9/9 agentBridge tests passed')

@@ -6,6 +6,7 @@ import {
   boundActiveViewContext,
   extractMentions,
   MAX_ACTIVE_VIEW_CONTEXT_BYTES,
+  skillDisplayName,
   useAppAgents,
   useCompanionContext,
   useThreadStream,
@@ -161,9 +162,15 @@ export function CompanionDrawer({
     }
   }
 
-  const contextBytes = activeViewContext
-    ? new TextEncoder().encode(JSON.stringify(activeViewContext)).byteLength
-    : 0
+  const previewBody = (contentText || excerpt || '').trim()
+  const hasRichText = Boolean((selectedText && selectedText.trim()) || previewBody)
+  const contextBytes =
+    hasRichText && activeViewContext
+      ? new TextEncoder().encode(JSON.stringify(activeViewContext)).byteLength
+      : 0
+  const contextUsageLabel = hasRichText
+    ? `✓ ${c.companionContextReadyLoaded} (${contextBytes < 1024 ? '<1' : (contextBytes / 1024).toFixed(1)} KB)`
+    : c.companionContextReadyTitle
 
   const renderWithCitations = (text: string) => {
     const parts = text.split(/(#article-\d+)/gi)
@@ -186,8 +193,6 @@ export function CompanionDrawer({
     })
   }
 
-  const previewBody = contentText || excerpt || ''
-
   return (
     <aside className="companion-drawer" role="dialog" aria-label={c.companionHeaderTitle}>
       <header className="companion-head">
@@ -195,7 +200,13 @@ export function CompanionDrawer({
           <span className="eyebrow">{c.companionContextBadge}</span>
           <strong>{c.companionHeaderTitle}</strong>
         </div>
-        <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+        <button
+          type="button"
+          className="icon-button"
+          onClick={onClose}
+          aria-label={c.cancelBtn}
+          title={c.cancelBtn}
+        >
           ✕
         </button>
       </header>
@@ -203,7 +214,7 @@ export function CompanionDrawer({
       <div className="companion-context-card">
         <div className="companion-ctx-row">
           <strong>📰 {title}</strong>
-          <small>{(contextBytes / 1024).toFixed(1)} / 16.0 KiB</small>
+          <span className="scope-chip">{contextUsageLabel}</span>
         </div>
         {activeWorkspace && (
           <div className="companion-workspace-row">
@@ -249,7 +260,7 @@ export function CompanionDrawer({
 
         {grantedSkills.length > 0 && (
           <div className="companion-skill-chips">
-            <small className="companion-skill-label">/{c.companionSkillChipLabel}:</small>
+            <small className="companion-skill-label">{c.companionSkillChipLabel}:</small>
             <div className="chip-row">
               {grantedSkills.map((sk) => {
                 const active = attachedSkills.includes(sk.slug)
@@ -264,7 +275,7 @@ export function CompanionDrawer({
                       )
                     }
                   >
-                    🧩 {sk.name}
+                    🧩 {skillDisplayName(sk)}
                   </button>
                 )
               })}
@@ -340,17 +351,22 @@ export function CompanionDrawer({
           </div>
         )}
 
-        {Object.values(streamState.drafts).map((d) => (
-          <div key={d.agent_slug} className="salon-turn salon-turn-agent streaming">
-            <div className="salon-turn-card">
-              <header className="salon-turn-meta">
-                <b>@{d.agent_slug}</b>
-                <em>{c.seatSpeaking}</em>
-              </header>
-              <div className="salon-turn-prose">{d.text}</div>
+        {Object.values(streamState.drafts).map((d) => {
+          const ag = agentMap.get(d.agent_slug)
+          return (
+            <div key={d.agent_slug} className="salon-turn salon-turn-agent streaming">
+              <div className="salon-turn-card">
+                <header className="salon-turn-meta">
+                  <b>
+                    {ag?.emoji ?? '📈'} {ag?.display_name ?? `@${d.agent_slug}`}
+                  </b>
+                  <em>{c.seatSpeaking}</em>
+                </header>
+                <div className="salon-turn-prose">{d.text}</div>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {(error || streamState.lastError) && <p className="form-error">{error ?? streamState.lastError}</p>}

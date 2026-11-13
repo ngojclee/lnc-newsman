@@ -18,40 +18,52 @@ import {
   type TelegramRouteConfig,
   type TelegramTransportMode,
 } from './agentTypes.ts'
+import { Select } from './Select.tsx'
 import { stripSkillFrontmatter } from './useAppAgents.ts'
 
 type StudioTab = 'identity' | 'persona' | 'runtime' | 'scope' | 'schedules' | 'telegram' | 'skills'
 
-const RUNTIME_KINDS: readonly { id: RuntimeKind; label: string; desc_vi: string; desc_en: string }[] = [
+const RUNTIME_KINDS: readonly {
+  id: RuntimeKind
+  label_vi: string
+  label_en: string
+  desc_vi: string
+  desc_en: string
+}[] = [
   {
     id: 'partner_fast',
-    label: 'Partner Fast (Astraea / Hub SSE)',
-    desc_vi: 'Phân tích tốc độ cao qua LNC Hub kèm vòng lặp truy vấn dữ liệu tòa soạn.',
-    desc_en: 'Low-latency analytical loop via LNC Hub with native newsroom tool execution.',
+    label_vi: 'Trực tiếp tốc độ cao (LNC Hub)',
+    label_en: 'Fast Direct Loop (LNC Hub)',
+    desc_vi: 'Phản hồi tức thì qua LNC Hub kèm tra cứu bài báo và chuỗi số liệu tòa soạn.',
+    desc_en: 'Low-latency analytical loop via LNC Hub with native newsroom source lookups.',
   },
   {
     id: 'openhands',
-    label: 'OpenHands Runtime',
-    desc_vi: 'Môi trường tác tử sâu cho các tác vụ tổng hợp báo cáo vĩ mô đa bước.',
-    desc_en: 'Deep agentic sandbox runtime for multi-step macro research and brief synthesis.',
+    label_vi: 'Không gian nghiên cứu đa bước (OpenHands)',
+    label_en: 'Deep Research Runtime (OpenHands)',
+    desc_vi: 'Phù hợp cho các phiên tổng hợp báo cáo vĩ mô và đối chiếu nhiều nguồn dài hơi.',
+    desc_en: 'Extended agentic environment for multi-step macro research and brief synthesis.',
   },
   {
     id: 'codex_acp',
-    label: 'Codex ACP Bridge',
-    desc_vi: 'Tác tử qua giao thức ACP (Agent Communication Protocol) nhánh Codex.',
-    desc_en: 'Agent Communication Protocol bridge backed by Codex analytical worker.',
+    label_vi: 'Nhánh phân tích Codex',
+    label_en: 'Codex Analytical Worker',
+    desc_vi: 'Chuyên sâu xử lý dữ liệu định lượng, chuỗi thời gian và kiểm chứng logic.',
+    desc_en: 'Specialized analytical worker backed by Codex for quantitative and series checks.',
   },
   {
     id: 'claude_acp',
-    label: 'Claude ACP Bridge',
-    desc_vi: 'Tác tử qua giao thức ACP nhánh Claude chuyên về đối chiếu văn bản & pháp quy.',
-    desc_en: 'Agent Communication Protocol bridge backed by Claude regulatory & policy worker.',
+    label_vi: 'Nhánh biên tập & pháp quy Claude',
+    label_en: 'Claude Editorial & Policy Worker',
+    desc_vi: 'Chuyên sâu đọc hiểu văn bản dài, đối chiếu pháp quy và biên tập bản tin.',
+    desc_en: 'Specialized worker backed by Claude for long-form regulatory reading and drafting.',
   },
   {
     id: 'remote_agent',
-    label: 'Remote A2A / Custom Endpoint',
-    desc_vi: 'Kết nối tới endpoint tác tử từ xa xác thực qua tham chiếu khóa vault://.',
-    desc_en: 'Connect to an external A2A/MCP agent endpoint authenticated via vault:// ref.',
+    label_vi: 'Trợ lý kết nối từ xa',
+    label_en: 'Custom Remote Endpoint',
+    desc_vi: 'Kết nối tới dịch vụ trợ lý riêng, xác thực an toàn bằng đường dẫn khóa trên Hub Vault.',
+    desc_en: 'Connect to an external agent endpoint authenticated via a Hub Vault reference.',
   },
 ] as const
 
@@ -153,7 +165,9 @@ export function AgentStudio({
     reply_language: 'vi',
     soul_md: '',
     app_role_addendum_md:
-      'Tôn trọng phạm vi vùng & chủ đề v4s; luôn giữ nguyên miễn trừ pháp lý/thuế khi dẫn tax_calendar & documents.',
+      lang === 'vi'
+        ? 'Tuân thủ phạm vi vùng và chủ đề được phép; luôn giữ nguyên trạng thái chưa xác minh (verified = false) và miễn trừ pháp lý/thuế khi dẫn lịch thuế hoặc văn bản pháp quy.'
+        : 'Respect allowed regions and topics; always preserve unverified status (verified = false) and statutory tax/legal disclaimers when citing tax deadlines or regulatory filings.',
     sync_blueprint_to_hub: true,
     runtime_kind: 'partner_fast',
     primary_model: models[0] ?? 'gpt-5.4-mini',
@@ -161,7 +175,15 @@ export function AgentStudio({
     reasoning_effort: 'medium',
     remote_endpoint_cfg: { url: '', secret_ref: '', transport: 'sse' },
     max_tool_steps: 8,
-    enabled_app_tools: ['latest_articles', 'article_get', 'documents', 'tax_calendar', 'series', 'observations', 'analyses'],
+    enabled_app_tools: [
+      'latest_articles',
+      'article_get',
+      'documents',
+      'tax_calendar',
+      'series',
+      'observations',
+      'analyses',
+    ],
     enabled_mcp_tools: [],
     enabled_skills: [],
     enabled_skill_groups: [],
@@ -291,7 +313,7 @@ export function AgentStudio({
     setErrorMsg('')
     setStatusMsg('')
     if (!draft.slug.trim()) {
-      setErrorMsg(lang === 'vi' ? 'Vui lòng nhập mã định danh (slug).' : 'Agent slug is required.')
+      setErrorMsg(lang === 'vi' ? 'Vui lòng nhập mã định danh ngắn.' : 'Short handle is required.')
       return
     }
     if (secretRefInvalid) {
@@ -316,7 +338,7 @@ export function AgentStudio({
       await onSaveAgent(payload)
       setIsNewAgent(false)
       setSelectedSlug(payload.slug)
-      setStatusMsg(lang === 'vi' ? 'Đã lưu cấu hình trợ lý.' : 'Agent configuration saved.')
+      setStatusMsg(lang === 'vi' ? 'Đã lưu cấu hình trợ lý.' : 'Analyst saved.')
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -326,6 +348,9 @@ export function AgentStudio({
 
   const handleDeleteAgent = async () => {
     if (!draft.slug || isNewAgent) return
+    if (!window.confirm(`${c.deleteAgentConfirm}\n\n${draft.emoji} ${draft.display_name || draft.slug}`)) {
+      return
+    }
     setBusy(true)
     setErrorMsg('')
     setStatusMsg('')
@@ -335,7 +360,7 @@ export function AgentStudio({
       if (remaining[0]) {
         setSelectedSlug(remaining[0].slug)
       }
-      setStatusMsg(lang === 'vi' ? 'Đã xoá trợ lý.' : 'Agent deleted.')
+      setStatusMsg(lang === 'vi' ? 'Đã xoá trợ lý.' : 'Analyst deleted.')
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Delete failed')
     } finally {
@@ -346,16 +371,31 @@ export function AgentStudio({
   const combinedPromptPreview = useMemo(() => {
     const regions = parseSlugList(regionsInput)
     const topics = parseSlugList(topicsInput)
+    const scopeHeader =
+      lang === 'vi'
+        ? `## Hướng dẫn Tòa soạn (Vùng: ${regions.join(', ') || c.salonScopeRegionsAll} · Chủ đề: ${topics.join(', ') || c.salonScopeTopicsAll})`
+        : `## Newsroom Guidelines (Regions: ${regions.join(', ') || c.salonScopeRegionsAll} · Topics: ${topics.join(', ') || c.salonScopeTopicsAll})`
+    const toolsHeader =
+      lang === 'vi'
+        ? `## Công cụ được phép (${draft.enabled_app_tools.length})`
+        : `## Allowed Tools (${draft.enabled_app_tools.length})`
+    const toolLabels = draft.enabled_app_tools
+      .map((name) => {
+        const found = NEWSMAN_APP_TOOLS.find((t) => t.name === name)
+        return found ? (lang === 'vi' ? found.label_vi : found.label_en) : name
+      })
+      .join(' · ')
     const parts = [
-      `# ${draft.emoji} ${draft.display_name || draft.slug} (${draft.slug})`,
-      draft.soul_md.trim() || (lang === 'vi' ? '*(Chưa nhập SOUL.md)*' : '*(No SOUL.md entered)*'),
-      `## Newsroom Domain Addendum (v4s regions=${regions.join(',') || '*'} topics=${topics.join(',') || '*'})`,
+      `# ${draft.emoji} ${draft.display_name || draft.slug} (@${draft.slug || 'analyst'})`,
+      draft.soul_md.trim() ||
+        (lang === 'vi' ? '*(Chưa nhập tính cách cốt lõi)*' : '*(No core persona entered)*'),
+      scopeHeader,
       draft.app_role_addendum_md.trim(),
-      `## Granted Tools (${draft.enabled_app_tools.length})`,
-      draft.enabled_app_tools.join(', ') || 'none',
+      toolsHeader,
+      toolLabels || (lang === 'vi' ? 'Chưa bật công cụ nào' : 'None'),
     ]
     return parts.join('\n\n')
-  }, [draft, lang, regionsInput, topicsInput])
+  }, [c.salonScopeRegionsAll, c.salonScopeTopicsAll, draft, lang, regionsInput, topicsInput])
 
   const toggleSkill = (skillSlug: string) => {
     setDraft((prev) => {
@@ -391,7 +431,15 @@ export function AgentStudio({
     { id: 'skills', label: c.studioTabSkills },
   ]
 
-  const isDirectTg = tgForm.transport_mode === 'direct_poll' || tgForm.transport_mode === 'direct_webhook'
+  const isDirectTg =
+    tgForm.transport_mode === 'direct_poll' || tgForm.transport_mode === 'direct_webhook'
+
+  const policyShortLabel = (p: TelegramChatPolicy) =>
+    p === 'open'
+      ? c.studioTelegramPolicyOpen
+      : p === 'topics_only'
+        ? c.studioTelegramPolicyTopics
+        : c.studioTelegramPolicyMention
 
   return (
     <div className="agent-studio">
@@ -402,7 +450,11 @@ export function AgentStudio({
           <p className="muted">{c.studioHeaderSub}</p>
         </div>
         <div className="btn-row">
-          <button type="button" className="btn secondary" onClick={() => setBridgeFormOpen((v) => !v)}>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => setBridgeFormOpen((v) => !v)}
+          >
             ⛭ {c.bridgeConfigureBtn}
           </button>
           <button type="button" className="btn secondary" onClick={startNewAgent}>
@@ -481,18 +533,20 @@ export function AgentStudio({
                 void onSaveBridgeConfig(bridgeForm)
                   .then(() => {
                     setBridgeForm((f) => ({ ...f, astraea_token: '', hub_token: '' }))
-                    setStatusMsg(lang === 'vi' ? 'Đã lưu cấu hình Cầu nối.' : 'Bridge settings saved.')
+                    setStatusMsg(
+                      lang === 'vi' ? 'Đã lưu cấu hình Kết nối.' : 'Connection settings saved.',
+                    )
                   })
                   .finally(() => setBusy(false))
               }}
             >
-              {lang === 'vi' ? 'Lưu cầu nối' : 'Save Bridge'}
+              {lang === 'vi' ? 'Lưu kết nối' : 'Save Connection'}
             </button>
           </div>
         </section>
       )}
 
-      {statusMsg && <p className="save-state">{statusMsg}</p>}
+      {statusMsg && <p className="status-ok">{statusMsg}</p>}
       {errorMsg && <p className="form-error">{errorMsg}</p>}
 
       <div className="studio-layout">
@@ -501,7 +555,11 @@ export function AgentStudio({
             <button
               key={ag.slug}
               type="button"
-              className={!isNewAgent && ag.slug === selectedSlug ? 'studio-agent-card active' : 'studio-agent-card'}
+              className={
+                !isNewAgent && ag.slug === selectedSlug
+                  ? 'studio-agent-card active'
+                  : 'studio-agent-card'
+              }
               onClick={() => selectExistingAgent(ag.slug)}
             >
               <span className="studio-agent-avatar" style={{ background: ag.color }}>
@@ -548,7 +606,10 @@ export function AgentStudio({
                     disabled={!isNewAgent}
                     placeholder="macro-argus"
                     onChange={(e) =>
-                      setDraft({ ...draft, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-') })
+                      setDraft({
+                        ...draft,
+                        slug: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
+                      })
                     }
                   />
                 </label>
@@ -570,7 +631,7 @@ export function AgentStudio({
                 />
               </label>
 
-              <div className="catalog-form-row">
+              <div className="catalog-form-row studio-form-row-3">
                 <div className="field">
                   <span>{c.studioEmojiLabel}</span>
                   <div className="chip-row">
@@ -603,23 +664,28 @@ export function AgentStudio({
                   </div>
                 </div>
 
-                <label className="field">
-                  <span>{c.studioReplyLangLabel}</span>
-                  <select
-                    value={draft.reply_language}
-                    onChange={(e) => setDraft({ ...draft, reply_language: e.target.value as ReplyLanguage })}
-                  >
-                    <option value="vi">{c.studioLangVi}</option>
-                    <option value="en">{c.studioLangEn}</option>
-                    <option value="auto">{c.studioLangAuto}</option>
-                  </select>
-                </label>
+                <Select
+                  variant="field"
+                  label={c.studioReplyLangLabel}
+                  value={draft.reply_language}
+                  onChange={(val) => setDraft({ ...draft, reply_language: val as ReplyLanguage })}
+                  options={[
+                    { value: 'vi', label: c.studioLangVi },
+                    { value: 'en', label: c.studioLangEn },
+                    { value: 'auto', label: c.studioLangAuto },
+                  ]}
+                />
               </div>
 
               {!isNewAgent && (
                 <div className="btn-row">
-                  <button type="button" className="btn danger" onClick={() => void handleDeleteAgent()} disabled={busy}>
-                    {c.studioDeleteAgentBtn}
+                  <button
+                    type="button"
+                    className="btn ghost danger"
+                    onClick={() => void handleDeleteAgent()}
+                    disabled={busy}
+                  >
+                    🗑 {c.studioDeleteAgentBtn}
                   </button>
                 </div>
               )}
@@ -652,7 +718,9 @@ export function AgentStudio({
                     <input
                       type="checkbox"
                       checked={draft.sync_blueprint_to_hub}
-                      onChange={(e) => setDraft({ ...draft, sync_blueprint_to_hub: e.target.checked })}
+                      onChange={(e) =>
+                        setDraft({ ...draft, sync_blueprint_to_hub: e.target.checked })
+                      }
                     />
                   </label>
                 </div>
@@ -673,10 +741,14 @@ export function AgentStudio({
                     <button
                       key={rk.id}
                       type="button"
-                      className={draft.runtime_kind === rk.id ? 'studio-runtime-card active' : 'studio-runtime-card'}
+                      className={
+                        draft.runtime_kind === rk.id
+                          ? 'studio-runtime-card active'
+                          : 'studio-runtime-card'
+                      }
                       onClick={() => setDraft({ ...draft, runtime_kind: rk.id })}
                     >
-                      <strong>{rk.label}</strong>
+                      <strong>{lang === 'vi' ? rk.label_vi : rk.label_en}</strong>
                       <small>{lang === 'vi' ? rk.desc_vi : rk.desc_en}</small>
                     </button>
                   ))}
@@ -703,17 +775,17 @@ export function AgentStudio({
               </div>
 
               <div className="catalog-form-row">
-                <label className="field">
-                  <span>{c.studioReasoningEffortLabel}</span>
-                  <select
-                    value={draft.reasoning_effort}
-                    onChange={(e) => setDraft({ ...draft, reasoning_effort: e.target.value })}
-                  >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
+                <Select
+                  variant="field"
+                  label={c.studioReasoningEffortLabel}
+                  value={String(draft.reasoning_effort)}
+                  onChange={(val) => setDraft({ ...draft, reasoning_effort: val })}
+                  options={[
+                    { value: 'low', label: c.studioEffortLow },
+                    { value: 'medium', label: c.studioEffortMedium },
+                    { value: 'high', label: c.studioEffortHigh },
+                  ]}
+                />
                 <label className="field">
                   <span>
                     {c.studioMaxToolStepsLabel}: <b>{draft.max_tool_steps}</b>
@@ -750,7 +822,10 @@ export function AgentStudio({
                     onChange={(e) =>
                       setDraft({
                         ...draft,
-                        remote_endpoint_cfg: { ...draft.remote_endpoint_cfg, secret_ref: e.target.value },
+                        remote_endpoint_cfg: {
+                          ...draft.remote_endpoint_cfg,
+                          secret_ref: e.target.value,
+                        },
                       })
                     }
                   />
@@ -763,7 +838,7 @@ export function AgentStudio({
 
           {activeTab === 'scope' && (
             <section className="studio-panel">
-              <div className="catalog-notice">{c.studioTaxDisclaimerNotice}</div>
+              <div className="tax-guardrail-callout">⚖️ {c.studioTaxDisclaimerNotice}</div>
 
               <div className="field">
                 <span>{c.studioAppToolsTitle}</span>
@@ -771,18 +846,20 @@ export function AgentStudio({
                   {NEWSMAN_APP_TOOLS.map((tool) => {
                     const checked = draft.enabled_app_tools.includes(tool.name)
                     return (
-                      <label key={tool.name} className={checked ? 'studio-tool-item active' : 'studio-tool-item'}>
+                      <label
+                        key={tool.name}
+                        className={checked ? 'studio-tool-item active' : 'studio-tool-item'}
+                      >
                         <input
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleAppTool(tool.name)}
                         />
-                        <div>
+                        <div className="studio-tool-body">
                           <div className="studio-tool-head">
                             <strong>{lang === 'vi' ? tool.label_vi : tool.label_en}</strong>
-                            <code>{tool.name}</code>
                             {tool.tier === 'write_gated' && (
-                              <span className="tier-badge">{c.toolApprovalRequired}</span>
+                              <span className="tier-badge status-pending">{c.toolApprovalRequired}</span>
                             )}
                           </div>
                           <small>{lang === 'vi' ? tool.desc_vi : tool.desc_en}</small>
@@ -806,7 +883,7 @@ export function AgentStudio({
                         onClick={() => toggleMcpTool(mcp.name)}
                       >
                         {active ? '✓ ' : '+ '}
-                        {lang === 'vi' ? mcp.label_vi : mcp.label_en} (<code>{mcp.name}</code>)
+                        {lang === 'vi' ? mcp.label_vi : mcp.label_en}
                       </button>
                     )
                   })}
@@ -833,16 +910,16 @@ export function AgentStudio({
                     />
                   </label>
                 </div>
-                <label className="field">
-                  <span>{c.studioMemoryModeLabel}</span>
-                  <select
-                    value={draft.memory_mode}
-                    onChange={(e) => setDraft({ ...draft, memory_mode: e.target.value as MemoryMode })}
-                  >
-                    <option value="app_isolated">{c.studioMemoryIsolated}</option>
-                    <option value="cross_app_shared">{c.studioMemoryShared}</option>
-                  </select>
-                </label>
+                <Select
+                  variant="field"
+                  label={c.studioMemoryModeLabel}
+                  value={draft.memory_mode}
+                  onChange={(val) => setDraft({ ...draft, memory_mode: val as MemoryMode })}
+                  options={[
+                    { value: 'app_isolated', label: c.studioMemoryIsolated },
+                    { value: 'cross_app_shared', label: c.studioMemoryShared },
+                  ]}
+                />
               </div>
             </section>
           )}
@@ -853,7 +930,9 @@ export function AgentStudio({
               <div className="chat-sched-table">
                 {schedules.length === 0 && (
                   <p className="muted">
-                    {lang === 'vi' ? 'Chưa có lịch trình tự động nào.' : 'No automated schedules configured yet.'}
+                    {lang === 'vi'
+                      ? 'Chưa có lịch hẹn tự động nào.'
+                      : 'No automated schedules configured yet.'}
                   </p>
                 )}
                 {schedules.map((s) => (
@@ -881,7 +960,7 @@ export function AgentStudio({
                     <div className="btn-row">
                       <button
                         type="button"
-                        className="btn secondary"
+                        className="btn small secondary"
                         disabled={runningSchedId === s.id}
                         onClick={() => {
                           setRunningSchedId(s.id)
@@ -892,11 +971,12 @@ export function AgentStudio({
                       </button>
                       <button
                         type="button"
-                        className="text-button"
+                        className="icon-del"
                         onClick={() => void onDeleteSchedule(s.id)}
-                        aria-label="Delete"
+                        aria-label={lang === 'vi' ? 'Xoá lịch hẹn' : 'Delete schedule'}
+                        title={lang === 'vi' ? 'Xoá lịch hẹn' : 'Delete schedule'}
                       >
-                        ×
+                        🗑
                       </button>
                     </div>
                   </div>
@@ -904,12 +984,14 @@ export function AgentStudio({
               </div>
 
               <div className="chat-sched-form">
-                <div className="catalog-form-row">
+                <div className="catalog-form-row studio-form-row-3">
                   <label className="field">
                     <span>{c.studioScheduleNameLabel}</span>
                     <input
                       value={schedForm.name}
-                      placeholder={lang === 'vi' ? 'Điểm tin vĩ mô 07:30' : '07:30 Macro Morning Brief'}
+                      placeholder={
+                        lang === 'vi' ? 'Điểm tin vĩ mô 07:30' : '07:30 Macro Morning Brief'
+                      }
                       onChange={(e) => setSchedForm({ ...schedForm, name: e.target.value })}
                     />
                   </label>
@@ -918,22 +1000,22 @@ export function AgentStudio({
                     <input
                       value={schedForm.cron_or_interval_secs}
                       placeholder="30 7 * * *"
-                      onChange={(e) => setSchedForm({ ...schedForm, cron_or_interval_secs: e.target.value })}
+                      onChange={(e) =>
+                        setSchedForm({ ...schedForm, cron_or_interval_secs: e.target.value })
+                      }
                     />
                   </label>
-                  <label className="field">
-                    <span>{c.studioSlugLabel}</span>
-                    <select
-                      value={schedForm.agent_slug}
-                      onChange={(e) => setSchedForm({ ...schedForm, agent_slug: e.target.value })}
-                    >
-                      {agents.map((a) => (
-                        <option key={a.slug} value={a.slug}>
-                          {a.emoji} {a.display_name} (@{a.slug})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <Select
+                    variant="field"
+                    label={c.studioScheduleAgentLabel}
+                    value={schedForm.agent_slug}
+                    onChange={(val) => setSchedForm({ ...schedForm, agent_slug: val })}
+                    options={agents.map((a) => ({
+                      value: a.slug,
+                      label: `${a.emoji} ${a.display_name}`,
+                      hint: `@${a.slug}`,
+                    }))}
+                  />
                 </div>
                 <label className="field">
                   <span>{c.studioSchedulePromptLabel}</span>
@@ -962,7 +1044,7 @@ export function AgentStudio({
                       }).then(() => setSchedForm((f) => ({ ...f, name: '', prompt: '' })))
                     }}
                   >
-                    + {lang === 'vi' ? 'Thêm lịch trình' : 'Add Schedule'}
+                    + {lang === 'vi' ? 'Thêm lịch hẹn' : 'Add Schedule'}
                   </button>
                 </div>
               </div>
@@ -978,10 +1060,10 @@ export function AgentStudio({
                 <div className="chip-row">
                   {(
                     [
-                      { id: 'direct_poll', label: `${c.studioTelegramDirectMode} — Poll` },
-                      { id: 'direct_webhook', label: `${c.studioTelegramDirectMode} — Webhook` },
-                      { id: 'cygnus_poll', label: `${c.studioTelegramCygnusMode} — Poll` },
-                      { id: 'cygnus_webhook', label: `${c.studioTelegramCygnusMode} — Webhook` },
+                      { id: 'direct_poll', label: `${c.studioTelegramDirectMode} · Poll` },
+                      { id: 'direct_webhook', label: `${c.studioTelegramDirectMode} · Webhook` },
+                      { id: 'cygnus_poll', label: `${c.studioTelegramCygnusMode} · Poll` },
+                      { id: 'cygnus_webhook', label: `${c.studioTelegramCygnusMode} · Webhook` },
                     ] as const
                   ).map((mode) => (
                     <button
@@ -1005,17 +1087,19 @@ export function AgentStudio({
                     onChange={(e) => setTgForm({ ...tgForm, bot_name: e.target.value })}
                   />
                 </label>
-                <label className="field">
-                  <span>{c.studioTelegramPolicyLabel}</span>
-                  <select
-                    value={tgForm.chat_policy}
-                    onChange={(e) => setTgForm({ ...tgForm, chat_policy: e.target.value as TelegramChatPolicy })}
-                  >
-                    <option value="open">{c.studioTelegramPolicyOpen}</option>
-                    <option value="mention">{c.studioTelegramPolicyMention}</option>
-                    <option value="topics_only">{c.studioTelegramPolicyTopics}</option>
-                  </select>
-                </label>
+                <Select
+                  variant="field"
+                  label={c.studioTelegramPolicyLabel}
+                  value={tgForm.chat_policy}
+                  onChange={(val) =>
+                    setTgForm({ ...tgForm, chat_policy: val as TelegramChatPolicy })
+                  }
+                  options={[
+                    { value: 'open', label: c.studioTelegramPolicyOpen },
+                    { value: 'mention', label: c.studioTelegramPolicyMention },
+                    { value: 'topics_only', label: c.studioTelegramPolicyTopics },
+                  ]}
+                />
               </div>
 
               {isDirectTg ? (
@@ -1037,7 +1121,9 @@ export function AgentStudio({
                       type="password"
                       autoComplete="new-password"
                       value={tgForm.webhook_secret}
-                      placeholder={telegramConfig.has_webhook_secret ? '••••••••' : 'tg_wh_secret_…'}
+                      placeholder={
+                        telegramConfig.has_webhook_secret ? '••••••••' : 'tg_wh_secret_…'
+                      }
                       onChange={(e) => setTgForm({ ...tgForm, webhook_secret: e.target.value })}
                     />
                   </label>
@@ -1075,13 +1161,22 @@ export function AgentStudio({
                     setBusy(true)
                     void onSaveTelegramConfig(tgForm)
                       .then(() => {
-                        setTgForm((f) => ({ ...f, bot_token: '', webhook_secret: '', cygnus_key: '' }))
-                        setStatusMsg(lang === 'vi' ? 'Đã lưu cấu hình Telegram.' : 'Telegram bridge saved.')
+                        setTgForm((f) => ({
+                          ...f,
+                          bot_token: '',
+                          webhook_secret: '',
+                          cygnus_key: '',
+                        }))
+                        setStatusMsg(
+                          lang === 'vi'
+                            ? 'Đã lưu cấu hình kênh Telegram.'
+                            : 'Telegram channel saved.',
+                        )
                       })
                       .finally(() => setBusy(false))
                   }}
                 >
-                  {lang === 'vi' ? 'Lưu cầu nối Telegram' : 'Save Telegram Bridge'}
+                  {lang === 'vi' ? 'Lưu kênh Telegram' : 'Save Telegram Channel'}
                 </button>
               </div>
 
@@ -1092,21 +1187,24 @@ export function AgentStudio({
                     <div key={rt.id} className="chat-sched-row">
                       <div className="chat-sched-main">
                         <b>
-                          chat:{rt.chat_id}
-                          {rt.message_thread_id != null ? ` · topic:${rt.message_thread_id}` : ''}
+                          {lang === 'vi' ? 'Nhóm' : 'Group'} {rt.chat_id}
+                          {rt.message_thread_id != null
+                            ? ` · ${lang === 'vi' ? 'Chủ đề' : 'Topic'} #${rt.message_thread_id}`
+                            : ''}
                         </b>
-                        <code>
+                        <small className="muted">
                           → @{rt.agent_slug}
-                          {rt.thread_id ? ` (thread #${rt.thread_id})` : ''} · {rt.transport_mode} · policy:{rt.policy}
-                        </code>
+                          {rt.thread_id ? ` (#${rt.thread_id})` : ''} · {policyShortLabel(rt.policy)}
+                        </small>
                       </div>
                       <button
                         type="button"
-                        className="text-button"
+                        className="icon-del"
                         onClick={() => void onDeleteTelegramRoute(rt.id)}
-                        aria-label="Delete route"
+                        aria-label={lang === 'vi' ? 'Xoá liên kết nhóm' : 'Remove group binding'}
+                        title={lang === 'vi' ? 'Xoá liên kết nhóm' : 'Remove group binding'}
                       >
-                        ×
+                        🗑
                       </button>
                     </div>
                   ))}
@@ -1126,36 +1224,35 @@ export function AgentStudio({
                     <input
                       value={routeForm.message_thread_id}
                       placeholder="88"
-                      onChange={(e) => setRouteForm({ ...routeForm, message_thread_id: e.target.value })}
+                      onChange={(e) =>
+                        setRouteForm({ ...routeForm, message_thread_id: e.target.value })
+                      }
                     />
                   </label>
-                  <label className="field">
-                    <span>{c.studioSlugLabel}</span>
-                    <select
-                      value={routeForm.agent_slug}
-                      onChange={(e) => setRouteForm({ ...routeForm, agent_slug: e.target.value })}
-                    >
-                      {agents.map((a) => (
-                        <option key={a.slug} value={a.slug}>
-                          {a.emoji} {a.display_name} (@{a.slug})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Thread</span>
-                    <select
-                      value={routeForm.thread_id}
-                      onChange={(e) => setRouteForm({ ...routeForm, thread_id: e.target.value })}
-                    >
-                      <option value="">{lang === 'vi' ? '— Tự động theo Topic —' : '— Auto-bind thread —'}</option>
-                      {threads.map((th) => (
-                        <option key={th.id} value={String(th.id)}>
-                          #{th.id} {th.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <Select
+                    variant="field"
+                    label={c.studioRouteAgentLabel}
+                    value={routeForm.agent_slug}
+                    onChange={(val) => setRouteForm({ ...routeForm, agent_slug: val })}
+                    options={agents.map((a) => ({
+                      value: a.slug,
+                      label: `${a.emoji} ${a.display_name}`,
+                      hint: `@${a.slug}`,
+                    }))}
+                  />
+                  <Select
+                    variant="field"
+                    label={c.studioRouteThreadLabel}
+                    value={routeForm.thread_id}
+                    onChange={(val) => setRouteForm({ ...routeForm, thread_id: val })}
+                    options={[
+                      { value: '', label: c.studioRouteAutoThread },
+                      ...threads.map((th) => ({
+                        value: String(th.id),
+                        label: `#${th.id} ${th.title}`,
+                      })),
+                    ]}
+                  />
                 </div>
                 <div className="btn-row">
                   <button
@@ -1174,7 +1271,9 @@ export function AgentStudio({
                         thread_id: routeForm.thread_id ? Number(routeForm.thread_id) : null,
                         bot_name: tgForm.bot_name.trim() || '@lnc_newsman_bot',
                         enabled: true,
-                      }).then(() => setRouteForm((f) => ({ ...f, chat_id: '', message_thread_id: '' })))
+                      }).then(() =>
+                        setRouteForm((f) => ({ ...f, chat_id: '', message_thread_id: '' })),
+                      )
                     }}
                   >
                     + {c.studioTelegramAddRoute}
@@ -1185,7 +1284,7 @@ export function AgentStudio({
           )}
 
           {activeTab === 'skills' && (
-            <section className="studio-section">
+            <section className="studio-panel">
               <div className="studio-field-group">
                 <h4>{c.studioAssignedWorkspacesLabel}</h4>
                 <div className="chip-row">
@@ -1201,7 +1300,8 @@ export function AgentStudio({
                         {ws.emoji} {ws.name}
                       </button>
                     ))}
-                  {workspaces.filter((w) => w.default_agent_slugs.includes(draft.slug)).length === 0 && (
+                  {workspaces.filter((w) => w.default_agent_slugs.includes(draft.slug)).length ===
+                    0 && (
                     <span className="muted-inline">
                       {lang === 'vi'
                         ? 'Chưa gắn mặc định trong không gian nào.'
@@ -1217,7 +1317,10 @@ export function AgentStudio({
                   {skillGroups.map((grp) => {
                     const checked = draft.enabled_skill_groups.includes(grp.slug)
                     return (
-                      <label key={grp.slug} className={checked ? 'tool-check active' : 'tool-check'}>
+                      <label
+                        key={grp.slug}
+                        className={checked ? 'tool-check active' : 'tool-check'}
+                      >
                         <input
                           type="checkbox"
                           checked={checked}
@@ -1250,7 +1353,11 @@ export function AgentStudio({
                       <label
                         key={sk.slug}
                         className={
-                          locked ? 'tool-check locked' : checked ? 'tool-check active' : 'tool-check'
+                          locked
+                            ? 'tool-check locked'
+                            : checked
+                              ? 'tool-check active'
+                              : 'tool-check'
                         }
                       >
                         <input
@@ -1264,7 +1371,11 @@ export function AgentStudio({
                             <strong>
                               {sk.granted ? '🧩' : '🔒'} {sk.display_name?.trim() || sk.name}
                             </strong>
-                            <span className={sk.granted ? 'tier-badge tier-read' : 'tier-badge tier-write_gated'}>
+                            <span
+                              className={
+                                sk.granted ? 'tier-badge status-approved' : 'tier-badge status-local'
+                              }
+                            >
                               {sk.granted ? c.skillsGrantedBadge : c.skillsLockedBadge}
                             </span>
                           </div>

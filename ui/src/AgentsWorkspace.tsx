@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentStudio } from './AgentStudio.tsx'
+import { Select } from './Select.tsx'
 import {
   AGENT_COPY,
+  formatBridgeModeLabel,
+  formatDiscussionModeShort,
   type AgentMessage,
+  type AgentThread,
   type AgentWorkspace,
   type AppAgentConfig,
   type DiscussionMode,
@@ -74,10 +78,10 @@ export function ToolInvocationPill({
         <code className="agent-tool-name">{pill.tool}</code>
         {pill.agent_slug && <span className="agent-tool-caller">@{pill.agent_slug}</span>}
         {hasScope && (
-          <span className="agent-v4s-chip" title="Contract A v4s Row-Level Region/Topic Scope">
+          <span className="agent-v4s-chip" title={c.salonScopeEffectiveLabel}>
             ⛨ {c.v4sScopedBadge}
-            {pill.resource_ctx?.regions?.length ? ` [regions: ${pill.resource_ctx.regions.join(',')}]` : ''}
-            {pill.resource_ctx?.topics?.length ? ` [topics: ${pill.resource_ctx.topics.join(',')}]` : ''}
+            {pill.resource_ctx?.regions?.length ? ` · ${pill.resource_ctx.regions.join(', ')}` : ''}
+            {pill.resource_ctx?.topics?.length ? ` · #${pill.resource_ctx.topics.join(', ')}` : ''}
           </span>
         )}
       </summary>
@@ -174,7 +178,8 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     return 'salon'
   })
   const [selectedThreadId, setSelectedThreadId] = useState<number | string | null>(null)
-  const [sidePanelOpen, setSidePanelOpen] = useState(true)
+  const [railOpen, setRailOpen] = useState(true)
+  const [sidePanelOpen, setSidePanelOpen] = useState(false)
   const [sidePanelTab, setSidePanelTab] = useState<'trace' | 'context'>('trace')
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
   const [composerText, setComposerText] = useState('')
@@ -454,10 +459,42 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     }
   }
 
+  useLayoutEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const nextHeight = Math.max(44, Math.min(180, el.scrollHeight))
+    el.style.height = `${nextHeight}px`
+  }, [composerText, surface])
+
   const handleOpenTrace = (traceId: string) => {
     setSelectedTraceId(traceId)
     setSidePanelTab('trace')
     setSidePanelOpen(true)
+  }
+
+  const handleInsertTrigger = (trigger: '@' | '/') => {
+    const el = composerRef.current
+    const pos = el?.selectionStart ?? composerText.length
+    const before = composerText.slice(0, pos)
+    const after = composerText.slice(pos)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const prefix = needsLeadingSpace ? ` ${trigger}` : trigger
+    const next = `${before}${prefix}${after}`
+    const nextCaret = before.length + prefix.length
+    setComposerText(next)
+    setCaretPos(nextCaret)
+    requestAnimationFrame(() => {
+      if (!composerRef.current) return
+      composerRef.current.focus()
+      composerRef.current.setSelectionRange(nextCaret, nextCaret)
+    })
+  }
+
+  const handleDeleteThread = (th: AgentThread) => {
+    if (!window.confirm(`${c.deleteThreadConfirm}\n\n“${th.title}”`)) return
+    void deleteThread(th.id)
+    if (String(selectedThreadId) === String(th.id)) setSelectedThreadId(null)
   }
 
   const handleApplyAutocomplete = (item: { kind: '@' | '/'; slug: string }) => {
@@ -582,64 +619,63 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     }
   }
 
-  const statusLabel =
-    bridgeStatus.mode === 'astraea_relay' && bridgeStatus.relay_connected
-      ? c.bridgeRelayOnline
-      : bridgeStatus.mode === 'disconnected'
-        ? c.bridgeDisconnected
-        : c.bridgeHubStandby
+  const statusLabel = formatBridgeModeLabel(bridgeStatus, c)
 
   const composerBytes = new TextEncoder().encode(composerText).byteLength
+
+  const workspaceLeadingIcon = (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2 4.2C2 3.54 2.54 3 3.2 3h3.1l1.4 1.6h5.1c.66 0 1.2.54 1.2 1.2v6c0 .66-.54 1.2-1.2 1.2H3.2C2.54 13 2 12.46 2 11.8V4.2Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
 
   return (
     <div className="agents-workspace">
       <div className="agents-top-bar">
-        <div className="agents-top-intro">
-          <span className="eyebrow">{c.agentsEyebrow}</span>
-          <h2>{c.agentsWorkspaceTitle}</h2>
-          <p className="muted-sub">{c.agentsWorkspaceSub}</p>
-        </div>
-        <div className="agents-top-controls">
-          <label className="workspace-pill" title={c.workspaceActiveLabel}>
-            <span>{activeWorkspace?.emoji ?? '🗂️'}</span>
-            <select
-              value={activeWorkspaceId ?? ''}
-              onChange={(e) => setActiveWorkspaceId(e.target.value || null)}
+        <nav className="agents-surface-tabs" role="tablist" aria-label={c.agentsWorkspaceTitle}>
+          {(
+            [
+              ['salon', c.surfaceSalon],
+              ['agents', c.surfaceAgents],
+              ['workspaces', c.surfaceWorkspaces],
+              ['skills', c.surfaceSkills],
+              ['models', c.surfaceModels],
+            ] as [WorkspaceSurface, string][]
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={surface === id}
+              className={surface === id ? 'tab active' : 'tab'}
+              onClick={() => setSurface(id)}
             >
-              <option value="">{c.workspaceAll}</option>
-              {workspaces.map((ws) => (
-                <option key={ws.id} value={ws.id}>
-                  {ws.emoji} {ws.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="agents-top-controls">
+          <Select
+            variant="pill"
+            leadingIcon={workspaceLeadingIcon}
+            ariaLabel={c.workspaceActiveLabel}
+            minMenuWidth={240}
+            value={activeWorkspaceId ?? ''}
+            onChange={(v) => setActiveWorkspaceId(v || null)}
+            options={[
+              { value: '', label: c.workspaceAll },
+              ...workspaces.map((ws) => ({ value: ws.id, label: `${ws.emoji} ${ws.name}` })),
+            ]}
+          />
           <span className={`bridge-status-pill mode-${bridgeStatus.mode}`}>
             <span className="dot" />
             {statusLabel}
           </span>
-          <nav className="agents-surface-tabs" role="tablist">
-            {(
-              [
-                ['salon', c.surfaceSalon],
-                ['agents', c.surfaceAgents],
-                ['workspaces', c.surfaceWorkspaces],
-                ['skills', c.surfaceSkills],
-                ['models', c.surfaceModels],
-              ] as [WorkspaceSurface, string][]
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={surface === id}
-                className={surface === id ? 'tab active' : 'tab'}
-                onClick={() => setSurface(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
         </div>
       </div>
 
@@ -705,7 +741,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   <span>
                     {ws.emoji} <strong>{ws.name}</strong>
                   </span>
-                  {ws.is_default && <span className="tier-badge">Default</span>}
+                  {ws.is_default && <span className="tier-badge">{c.workspaceDefaultBadge}</span>}
                 </div>
                 <p>{ws.description}</p>
               </button>
@@ -729,24 +765,18 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   onChange={(e) => setWsDraft((p) => ({ ...p, name: e.target.value }))}
                 />
               </label>
-              <label className="field">
-                <span>{c.workspaceDefaultModeLabel}</span>
-                <select
-                  value={wsDraft.default_discussion_mode}
-                  onChange={(e) =>
-                    setWsDraft((p) => ({
-                      ...p,
-                      default_discussion_mode: e.target.value as DiscussionMode,
-                    }))
-                  }
-                >
-                  {DISCUSSION_MODES.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {c[m.labelKey]}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <Select
+                variant="field"
+                label={c.workspaceDefaultModeLabel}
+                value={wsDraft.default_discussion_mode}
+                onChange={(v) =>
+                  setWsDraft((p) => ({
+                    ...p,
+                    default_discussion_mode: v as DiscussionMode,
+                  }))
+                }
+                options={DISCUSSION_MODES.map((m) => ({ value: m.id, label: c[m.labelKey] }))}
+              />
             </div>
 
             <label className="field">
@@ -875,9 +905,10 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   type="button"
                   className="btn ghost danger"
                   disabled={wsBusy}
-                  onClick={() =>
+                  onClick={() => {
+                    if (!window.confirm(c.deleteWorkspaceConfirm)) return
                     void deleteWorkspace(wsDraft.id).then(() => setWsDraft(emptyWorkspaceDraft()))
-                  }
+                  }}
                 >
                   {c.workspaceDeleteBtn}
                 </button>
@@ -1178,7 +1209,8 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         <div key={req.id} className="access-request-row">
                           <div className="access-request-info">
                             <strong>
-                              [{req.target_kind}] {req.target_slug}
+                              {req.target_kind === 'skill_group' ? c.targetKindGroupTag : c.targetKindSkillTag}:{' '}
+                              {req.target_slug}
                             </strong>
                             <p>{req.reason || '—'}</p>
                             {isApproved && (req.reviewed_by || req.review_note) && (
@@ -1216,16 +1248,16 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
             <div className="modal-backdrop" role="dialog" aria-label={c.skillsRequestModalTitle}>
               <div className="modal-card">
                 <h3>{c.skillsRequestModalTitle}</h3>
-                <label className="field">
-                  <span>{c.skillsRequestKindLabel}</span>
-                  <select
-                    value={accessKind}
-                    onChange={(e) => setAccessKind(e.target.value as 'skill' | 'skill_group')}
-                  >
-                    <option value="skill">{c.skillsRequestKindSkill}</option>
-                    <option value="skill_group">{c.skillsRequestKindGroup}</option>
-                  </select>
-                </label>
+                <Select
+                  variant="field"
+                  label={c.skillsRequestKindLabel}
+                  value={accessKind}
+                  onChange={(v) => setAccessKind(v as 'skill' | 'skill_group')}
+                  options={[
+                    { value: 'skill', label: c.skillsRequestKindSkill },
+                    { value: 'skill_group', label: c.skillsRequestKindGroup },
+                  ]}
+                />
                 <label className="field">
                   <span>{c.skillsRequestTargetLabel}</span>
                   <input value={accessSlug} onChange={(e) => setAccessSlug(e.target.value)} />
@@ -1264,7 +1296,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     className="btn secondary"
                     onClick={() => setAccessModalOpen(false)}
                   >
-                    ✕
+                    {c.cancelBtn}
                   </button>
                 </div>
               </div>
@@ -1351,25 +1383,31 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
             })}
           </div>
 
-          <section className="studio-section" style={{ marginBottom: 14 }}>
+          <section className="studio-section conn-diag-section">
             <div className="probe-card-head">
               <strong>{c.connDiagTitle}</strong>
-              <span className="tier-badge">{bridgeStatus.mode}</span>
+              <span className="tier-badge">{statusLabel}</span>
             </div>
             <p className="muted-sub">{c.connDiagSub}</p>
-            <div className="chip-row" style={{ marginTop: 8 }}>
-              <span className="chip">App ID: lnc-newsman</span>
-              <span className="chip">Protocol: lnc-app-bridge.v1</span>
-              <span className="chip">Mode: {bridgeStatus.mode}</span>
+            <div className="chip-row conn-diag-chips">
               <span className="chip">
-                Secret Store: {bridgeStatus.secret_store_open ? 'LNC_MASTER_KEY Ready' : 'Seed/Locked'}
+                {c.diagModePrefix}: {statusLabel}
               </span>
-              <span className="chip">Partners: {agents.length}</span>
-              <span className="chip">Workspaces: {workspaces.length}</span>
               <span className="chip">
-                Skills: {skills.filter((s) => s.granted).length}/{skills.length}
+                {bridgeStatus.secret_store_open ? c.diagSecretReady : c.diagSecretSeed}
               </span>
-              <span className="chip">SSRF Allowlist: {(bridgeStatus.allowed_hosts ?? []).length} hosts</span>
+              <span className="chip">
+                {c.diagAgentsCount}: {agents.length}
+              </span>
+              <span className="chip">
+                {c.diagWorkspacesCount}: {workspaces.length}
+              </span>
+              <span className="chip">
+                {c.diagSkillsCount}: {skills.filter((s) => s.granted).length}/{skills.length}
+              </span>
+              <span className="chip">
+                {c.diagHostsCount}: {(bridgeStatus.allowed_hosts ?? []).length}
+              </span>
             </div>
           </section>
 
@@ -1463,20 +1501,17 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     ['tax_doc_digest', c.taskModelTaxDocDigest],
                   ] as const
                 ).map(([key, label]) => (
-                  <label key={key} className="field">
-                    <span>{label}</span>
-                    <select
-                      value={connForm[key]}
-                      onChange={(e) => setConnForm((p) => ({ ...p, [key]: e.target.value }))}
-                    >
-                      <option value="">{c.composerModelDefault}</option>
-                      {models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <Select
+                    key={key}
+                    variant="field"
+                    label={label}
+                    value={connForm[key]}
+                    onChange={(v) => setConnForm((p) => ({ ...p, [key]: v }))}
+                    options={[
+                      { value: '', label: c.composerModelDefault },
+                      ...models.map((m) => ({ value: m, label: m })),
+                    ]}
+                  />
                 ))}
               </div>
 
@@ -1541,194 +1576,244 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
       )}
 
       {surface === 'salon' && (
-        <div className="agents-salon-layout">
-          <aside className="agents-rail">
-            <div className="rail-actions">
-              <button
-                type="button"
-                className="btn small secondary"
-                onClick={() => {
-                  setNewRoomKind('direct')
-                  setNewRoomMembers([activeWorkspace?.default_agent_slugs[0] ?? agents[0]?.slug ?? 'macro-argus'])
-                  setNewRoomOpen(true)
-                }}
-              >
-                {c.newDirectBtn}
-              </button>
-              <button
-                type="button"
-                className="btn small primary"
-                onClick={() => {
-                  setNewRoomKind('group')
-                  setNewRoomMembers(
-                    activeWorkspace?.default_agent_slugs?.length
-                      ? activeWorkspace.default_agent_slugs
-                      : agents.map((a) => a.slug),
-                  )
-                  setNewRoomMode(activeWorkspace?.default_discussion_mode ?? 'parallel_panel')
-                  setNewRoomOpen(true)
-                }}
-              >
-                {c.newGroupBtn}
-              </button>
-            </div>
-
-            {newRoomOpen && (
-              <div className="new-room-panel">
-                <input
-                  value={newRoomTitle}
-                  placeholder={c.threadTitleInput}
-                  onChange={(e) => setNewRoomTitle(e.target.value)}
-                />
-                {newRoomKind === 'group' && (
-                  <>
-                    <label className="field-compact">
-                      <span>{c.discussionModeLabel}</span>
-                      <select
-                        value={newRoomMode}
-                        onChange={(e) => setNewRoomMode(e.target.value as DiscussionMode)}
-                      >
-                        {DISCUSSION_MODES.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {c[m.labelKey]}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field-compact">
-                      <span>{c.pickLeadLabel}</span>
-                      <select value={newRoomLead} onChange={(e) => setNewRoomLead(e.target.value)}>
-                        {newRoomMembers.map((slug) => (
-                          <option key={slug} value={slug}>
-                            @{slug}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </>
-                )}
-                <div className="chip-row">
-                  {agents.map((ag) => {
-                    const selected = newRoomMembers.includes(ag.slug)
-                    return (
-                      <button
-                        key={ag.slug}
-                        type="button"
-                        className={selected ? 'chip active' : 'chip'}
-                        onClick={() => {
-                          if (newRoomKind === 'direct') {
-                            setNewRoomMembers([ag.slug])
-                            setNewRoomLead(ag.slug)
-                            return
-                          }
-                          setNewRoomMembers((prev) =>
-                            prev.includes(ag.slug) ? prev.filter((s) => s !== ag.slug) : [...prev, ag.slug],
-                          )
-                        }}
-                      >
-                        {ag.emoji} {ag.slug}
-                      </button>
+        <div className={railOpen ? 'agents-salon-layout' : 'agents-salon-layout rail-collapsed'}>
+          {railOpen && (
+            <aside className="agents-rail">
+              <div className="rail-actions">
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  onClick={() => {
+                    setNewRoomKind('direct')
+                    setNewRoomMembers([
+                      activeWorkspace?.default_agent_slugs[0] ?? agents[0]?.slug ?? 'macro-argus',
+                    ])
+                    setNewRoomOpen(true)
+                  }}
+                >
+                  {c.newDirectBtn}
+                </button>
+                <button
+                  type="button"
+                  className="btn small primary"
+                  onClick={() => {
+                    setNewRoomKind('group')
+                    setNewRoomMembers(
+                      activeWorkspace?.default_agent_slugs?.length
+                        ? activeWorkspace.default_agent_slugs
+                        : agents.map((a) => a.slug),
                     )
-                  })}
+                    setNewRoomMode(activeWorkspace?.default_discussion_mode ?? 'parallel_panel')
+                    setNewRoomOpen(true)
+                  }}
+                >
+                  {c.newGroupBtn}
+                </button>
+              </div>
+
+              {newRoomOpen && (
+                <div className="new-room-panel">
+                  <input
+                    value={newRoomTitle}
+                    placeholder={c.threadTitleInput}
+                    onChange={(e) => setNewRoomTitle(e.target.value)}
+                  />
+                  {newRoomKind === 'group' && (
+                    <>
+                      <Select
+                        variant="compact"
+                        label={c.discussionModeLabel}
+                        value={newRoomMode}
+                        onChange={(v) => setNewRoomMode(v as DiscussionMode)}
+                        options={DISCUSSION_MODES.map((m) => ({ value: m.id, label: c[m.labelKey] }))}
+                      />
+                      <Select
+                        variant="compact"
+                        label={c.pickLeadLabel}
+                        value={newRoomLead}
+                        onChange={setNewRoomLead}
+                        options={newRoomMembers.map((slug) => ({ value: slug, label: `@${slug}` }))}
+                      />
+                    </>
+                  )}
+                  <div className="chip-row">
+                    {agents.map((ag) => {
+                      const selected = newRoomMembers.includes(ag.slug)
+                      return (
+                        <button
+                          key={ag.slug}
+                          type="button"
+                          className={selected ? 'chip active' : 'chip'}
+                          onClick={() => {
+                            if (newRoomKind === 'direct') {
+                              setNewRoomMembers([ag.slug])
+                              setNewRoomLead(ag.slug)
+                              return
+                            }
+                            setNewRoomMembers((prev) =>
+                              prev.includes(ag.slug)
+                                ? prev.filter((s) => s !== ag.slug)
+                                : [...prev, ag.slug],
+                            )
+                          }}
+                        >
+                          {ag.emoji} {ag.display_name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="btn-row">
+                    <button
+                      type="button"
+                      className="btn small primary"
+                      onClick={() => void handleCreateRoom()}
+                    >
+                      {c.createRoomAction}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn small secondary"
+                      onClick={() => setNewRoomOpen(false)}
+                    >
+                      {c.cancelBtn}
+                    </button>
+                  </div>
                 </div>
-                <div className="btn-row">
-                  <button type="button" className="btn small primary" onClick={() => void handleCreateRoom()}>
-                    {c.createRoomAction}
-                  </button>
-                  <button type="button" className="btn small secondary" onClick={() => setNewRoomOpen(false)}>
-                    ×
-                  </button>
+              )}
+
+              <div className="rail-scroll-body">
+                <div className="rail-section">
+                  <h4>{c.groupRoomsTitle}</h4>
+                  {groupThreads.length === 0 && <p className="empty-hint">{c.noThreadsYet}</p>}
+                  {groupThreads.map((th) => (
+                    <div
+                      key={th.id}
+                      className={
+                        String(selectedThreadId) === String(th.id) ? 'thread-item active' : 'thread-item'
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="thread-item-btn"
+                        onClick={() => setSelectedThreadId(th.id)}
+                      >
+                        <strong>{th.title}</strong>
+                        <small className="thread-item-meta">
+                          <span className="thread-mode-tag">
+                            {formatDiscussionModeShort(th.discussion_mode, c)}
+                          </span>
+                          <span>{th.member_slugs.map((s) => `@${s}`).join(', ')}</span>
+                        </small>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-del"
+                        aria-label={`${c.deleteThreadLabel}: ${th.title}`}
+                        title={c.deleteThreadLabel}
+                        onClick={() => handleDeleteThread(th)}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rail-section">
+                  <h4>{c.directThreadsTitle}</h4>
+                  {directThreads.map((th) => (
+                    <div
+                      key={th.id}
+                      className={
+                        String(selectedThreadId) === String(th.id) ? 'thread-item active' : 'thread-item'
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="thread-item-btn"
+                        onClick={() => setSelectedThreadId(th.id)}
+                      >
+                        <strong>{th.title}</strong>
+                        <small className="thread-item-meta">
+                          <span>{th.member_slugs.map((s) => `@${s}`).join(', ')}</span>
+                        </small>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-del"
+                        aria-label={`${c.deleteThreadLabel}: ${th.title}`}
+                        title={c.deleteThreadLabel}
+                        onClick={() => handleDeleteThread(th)}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
-            )}
-
-            <div className="rail-section">
-              <h4>{c.groupRoomsTitle}</h4>
-              {groupThreads.length === 0 && <p className="empty-hint">{c.noThreadsYet}</p>}
-              {groupThreads.map((th) => (
-                <div
-                  key={th.id}
-                  className={String(selectedThreadId) === String(th.id) ? 'thread-item active' : 'thread-item'}
-                >
-                  <button type="button" className="thread-item-btn" onClick={() => setSelectedThreadId(th.id)}>
-                    <strong>{th.title}</strong>
-                    <small>
-                      {th.discussion_mode} · {th.member_slugs.map((s) => `@${s}`).join(', ')}
-                    </small>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-del"
-                    onClick={() => {
-                      void deleteThread(th.id)
-                      if (String(selectedThreadId) === String(th.id)) setSelectedThreadId(null)
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="rail-section">
-              <h4>{c.directThreadsTitle}</h4>
-              {directThreads.map((th) => (
-                <div
-                  key={th.id}
-                  className={String(selectedThreadId) === String(th.id) ? 'thread-item active' : 'thread-item'}
-                >
-                  <button type="button" className="thread-item-btn" onClick={() => setSelectedThreadId(th.id)}>
-                    <strong>{th.title}</strong>
-                    <small>{th.member_slugs.map((s) => `@${s}`).join(', ')}</small>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-del"
-                    onClick={() => {
-                      void deleteThread(th.id)
-                      if (String(selectedThreadId) === String(th.id)) setSelectedThreadId(null)
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          </aside>
+            </aside>
+          )}
 
           <section className="agents-stage">
             <header className="stage-head">
-              <div>
-                <strong>{activeThread ? activeThread.title : c.selectThreadPrompt}</strong>
-                {activeThread && (
-                  <div className="stage-seats-bar">
-                    {seatOrder.map((ag) => {
-                      const state = streamState.seatStates[ag.slug] ?? 'idle'
-                      return (
-                        <span key={ag.slug} className={`seat-pill state-${state}`} style={{ borderColor: ag.color }}>
-                          {ag.emoji} {ag.display_name}
-                          {state !== 'idle' && (
-                            <em>
-                              {' '}
-                              ·{' '}
-                              {state === 'thinking'
-                                ? c.seatThinking
-                                : state === 'speaking'
-                                  ? c.seatSpeaking
-                                  : state === 'tool_calling'
-                                    ? c.seatToolCalling
-                                    : state === 'error'
-                                      ? c.seatError
-                                      : c.seatDone}
-                            </em>
-                          )}
-                        </span>
-                      )
-                    })}
-                    {streamConnected && <span className="sse-badge">● SSE</span>}
-                  </div>
-                )}
+              <div className="stage-head-main">
+                <button
+                  type="button"
+                  className={railOpen ? 'rail-toggle-btn active' : 'rail-toggle-btn'}
+                  aria-label={railOpen ? c.railHideBtn : c.railShowBtn}
+                  aria-expanded={railOpen}
+                  title={railOpen ? c.railHideBtn : c.railShowBtn}
+                  onClick={() => setRailOpen((v) => !v)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect
+                      x="1.75"
+                      y="2.5"
+                      width="12.5"
+                      height="11"
+                      rx="2.2"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                    />
+                    <path d="M5.75 2.5v11" stroke="currentColor" strokeWidth="1.4" />
+                  </svg>
+                </button>
+                <div className="stage-head-title-wrap">
+                  <strong>{activeThread ? activeThread.title : c.selectThreadPrompt}</strong>
+                  {activeThread && (
+                    <div className="stage-seats-bar">
+                      {seatOrder.map((ag) => {
+                        const state = streamState.seatStates[ag.slug] ?? 'idle'
+                        return (
+                          <span
+                            key={ag.slug}
+                            className={`seat-pill state-${state}`}
+                            style={{ borderColor: ag.color }}
+                          >
+                            {ag.emoji} {ag.display_name}
+                            {state !== 'idle' && (
+                              <em>
+                                {' '}
+                                ·{' '}
+                                {state === 'thinking'
+                                  ? c.seatThinking
+                                  : state === 'speaking'
+                                    ? c.seatSpeaking
+                                    : state === 'tool_calling'
+                                      ? c.seatToolCalling
+                                      : state === 'error'
+                                        ? c.seatError
+                                        : c.seatDone}
+                              </em>
+                            )}
+                          </span>
+                        )
+                      })}
+                      {streamConnected && <span className="sse-badge">● {c.liveStreamBadge}</span>}
+                    </div>
+                  )}
+                </div>
               </div>
+
               <div className="stage-head-controls">
                 {activeThread?.kind === 'group' && (
                   <div className="mode-pill-row">
@@ -1737,44 +1822,72 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         key={m.id}
                         type="button"
                         className={activeThread.discussion_mode === m.id ? 'chip active' : 'chip'}
-                        title={c[m.descKey]}
+                        title={`${c[m.labelKey]} — ${c[m.descKey]}`}
                         onClick={() => void updateThread(activeThread.id, { discussion_mode: m.id })}
                       >
-                        {c[m.labelKey]}
+                        {formatDiscussionModeShort(m.id, c)}
                       </button>
                     ))}
                   </div>
                 )}
                 <button
                   type="button"
-                  className={sidePanelOpen ? 'btn small primary' : 'btn small secondary'}
-                  onClick={() => setSidePanelOpen((v) => !v)}
+                  className={
+                    sidePanelOpen && sidePanelTab === 'trace'
+                      ? 'btn small primary'
+                      : 'btn small secondary'
+                  }
+                  onClick={() => {
+                    if (sidePanelOpen && sidePanelTab === 'trace') {
+                      setSidePanelOpen(false)
+                    } else {
+                      setSidePanelTab('trace')
+                      setSidePanelOpen(true)
+                    }
+                  }}
                 >
-                  {sidePanelTab === 'trace' ? c.panelTabTrace : c.panelTabContext} ({traceEntries.length})
+                  {c.panelTabTrace} ({traceEntries.length})
+                </button>
+                <button
+                  type="button"
+                  className={
+                    sidePanelOpen && sidePanelTab === 'context'
+                      ? 'btn small primary'
+                      : 'btn small secondary'
+                  }
+                  onClick={() => {
+                    if (sidePanelOpen && sidePanelTab === 'context') {
+                      setSidePanelOpen(false)
+                    } else {
+                      setSidePanelTab('context')
+                      setSidePanelOpen(true)
+                    }
+                  }}
+                >
+                  📌 {c.whiteboardToggleDrawer}
+                  {whiteboard.length > 0 ? ` (${whiteboard.length})` : ''}
                 </button>
               </div>
             </header>
 
             {activeThread && (
               <div className="stage-scope-bar">
-                <label className="workspace-pill compact" title={c.salonScopeWorkspaceLabel}>
-                  <span>{threadWorkspace?.emoji ?? '🗂️'}</span>
-                  <select
-                    aria-label={c.salonScopeWorkspaceLabel}
-                    value={activeThread.workspace_id ?? ''}
-                    onChange={(e) => {
-                      const nextWs = e.target.value || null
-                      void updateThread(activeThread.id, { workspace_id: nextWs })
-                    }}
-                  >
-                    <option value="">{c.salonScopeNoWorkspace}</option>
-                    {workspaces.map((ws) => (
-                      <option key={ws.id} value={ws.id}>
-                        {ws.emoji} {ws.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <Select
+                  variant="pill"
+                  className="select-pill-sm"
+                  leadingIcon={workspaceLeadingIcon}
+                  ariaLabel={c.salonScopeWorkspaceLabel}
+                  minMenuWidth={240}
+                  value={activeThread.workspace_id ?? ''}
+                  onChange={(v) => {
+                    const nextWs = v || null
+                    void updateThread(activeThread.id, { workspace_id: nextWs })
+                  }}
+                  options={[
+                    { value: '', label: c.salonScopeNoWorkspace },
+                    ...workspaces.map((ws) => ({ value: ws.id, label: `${ws.emoji} ${ws.name}` })),
+                  ]}
+                />
 
                 <span
                   className={
@@ -1830,7 +1943,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
               </div>
             )}
 
-            <div className="stage-body-split">
+            <div className={sidePanelOpen ? 'stage-body-split panel-open' : 'stage-body-split'}>
               <div className="stage-messages">
                 {messages.length === 0 && (
                   <div className="starter-prompts-box">
@@ -1859,7 +1972,11 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   return (
                     <div
                       key={m.id}
-                      className={isUser ? 'salon-turn salon-turn-user' : 'salon-turn salon-turn-agent partner-seat'}
+                      className={
+                        isUser
+                          ? 'salon-turn salon-turn-user'
+                          : 'salon-turn salon-turn-agent partner-seat'
+                      }
                     >
                       <div
                         className="salon-turn-card"
@@ -1971,6 +2088,15 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     >
                       {c.panelTabContext}
                     </button>
+                    <button
+                      type="button"
+                      className="side-panel-close"
+                      aria-label={c.cancelBtn}
+                      title={c.cancelBtn}
+                      onClick={() => setSidePanelOpen(false)}
+                    >
+                      ✕
+                    </button>
                   </div>
 
                   {sidePanelTab === 'trace' && (
@@ -2014,10 +2140,16 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           <p className="muted-sub">{activeWorkspace.description}</p>
                           <div className="chip-row">
                             <span className="scope-badge">
-                              regions: {(activeWorkspace.resource_ctx.regions ?? ['*']).join(',')}
+                              ⌖{' '}
+                              {activeWorkspace.resource_ctx.regions?.length
+                                ? activeWorkspace.resource_ctx.regions.join(', ')
+                                : c.salonScopeRegionsAll}
                             </span>
                             <span className="scope-badge">
-                              topics: {(activeWorkspace.resource_ctx.topics ?? ['*']).join(',')}
+                              #{' '}
+                              {activeWorkspace.resource_ctx.topics?.length
+                                ? activeWorkspace.resource_ctx.topics.join(', ')
+                                : c.salonScopeTopicsAll}
                             </span>
                           </div>
                         </div>
@@ -2052,9 +2184,11 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                               <button
                                 type="button"
                                 className="icon-del"
+                                aria-label={c.cancelBtn}
+                                title={c.cancelBtn}
                                 onClick={() => void deleteWhiteboardNote(note.id)}
                               >
-                                ×
+                                🗑
                               </button>
                             </div>
                             <p>{note.content}</p>
@@ -2125,7 +2259,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
               <textarea
                 ref={composerRef}
-                rows={2}
+                rows={1}
                 value={composerText}
                 placeholder={c.composerPlaceholder}
                 onChange={(e) => {
@@ -2144,24 +2278,42 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
               <div className="composer-tray-bar">
                 <div className="composer-tray-left">
-                  <label className="model-selector-inline" title={c.composerModelLabel}>
-                    <span>⚙</span>
-                    <select
-                      value={turnModelOverride}
-                      onChange={(e) => setTurnModelOverride(e.target.value)}
+                  <div className="composer-quick-triggers">
+                    <button
+                      type="button"
+                      className="composer-trigger-btn"
+                      title={c.composerMentionTitle}
+                      onClick={() => handleInsertTrigger('@')}
                     >
-                      <option value="">{c.composerModelDefault}</option>
-                      {models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <span className="context-budget-chip">
-                    {(composerBytes / 1024).toFixed(1)} / 16.0 KB
-                  </span>
-                  <span className="muted-sub">{c.composerSkillAttachHint}</span>
+                      {c.composerMentionBtn}
+                    </button>
+                    <button
+                      type="button"
+                      className="composer-trigger-btn"
+                      title={c.composerSkillTitle}
+                      onClick={() => handleInsertTrigger('/')}
+                    >
+                      {c.composerSkillBtn}
+                    </button>
+                  </div>
+                  <Select
+                    variant="pill"
+                    className="select-pill-sm"
+                    leadingIcon="⚙"
+                    ariaLabel={c.composerModelLabel}
+                    minMenuWidth={230}
+                    value={turnModelOverride}
+                    onChange={setTurnModelOverride}
+                    options={[
+                      { value: '', label: c.composerModelDefault },
+                      ...models.map((m) => ({ value: m, label: m })),
+                    ]}
+                  />
+                  {composerBytes > 0 && (
+                    <span className="context-budget-chip" title={c.composerBudgetLabel}>
+                      {composerBytes < 1024 ? '<1' : (composerBytes / 1024).toFixed(1)} / 16 KB
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"
