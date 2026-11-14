@@ -313,19 +313,22 @@ fn build_test_state(
     conn_cfg.delegation_secret = Some(TEST_DELEGATION_SECRET.to_string());
     conn_cfg.audience = Some("lnc-newsman".to_string());
 
+    let cfg = Config {
+        data_dir: dir.clone(),
+        regions_dir: dir.join("regions"),
+        bind_address: "127.0.0.1".parse().unwrap(),
+        port: 0,
+        management_key: Some(TEST_MGMT_KEY.into()),
+        api_keys: vec![TEST_API_KEY.into()],
+        allowed_hosts: vec!["newsman.test".into(), "127.0.0.1".into()],
+        trusted_proxies: Vec::new(),
+        secure_cookie: false,
+        version: "test",
+    };
+    let security = Arc::new(crate::security::SecurityRuntime::for_test(&cfg));
+
     Arc::new(AppState {
-        cfg: Config {
-            data_dir: dir.clone(),
-            regions_dir: dir.join("regions"),
-            bind_address: "127.0.0.1".parse().unwrap(),
-            port: 0,
-            management_key: Some(TEST_MGMT_KEY.into()),
-            api_keys: vec![TEST_API_KEY.into()],
-            allowed_hosts: vec!["newsman.test".into(), "127.0.0.1".into()],
-            trusted_proxies: Vec::new(),
-            secure_cookie: false,
-            version: "test",
-        },
+        cfg,
         db: Mutex::new(db),
         login_limiter: Mutex::new(auth::LoginLimiter::default()),
         started_at: now(),
@@ -348,6 +351,7 @@ fn build_test_state(
         pack: Mutex::new(regions::PackStatus::default()),
         alerts_running: AtomicBool::new(false),
         agent_bridge: bridge_rt,
+        security,
     })
 }
 

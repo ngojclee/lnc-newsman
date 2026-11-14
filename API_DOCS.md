@@ -373,15 +373,56 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `POST /api/app-agents/memory/dedup` | Session + CSRF | Deduplicate near-identical memory nodes by normalized title/layer |
 | `POST /api/app-agents/telegram/link-code` | Session + CSRF | Mint a short-lived (`NM-XXXX`, 600 s TTL) pairing code; inbound `/link NM-XXXX` commands bind `chat_id`/`message_thread_id` before route matching |
 
-## Security and deployment limitations
+## Blueprint v2 SSO, Key Lifecycle, Unified Provider Hub & MCP Connectors
 
-`MANAGEMENT_KEY` is currently **environment-managed**, not a bootstrap-to-runtime store. Changing it requires restart and invalidates old cookie signatures. The server stores only hashes of signed random session tokens, with expiry and logout revocation in SQLite. `COOKIE_SECURE` defaults to `true`; set it to `false` only for isolated HTTP testing. Login throttling is process-local and keyed by the TCP peer by default. When the request arrives from a socket peer listed in
-`TRUSTED_PROXIES` (comma-separated IPs, e.g. the Caddy edge `10.20.0.3`), the key becomes the right-most valid address in
-`X-Forwarded-For` — the one that proxy appended. **Measured 2026-11-12:** in the deployed stack the socket peer is the Docker
-bridge gateway (`172.31.0.1`) for both the domain and the published port, so a `TRUSTED_PROXIES` naming the edge never matches
-and all callers share one bucket. See `.docs/PROJECT_STATUS.md` for the measurement and the options; nothing was changed. Earlier entries are caller-supplied and are ignored, and a malformed value
-falls back to the proxy's own address. Empty `TRUSTED_PROXIES` trusts nobody, which means a shared reverse proxy makes every
-user share one limit. Multi-replica coordination, management key rotation UI, encrypted provider secrets, audit chain and independent reader accounts remain unimplemented. The application is not production-ready.
+Authentication supports **Keycloak Confidential OIDC `PKCE S256`** (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, fail-closed `OIDC_ALLOWED_USERS`) alongside collapsible break-glass `MANAGEMENT_KEY` verified against **Argon2id** (`m=65536, t=3, p=4`, runtime rotation persists over bootstrap env). Browser sessions use signed `HttpOnly; SameSite=Lax; Secure(auto)` cookies (`12h` idle / `7d` max / `session_epoch`) guarded by `X-Requested-With: XMLHttpRequest`, `Sec-Fetch-Site`, and `Origin` / `Referer` validation (ignoring spoofed `X-Forwarded-Host`). Inbound API keys store both `HMAC-SHA256` digests and `HKDF-SHA256` + `AES-256-GCM` copy envelopes sealed under `LNC_MASTER_KEY`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/auth/oidc/login` | Start Keycloak Confidential OIDC `PKCE S256` flow (`20/5m/IP`, sealed `lnc_newsman_oidc_tx` cookie) |
+| GET | `/api/auth/oidc/callback` | Verify authorization code, PKCE verifier, JWKS signature (`RS256..EdDSA`), nonce, and `OIDC_ALLOWED_USERS`, then mint session |
+| POST | `/api/auth/revoke-all` | Alias for session epoch revocation (`session_epoch + 1`, clears sessions) |
+| GET | `/api/admin/api-keys` | List masked inbound API key metadata + `mgmt` status (`Cache-Control: no-store`) |
+| POST | `/api/admin/api-keys` | Create an inbound API key (`label`, `scopes`, optional `custom_secret`), returning plaintext once |
+| PATCH | `/api/admin/api-keys/{id}` | Rename label, update scopes, or toggle key status |
+| DELETE | `/api/admin/api-keys/{id}` | Remove an inbound API key row cleanly |
+| POST | `/api/admin/api-keys/{id}/copy` | Audited `AES-256-GCM` decrypt for clipboard (`15/5m/IP`, `Cache-Control: no-store`) |
+| POST | `/api/admin/api-keys/{id}/rotate` | Replace inbound key secret in place (`copy_available: true`, invalidates old hash immediately) |
+| POST | `/api/admin/api-keys/{id}/revoke` | Revoke an inbound API key immediately |
+| GET | `/api/keys` | Alias for `GET /api/admin/api-keys` |
+| POST | `/api/keys` | Alias for `POST /api/admin/api-keys` |
+| PATCH | `/api/keys/{id}` | Alias for `PATCH /api/admin/api-keys/{id}` |
+| DELETE | `/api/keys/{id}` | Alias for `DELETE /api/admin/api-keys/{id}` |
+| POST | `/api/keys/{id}/copy` | Alias for `POST /api/admin/api-keys/{id}/copy` |
+| POST | `/api/keys/{id}/rotate` | Alias for `POST /api/admin/api-keys/{id}/rotate` |
+| POST | `/api/keys/{id}/revoke` | Alias for `POST /api/admin/api-keys/{id}/revoke` |
+| POST | `/api/admin/mgmt/rotate` | Rotate `MANAGEMENT_KEY` (Argon2id + `session_epoch + 1`), keeping caller active and invalidating prior sessions |
+| POST | `/api/admin/sessions/revoke-all` | Increment `session_epoch` and delete all active sessions immediately |
+| GET | `/api/admin/audit-events` | Read recent authentication and secret lifecycle audit events (`Cache-Control: no-store`) |
+| GET | `/api/admin/providers` | List unified LLM providers (`lnc-agents-hub` + custom OpenAI-compat providers) and global role bindings (`no-store`) |
+| POST | `/api/admin/providers` | Register a custom OpenAI-compatible provider after SSRF validation (`secret_enc` sealed via `LNC_MASTER_KEY`) |
+| PUT | `/api/admin/providers/{id}` | Update provider URL/name/secret (`omitBlankSecrets` preserves blank or `"********"` secrets) |
+| DELETE | `/api/admin/providers/{id}` | Remove a custom provider (`CASCADE` catalog, `SET NULL` bindings) |
+| POST | `/api/admin/providers/{id}/copy` | Audited copy of stored provider API key (`15/5m/IP`, `no-store`) |
+| POST | `/api/admin/providers/{id}/rotate` | Rotate provider API key in place keeping `id` and model bindings |
+| POST | `/api/admin/providers/{id}/revoke` | Revoke a provider immediately (`status = revoked`, `enabled = false`) |
+| POST | `/api/admin/providers/{id}/fetch-models` | Probe provider models endpoint via SSRF-safe `Fetcher` and upsert shared catalog |
+| POST | `/api/admin/providers/{id}/test` | Probe provider connectivity and sync discovered models |
+| GET | `/api/admin/models/catalog` | Read unified model catalog entries (`enabled`, `source`, roles) |
+| PATCH | `/api/admin/models/catalog` | Toggle per-model `enabled` state across `ai_model_catalog` and `app_agent_model_catalog` |
+| PUT | `/api/admin/models/bindings` | Save `default_smart_model` and `fast_background_model` role bindings |
+| GET | `/api/admin/mcp-connectors` | List inbound `/mcp` pairing state and custom outbound MCP connectors (`no-store`) |
+| POST | `/api/admin/mcp-connectors` | Create a custom outbound MCP connector after SSRF check |
+| PUT | `/api/admin/mcp-connectors/{id}` | Update inbound `/mcp` pairing settings or outbound MCP connector (`omitBlankSecrets`) |
+| DELETE | `/api/admin/mcp-connectors/{id}` | Remove custom outbound MCP connector or clear runtime inbound secrets |
+| POST | `/api/admin/mcp-connectors/{id}/copy` | Audited copy of inbound bearer/delegation secret or outbound MCP token (`no-store`) |
+| POST | `/api/admin/mcp-connectors/{id}/rotate` | Rotate inbound `connector-bearer` / `delegation-secret` or outbound MCP token |
+| POST | `/api/admin/mcp-connectors/{id}/revoke` | Revoke inbound `/mcp` connector (when runtime-managed) or disable outbound MCP connector |
+| POST | `/api/admin/mcp-connectors/{id}/test` | Probe inbound tool registry or execute outbound MCP `initialize` + `tools/list` via SSRF-safe `Fetcher` |
+
+## Security and deployment
+
+Sessions use signed cookies backed by SQLite (`12h` idle / `7d` max / `session_epoch` instant revocation). `COOKIE_SECURE` defaults to `auto` (`X-Forwarded-Proto: https` or `https://` Origin/Referer; override with `true` or `false`). Login throttling (`8/5m/IP`), OIDC throttling (`20/5m/IP`), and secret copy throttling (`15/5m/IP`) are keyed by peer IP (or `X-Forwarded-For` right-most address when arriving from `TRUSTED_PROXIES`). Local logout only clears the local session cookie and never redirects to Keycloak `end_session_endpoint`.
 
 ## Planned only
 

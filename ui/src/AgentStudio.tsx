@@ -251,10 +251,7 @@ export function AgentStudio({
   const [bridgeFormOpen, setBridgeFormOpen] = useState(false)
   const [bridgeForm, setBridgeForm] = useState({
     astraea_url: bridgeStatus.astraea_url ?? '',
-    hub_url: bridgeStatus.hub_url ?? '',
-    default_model: bridgeStatus.default_model ?? 'gpt-5.4-mini',
     astraea_token: '',
-    hub_token: '',
   })
 
   useEffect(() => {
@@ -271,8 +268,6 @@ export function AgentStudio({
     setBridgeForm((prev) => ({
       ...prev,
       astraea_url: bridgeStatus.astraea_url ?? '',
-      hub_url: bridgeStatus.hub_url ?? '',
-      default_model: bridgeStatus.default_model ?? 'gpt-5.4-mini',
     }))
   }, [bridgeStatus])
 
@@ -570,24 +565,6 @@ export function AgentStudio({
               />
             </label>
             <label className="field">
-              <span>{c.bridgeHubUrl}</span>
-              <input
-                value={bridgeForm.hub_url}
-                placeholder="https://agents-hub.lengoc.me"
-                onChange={(e) => setBridgeForm({ ...bridgeForm, hub_url: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>{c.bridgeDefaultModel}</span>
-              <input
-                list="studio-hub-models"
-                value={bridgeForm.default_model}
-                onChange={(e) => setBridgeForm({ ...bridgeForm, default_model: e.target.value })}
-              />
-            </label>
-          </div>
-          <div className="catalog-form-row">
-            <label className="field">
               <span>{c.bridgeAstraeaToken}</span>
               <input
                 type="password"
@@ -598,18 +575,12 @@ export function AgentStudio({
               />
               {bridgeStatus.has_astraea_token && <small>{c.bridgeTokenSaved}</small>}
             </label>
-            <label className="field">
-              <span>{c.bridgeHubToken}</span>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={bridgeForm.hub_token}
-                placeholder={bridgeStatus.has_hub_token ? '••••••••' : 'lnc_hub_…'}
-                onChange={(e) => setBridgeForm({ ...bridgeForm, hub_token: e.target.value })}
-              />
-              {bridgeStatus.has_hub_token && <small>{c.bridgeTokenSaved}</small>}
-            </label>
           </div>
+          <p className="muted-sub" style={{ margin: '6px 0 10px' }}>
+            {lang === 'vi'
+              ? 'Cấu hình LNC Agents Hub, các nhà cung cấp AI và Smart/Fast Model toàn cục hiện nằm thống nhất trong mục Nhà cung cấp AI.'
+              : 'LNC Agents Hub URL/token, AI providers, and global Smart/Fast model roles are managed cleanly under LLM Providers.'}
+          </p>
           <div className="btn-row">
             <button
               type="button"
@@ -617,11 +588,14 @@ export function AgentStudio({
               disabled={busy}
               onClick={() => {
                 setBusy(true)
-                void onSaveBridgeConfig(bridgeForm)
+                void onSaveBridgeConfig({
+                  astraea_url: bridgeForm.astraea_url,
+                  ...(bridgeForm.astraea_token ? { astraea_token: bridgeForm.astraea_token } : {}),
+                })
                   .then(() => {
-                    setBridgeForm((f) => ({ ...f, astraea_token: '', hub_token: '' }))
+                    setBridgeForm((f) => ({ ...f, astraea_token: '' }))
                     setStatusMsg(
-                      lang === 'vi' ? 'Đã lưu cấu hình Kết nối.' : 'Connection settings saved.',
+                      lang === 'vi' ? 'Đã lưu cấu hình Astraea Relay.' : 'Astraea relay settings saved.',
                     )
                   })
                   .finally(() => setBusy(false))
@@ -629,6 +603,9 @@ export function AgentStudio({
             >
               {lang === 'vi' ? 'Lưu kết nối' : 'Save Connection'}
             </button>
+            <a className="btn secondary" href="#llm-providers">
+              {lang === 'vi' ? 'Mở Nhà cung cấp AI ↗' : 'Open LLM Providers ↗'}
+            </a>
           </div>
         </section>
       )}
@@ -676,12 +653,6 @@ export function AgentStudio({
               </button>
             ))}
           </div>
-
-          <datalist id="studio-hub-models">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
 
           {activeTab === 'identity' && (
             <section className="studio-panel">
@@ -843,22 +814,36 @@ export function AgentStudio({
               </div>
 
               <div className="catalog-form-row">
-                <label className="field">
-                  <span>{c.studioPrimaryModelLabel}</span>
-                  <input
-                    list="studio-hub-models"
-                    value={draft.primary_model}
-                    onChange={(e) => setDraft({ ...draft, primary_model: e.target.value })}
-                  />
-                </label>
-                <label className="field">
-                  <span>{c.studioBackupModelLabel}</span>
-                  <input
-                    list="studio-hub-models"
-                    value={draft.backup_model}
-                    onChange={(e) => setDraft({ ...draft, backup_model: e.target.value })}
-                  />
-                </label>
+                <Select
+                  variant="field"
+                  label={c.studioPrimaryModelLabel}
+                  value={draft.primary_model}
+                  onChange={(val) => setDraft({ ...draft, primary_model: val })}
+                  options={[
+                    {
+                      value: '',
+                      label: lang === 'vi' ? 'Theo Smart Model mặc định' : 'Follow Default Smart Model',
+                    },
+                    ...Array.from(new Set([...models, draft.primary_model].filter(Boolean))).map(
+                      (m) => ({ value: m, label: m }),
+                    ),
+                  ]}
+                />
+                <Select
+                  variant="field"
+                  label={c.studioBackupModelLabel}
+                  value={draft.backup_model}
+                  onChange={(val) => setDraft({ ...draft, backup_model: val })}
+                  options={[
+                    {
+                      value: '',
+                      label: lang === 'vi' ? 'Theo Smart Model mặc định' : 'Follow Default Smart Model',
+                    },
+                    ...Array.from(new Set([...models, draft.backup_model].filter(Boolean))).map(
+                      (m) => ({ value: m, label: m }),
+                    ),
+                  ]}
+                />
               </div>
 
               <div className="catalog-form-row">

@@ -355,6 +355,34 @@ impl Fetcher {
         body: Option<&str>,
         headers: &[(&str, &str)],
     ) -> Result<FetchOutcome, FetchError> {
+        self.request_with_content_type(method, url, body, "application/json", headers)
+            .await
+    }
+
+    pub async fn post_form(
+        &self,
+        url: &str,
+        form_body: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<FetchOutcome, FetchError> {
+        self.request_with_content_type(
+            reqwest::Method::POST,
+            url,
+            Some(form_body),
+            "application/x-www-form-urlencoded",
+            headers,
+        )
+        .await
+    }
+
+    async fn request_with_content_type(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&str>,
+        content_type: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<FetchOutcome, FetchError> {
         const MAX_JSON_REQUEST_BYTES: usize = 256 * 1024;
         if let Some(payload) = body
             && payload.len() > MAX_JSON_REQUEST_BYTES
@@ -384,7 +412,7 @@ impl Fetcher {
                 .request(req_method, current.clone())
                 .header(ACCEPT, "application/json");
             if body.is_some() && redirects_made == 0 {
-                request = request.header(CONTENT_TYPE, "application/json");
+                request = request.header(CONTENT_TYPE, content_type);
             }
             if redirects_made == 0 {
                 for (name, value) in headers {

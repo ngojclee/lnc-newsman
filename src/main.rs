@@ -1,9 +1,12 @@
+mod admin_lifecycle;
 mod agent_bridge;
 #[cfg(test)]
 mod agent_bridge_tests;
 mod agent_v2;
 mod alerts;
 mod auth;
+#[cfg(test)]
+mod blueprint_tests;
 mod catalog;
 #[cfg(test)]
 mod catalog_tests;
@@ -25,11 +28,13 @@ mod llm;
 mod legal;
 mod connector;
 mod mcp;
+mod oidc;
 mod providers;
 mod readability;
 mod reader;
 mod regions;
 mod secrets;
+mod security;
 mod series;
 mod tax;
 mod telegram;
@@ -39,7 +44,7 @@ mod write;
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Query, Request, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header, uri::Authority},
+    http::{HeaderMap, HeaderValue, StatusCode, header, uri::Authority},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -92,10 +97,13 @@ struct AppState {
     alerts_running: AtomicBool,
     /// Astraea App-Scoped Conversational Agents Bridge & Hub Standby runtime.
     pub(crate) agent_bridge: Arc<agent_bridge::AgentBridgeRuntime>,
+    /// Blueprint v2 security runtime (Argon2id auth state, HKDF keys, OIDC PKCE, limiters).
+    pub(crate) security: Arc<security::SecurityRuntime>,
 }
 impl AppState {
     fn new(cfg: config::Config, db: db::Database, fetcher: fetch::Fetcher) -> Self {
         let agent_bridge = agent_bridge::AgentBridgeRuntime::new(&db);
+        let security = Arc::new(security::SecurityRuntime::for_test(&cfg));
         Self {
             cfg,
             db: Mutex::new(db),
@@ -120,6 +128,7 @@ impl AppState {
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),
             agent_bridge,
+            security,
         }
     }
 }
@@ -214,6 +223,14 @@ async fn main() -> anyhow::Result<()> {
     app_state.hub = hub::ProviderConfig::from_env();
     app_state.telegram = telegram::TelegramConfig::from_env();
     app_state.connector = connector::ConnectorConfig::from_env();
+    app_state.security = {
+        let db_guard = app_state.db.lock().expect("database lock poisoned");
+        Arc::new(security::SecurityRuntime::from_env(
+            &db_guard,
+            &app_state.cfg,
+            app_state.secrets.as_ref(),
+        ))
+    };
     if app_state.secrets.is_none() {
         tracing::info!("LNC_MASTER_KEY is not set; the provider secret store stays closed");
     }
@@ -541,6 +558,111 @@ fn router(state: SharedState) -> Router {
             "/api/app-agents/telegram/link-code",
             post(agent_v2::post_telegram_link_code),
         )
+        .route("/api/auth/revoke-all", post(admin_lifecycle::revoke_all_sessions))
+        .route(
+            "/api/admin/api-keys",
+            get(admin_lifecycle::get_api_keys).post(admin_lifecycle::post_api_key),
+        )
+        .route(
+            "/api/admin/api-keys/{id}",
+            axum::routing::patch(admin_lifecycle::patch_api_key)
+                .delete(admin_lifecycle::delete_api_key),
+        )
+        .route(
+            "/api/admin/api-keys/{id}/copy",
+            post(admin_lifecycle::copy_api_key),
+        )
+        .route(
+            "/api/admin/api-keys/{id}/rotate",
+            post(admin_lifecycle::rotate_api_key),
+        )
+        .route(
+            "/api/admin/api-keys/{id}/revoke",
+            post(admin_lifecycle::revoke_api_key),
+        )
+        .route(
+            "/api/keys",
+            get(admin_lifecycle::get_api_keys).post(admin_lifecycle::post_api_key),
+        )
+        .route(
+            "/api/keys/{id}",
+            axum::routing::patch(admin_lifecycle::patch_api_key)
+                .delete(admin_lifecycle::delete_api_key),
+        )
+        .route("/api/keys/{id}/copy", post(admin_lifecycle::copy_api_key))
+        .route("/api/keys/{id}/rotate", post(admin_lifecycle::rotate_api_key))
+        .route("/api/keys/{id}/revoke", post(admin_lifecycle::revoke_api_key))
+        .route("/api/admin/mgmt/rotate", post(admin_lifecycle::rotate_management_key))
+        .route(
+            "/api/admin/sessions/revoke-all",
+            post(admin_lifecycle::revoke_all_sessions),
+        )
+        .route(
+            "/api/admin/audit-events",
+            get(admin_lifecycle::get_audit_events),
+        )
+        .route(
+            "/api/admin/providers",
+            get(admin_lifecycle::get_providers).post(admin_lifecycle::post_provider),
+        )
+        .route(
+            "/api/admin/providers/{id}",
+            axum::routing::put(admin_lifecycle::put_provider)
+                .delete(admin_lifecycle::delete_provider),
+        )
+        .route(
+            "/api/admin/providers/{id}/copy",
+            post(admin_lifecycle::copy_provider_secret),
+        )
+        .route(
+            "/api/admin/providers/{id}/rotate",
+            post(admin_lifecycle::rotate_provider_secret),
+        )
+        .route(
+            "/api/admin/providers/{id}/revoke",
+            post(admin_lifecycle::revoke_provider),
+        )
+        .route(
+            "/api/admin/providers/{id}/fetch-models",
+            post(admin_lifecycle::fetch_provider_models),
+        )
+        .route(
+            "/api/admin/providers/{id}/test",
+            post(admin_lifecycle::fetch_provider_models),
+        )
+        .route(
+            "/api/admin/models/catalog",
+            get(agent_v2::get_models_catalog).patch(admin_lifecycle::patch_models_catalog),
+        )
+        .route(
+            "/api/admin/models/bindings",
+            axum::routing::put(admin_lifecycle::put_models_bindings),
+        )
+        .route(
+            "/api/admin/mcp-connectors",
+            get(admin_lifecycle::get_mcp_connectors).post(admin_lifecycle::post_mcp_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{id}",
+            axum::routing::put(admin_lifecycle::put_mcp_connector)
+                .delete(admin_lifecycle::delete_mcp_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{id}/copy",
+            post(admin_lifecycle::copy_mcp_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{id}/rotate",
+            post(admin_lifecycle::rotate_mcp_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{id}/revoke",
+            post(admin_lifecycle::revoke_mcp_connector),
+        )
+        .route(
+            "/api/admin/mcp-connectors/{id}/test",
+            post(admin_lifecycle::test_mcp_connector),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -583,6 +705,8 @@ fn router(state: SharedState) -> Router {
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
+        .route("/api/auth/oidc/login", get(oidc::oidc_login))
+        .route("/api/auth/oidc/callback", get(oidc::oidc_callback))
         .route("/api/app-info", get(app_info))
         .route(
             "/api/app-agents/telegram/webhook/direct",
@@ -600,7 +724,7 @@ fn router(state: SharedState) -> Router {
         .merge(mcp_api)
         .nest_service("/assets", ServeDir::new("ui/dist/assets"))
         .fallback_service(ServeDir::new("ui/dist"))
-        .layer(middleware::from_fn(csrf_guard))
+        .layer(middleware::from_fn_with_state(state.clone(), csrf_guard))
         .layer(middleware::from_fn_with_state(state.clone(), host_guard))
         .layer(middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
@@ -620,35 +744,54 @@ pub(crate) fn internal_error(err: impl std::fmt::Display) -> Response {
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
-    let path = req.uri().path();
-    let api = path.starts_with("/api/");
-    // Hashed bundles may be cached; HTML shells must revalidate so new builds load.
-    let revalidate = !api && !path.starts_with("/assets/");
+    let path = req.uri().path().to_string();
+    let api = path.starts_with("/api/") || path == "/mcp";
+    let html_shell = !api && !path.starts_with("/assets/");
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"));
-    if api {
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    } else if revalidate {
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
+    );
+    if api || html_shell {
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store, private"),
+        );
     }
     response
 }
 
-async fn csrf_guard(req: Request, next: Next) -> Response {
-    // A Hub call authenticates with a `Bearer` the browser never has, and CSRF is
-    // precisely an attack that rides a browser's own credential; a request carrying
-    // the connector bearer has no cookie authority to borrow. It is still fully
-    // authenticated by the delegation signature in `connector::require_mcp`.
-    //
-    // The same reasoning covers an unauthenticated `POST /mcp`: with no session cookie
-    // there is no ambient authority to forge, so the honest answer there is the
-    // credential gate's 401 rather than a CSRF complaint. Scoped to `/mcp` so every
-    // other route keeps the guard it had.
+fn has_query_token_param(req: &Request) -> bool {
+    let path = req.uri().path();
+    if path == "/api/auth/oidc/callback" || (!path.starts_with("/api/") && path != "/mcp") {
+        return false;
+    }
+    let Some(query) = req.uri().query() else {
+        return false;
+    };
+    query.split('&').any(|pair| {
+        let key = pair.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
+        matches!(key.as_str(), "token" | "api_key" | "access_token" | "key")
+    })
+}
+
+async fn csrf_guard(State(state): State<SharedState>, req: Request, next: Next) -> Response {
+    if has_query_token_param(&req) {
+        return failure(StatusCode::BAD_REQUEST, "query_token_disabled");
+    }
     if connector::presents_connector_bearer(req.headers())
         || (req.uri().path() == "/mcp" && auth::cookie_value(req.headers()).is_none())
         || matches!(
@@ -658,14 +801,8 @@ async fn csrf_guard(req: Request, next: Next) -> Response {
     {
         return next.run(req).await;
     }
-    if !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
-        && req
-            .headers()
-            .get("x-requested-with")
-            .and_then(|v| v.to_str().ok())
-            != Some("XMLHttpRequest")
-    {
-        return failure(StatusCode::FORBIDDEN, "csrf_header_required");
+    if let Err(res) = security::enforce_csrf(&state, &req) {
+        return res;
     }
     next.run(req).await
 }
@@ -701,27 +838,7 @@ async fn host_guard(State(state): State<SharedState>, req: Request, next: Next) 
 }
 
 pub(crate) fn session_valid(state: &SharedState, headers: &HeaderMap) -> bool {
-    let (Some(key), Some(token)) = (
-        state.cfg.management_key.as_deref(),
-        auth::cookie_value(headers),
-    ) else {
-        return false;
-    };
-    if !auth::valid_signature(token, key) {
-        return false;
-    }
-    match state
-        .db
-        .lock()
-        .expect("database lock poisoned")
-        .session_exists(&auth::token_hash(token), now())
-    {
-        Ok(valid) => valid,
-        Err(err) => {
-            tracing::error!(%err, "session lookup failed");
-            false
-        }
-    }
+    security::validate_session_identity(state, headers).is_some()
 }
 
 async fn require_session(State(state): State<SharedState>, req: Request, next: Next) -> Response {
@@ -736,7 +853,8 @@ async fn require_session_or_api(
     req: Request,
     next: Next,
 ) -> Response {
-    if session_valid(&state, req.headers()) || auth::has_api_key(req.headers(), &state.cfg.api_keys)
+    if session_valid(&state, req.headers())
+        || security::validate_api_key_request(&state, req.headers())
     {
         next.run(req).await
     } else {
@@ -771,10 +889,53 @@ async fn health(State(state): State<SharedState>) -> Json<serde_json::Value> {
 async fn auth_status(
     State(state): State<SharedState>,
     headers: HeaderMap,
-) -> Json<serde_json::Value> {
-    Json(
-        serde_json::json!({"ok":true,"service":"lnc-newsman","version":state.cfg.version,"authenticated":session_valid(&state, &headers),"management_configured":state.cfg.management_key.is_some()}),
-    )
+) -> Response {
+    let identity = security::validate_session_identity(&state, &headers);
+    let authenticated = identity.is_some();
+    let management_configured = {
+        let db = state.db.lock().expect("database lock poisoned");
+        auth::management_key_configured(&db, state.cfg.management_key.as_deref())
+    };
+    let mut payload = serde_json::json!({
+        "ok": true,
+        "service": "lnc-newsman",
+        "version": state.cfg.version,
+        "authenticated": authenticated,
+        "management_configured": management_configured,
+        "oidc_enabled": state.security.oidc.is_active(),
+        "auth_methods": {
+            "oidc": state.security.oidc.is_active(),
+            "local_key": management_configured,
+        },
+    });
+    if let Some((auth_method, username)) = identity
+        && let Some(obj) = payload.as_object_mut()
+    {
+        let rt = state
+            .db
+            .lock()
+            .expect("database lock poisoned")
+            .runtime_auth_state()
+            .unwrap_or_default();
+        obj.insert("auth_method".into(), serde_json::json!(auth_method));
+        obj.insert("username".into(), serde_json::json!(username));
+        obj.insert(
+            "management_source".into(),
+            serde_json::json!(if !rt.mgmt_key_hash.is_empty() {
+                rt.mgmt_source
+            } else if state.cfg.management_key.is_some() {
+                "env".into()
+            } else {
+                "unset".into()
+            }),
+        );
+    }
+    let mut res = Json(payload).into_response();
+    res.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    res
 }
 async fn app_info(State(state): State<SharedState>) -> Json<serde_json::Value> {
     Json(
@@ -788,17 +949,7 @@ async fn login(
     headers: HeaderMap,
     Json(input): Json<LoginRequest>,
 ) -> Response {
-    let Some(key) = state.cfg.management_key.as_deref() else {
-        return failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "management_key_not_configured",
-        );
-    };
-    let peer = peer
-        .map(|axum::Extension(ConnectInfo(addr))| addr.ip().to_string())
-        .unwrap_or_else(|| "unknown".into());
-    let forwarded_for = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
-    let client = auth::client_key(&peer, forwarded_for, &state.cfg.trusted_proxies);
+    let client = security::request_client_ip(&state, peer.as_ref(), &headers);
     if !state
         .login_limiter
         .lock()
@@ -807,54 +958,57 @@ async fn login(
     {
         return failure(StatusCode::TOO_MANY_REQUESTS, "login_rate_limited");
     }
+    let configured = {
+        let db = state.db.lock().expect("database lock poisoned");
+        auth::management_key_configured(&db, state.cfg.management_key.as_deref())
+    };
+    if !configured {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "management_key_not_configured",
+        );
+    }
     let supplied = input
         .key
         .or(input.token)
         .or(input.password)
         .unwrap_or_default();
-    if !auth::valid_key(&supplied, key) {
+    let valid = {
+        let db = state.db.lock().expect("database lock poisoned");
+        auth::verify_management_key(&db, state.cfg.management_key.as_deref(), &supplied)
+    };
+    if !valid {
         return failure(StatusCode::UNAUTHORIZED, "invalid_management_key");
     }
-    let token = match auth::new_token(key) {
-        Ok(token) => token,
+    let cookie = match security::issue_session_cookie(
+        &state,
+        &headers,
+        "management_key",
+        "admin",
+        &client,
+    ) {
+        Ok(c) => c,
         Err(err) => return internal_error(err),
     };
-    let timestamp = now();
-    {
-        let db = state.db.lock().expect("database lock poisoned");
-        if let Err(err) = db.create_session(
-            &auth::token_hash(&token),
-            timestamp + auth::SESSION_SECONDS,
-            timestamp,
-        ) {
-            return internal_error(err);
-        }
-        // Turn the alert engine's background sweep on at the same moment the first
-        // admin logs in — until then nothing is enabled, so it has nothing to send.
-        if !state.alerts_running.swap(true, Ordering::SeqCst) {
-            alerts::spawn_sweeper(state.clone());
-        }
+    if !state.alerts_running.swap(true, Ordering::SeqCst) {
+        alerts::spawn_sweeper(state.clone());
     }
     state
         .login_limiter
         .lock()
         .expect("limiter lock poisoned")
         .clear(&client);
-    let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
-        auth::COOKIE_NAME,
-        token,
-        auth::SESSION_SECONDS,
-        if state.cfg.secure_cookie {
-            "; Secure"
-        } else {
-            ""
-        }
-    );
-    let mut response = Json(serde_json::json!({"ok":true,"authenticated":true})).into_response();
+    let mut response = Json(serde_json::json!({
+        "ok": true,
+        "authenticated": true,
+        "auth_method": "management_key",
+        "username": "admin"
+    }))
+    .into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
     response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&cookie).expect("safe cookie"),
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
     );
     response
 }
@@ -868,19 +1022,18 @@ async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> Respons
     {
         return internal_error(err);
     }
-    let cookie = format!(
-        "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{}",
-        auth::COOKIE_NAME,
-        if state.cfg.secure_cookie {
-            "; Secure"
-        } else {
-            ""
-        }
-    );
-    let mut response = Json(serde_json::json!({"ok":true})).into_response();
+    let mut response = Json(serde_json::json!({"ok":true,"local_only":true})).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&cookie).expect("safe cookie"),
+        security::clear_cookie_header(
+            auth::COOKIE_NAME,
+            "/",
+            state.security.is_cookie_secure(&headers),
+        ),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
     );
     response
 }
@@ -1080,19 +1233,21 @@ mod tests {
     fn state() -> SharedState {
         let db = db::Database::in_memory().unwrap();
         let agent_bridge = agent_bridge::AgentBridgeRuntime::new(&db);
+        let cfg = config::Config {
+            data_dir: ".".into(),
+            regions_dir: ".".into(),
+            bind_address: "127.0.0.1".parse().unwrap(),
+            port: 8000,
+            management_key: Some("test-management-key".into()),
+            api_keys: vec!["test-api-key".into()],
+            allowed_hosts: vec!["newsman.test".into()],
+            trusted_proxies: Vec::new(),
+            secure_cookie: true,
+            version: "test",
+        };
+        let security = Arc::new(security::SecurityRuntime::for_test(&cfg));
         Arc::new(AppState {
-            cfg: config::Config {
-                data_dir: ".".into(),
-                regions_dir: ".".into(),
-                bind_address: "127.0.0.1".parse().unwrap(),
-                port: 8000,
-                management_key: Some("test-management-key".into()),
-                api_keys: vec!["test-api-key".into()],
-                allowed_hosts: vec!["newsman.test".into()],
-                trusted_proxies: Vec::new(),
-                secure_cookie: true,
-                version: "test",
-            },
+            cfg,
             db: Mutex::new(db),
             login_limiter: Mutex::new(auth::LoginLimiter::default()),
             started_at: now(),
@@ -1115,6 +1270,7 @@ mod tests {
             pack: Mutex::new(regions::PackStatus::default()),
             alerts_running: AtomicBool::new(false),
             agent_bridge,
+            security,
         })
     }
     fn req(

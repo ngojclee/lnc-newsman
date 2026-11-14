@@ -17,7 +17,14 @@ export interface AgentSelectProps {
   className?: string;
 }
 
-type PortalRect = { left: number; top: number; minWidth: number };
+type PortalRect = {
+  left: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+  minWidth: number;
+  above: boolean;
+};
 
 /**
  * Custom rounded droplist for `lnc-app-agents v2.0`.
@@ -48,17 +55,23 @@ export function AgentSelect({
 
   const computeRect = () => {
     const el = triggerRef.current;
-    if (!el) return;
+    if (!el || !el.isConnected || el.offsetParent === null) {
+      setOpen(false);
+      return;
+    }
     const r = el.getBoundingClientRect();
     const estHeight = Math.min(280, Math.max(1, options.length) * 34 + 12);
     const shouldFlip =
-      window.innerHeight - r.bottom < estHeight + 10 && r.top > estHeight + 10;
+      window.innerHeight - r.bottom < estHeight + 16 && r.top > window.innerHeight - r.bottom;
     const minWidth = Math.max(r.width, 180);
     const maxLeft = Math.max(8, window.innerWidth - minWidth - 8);
     setRect({
-      left: Math.min(r.left, maxLeft),
-      top: shouldFlip ? r.top - estHeight - 4 : r.bottom + 4,
+      left: Math.min(Math.max(8, r.left), maxLeft),
+      top: shouldFlip ? undefined : r.bottom + 6,
+      bottom: shouldFlip ? Math.max(32, window.innerHeight - r.top + 6) : undefined,
+      maxHeight: Math.max(120, Math.min(280, shouldFlip ? r.top - 38 : window.innerHeight - r.bottom - 16)),
       minWidth,
+      above: shouldFlip,
     });
   };
 
@@ -70,8 +83,11 @@ export function AgentSelect({
   useEffect(() => {
     if (!open) return;
     const sync = () => computeRect();
+    const onRouteOrHash = () => setOpen(false);
     window.addEventListener("scroll", sync, true);
     window.addEventListener("resize", sync);
+    window.addEventListener("hashchange", onRouteOrHash);
+    window.addEventListener("popstate", onRouteOrHash);
     const onOutside = (e: MouseEvent) => {
       const t = e.target as Node;
       if (triggerRef.current?.contains(t) || panelRef.current?.contains(t)) return;
@@ -81,6 +97,8 @@ export function AgentSelect({
     return () => {
       window.removeEventListener("scroll", sync, true);
       window.removeEventListener("resize", sync);
+      window.removeEventListener("hashchange", onRouteOrHash);
+      window.removeEventListener("popstate", onRouteOrHash);
       document.removeEventListener("mousedown", onOutside);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -144,8 +162,13 @@ export function AgentSelect({
             <div
               ref={panelRef}
               role="listbox"
-              className="engine-select-panel engine-select-panel--portal ak-select-panel"
-              style={{ left: rect.left, top: rect.top, minWidth: rect.minWidth }}
+              className={`engine-select-panel engine-select-panel--portal ak-select-panel${rect.above ? " above" : ""}`}
+              style={{
+                left: rect.left,
+                minWidth: rect.minWidth,
+                maxHeight: rect.maxHeight,
+                ...(rect.above ? { bottom: rect.bottom } : { top: rect.top }),
+              }}
             >
               {options.map((opt, idx) => (
                 <button

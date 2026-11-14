@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { ApiKeysPanel, McpConnectorsPanel, ProvidersPanel } from './AdminPanels.tsx'
 import { AgentsWorkspace } from './AgentsWorkspace.tsx'
 import { AGENT_COPY } from './agentTypes.ts'
 import { CatalogManager } from './CatalogManager'
@@ -11,7 +12,7 @@ import './style.css'
 import './agent-kit/agent-kit-hygiene.css'
 
 type Lang = 'vi' | 'en'
-type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'agents' | 'alerts' | 'timeline' | 'saved' | 'settings'
+type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'agents' | 'alerts' | 'timeline' | 'saved' | 'api-keys' | 'llm-providers' | 'mcp-connectors' | 'settings'
 type Topic = { slug: string; label_vi: string; label_en: string; parent_slug: string | null; enabled: boolean }
 type SourceFacet = { slug: string; name: string; tier: string; region: string; articles: number }
 type Stats = { collector_enabled: boolean; fulltext_auto_enabled?: boolean; articles_total: number; articles_24h: number; articles_with_content?: number; articles_pending_content?: number; sources_enabled: number; sources_paused: number; topic_counts: Record<string, number> }
@@ -49,9 +50,6 @@ type CitedArticle = { id: number; title: string; url: string; published_at: stri
 type NoteItem = { id: number; article_id: number | null; document_id: number | null; analysis_id: number | null; body: string; author: string | null; created_at: number; updated_at: number }
 type AnalysisDetailPayload = { data: AgentAnalysis; cited_articles: CitedArticle[]; notes: NoteItem[] }
 type ResearchResponse = { answer: string; model: string; tokens: number; cached: boolean; source_article_ids: number[]; saved_analysis_id: number | null; stable_key: string | null }
-type ConnectorSource = 'env' | 'admin' | 'unset'
-type ConnectorCard = { enabled: boolean; audience: string; max_scopes: string[]; bearer: ConnectorSource; delegation_secret: ConnectorSource; audience_source: ConnectorSource; secret_store_open: boolean }
-type ProviderStatus = { configured: boolean; base_host: string | null; allowed_hosts: string[]; models: [string, string, string]; agent: string; timeout_seconds: number; tokens_used_today: number; daily_budget: number; calls_today: number; has_secret: boolean }
 type LegalSource = { code: string; region: string; name_vi: string; name_en: string; access_kind: string; endpoint: string; access_note: string; licence: string; attribution: string; terms_verdict: string; terms_checked_on: string; terms_url: string; terms_quote: string; terms_note: string; rate_limit_per_day: number; enabled: boolean; pollable: boolean; block_reason: string | null; evidence_age_days: number | null; evidence_stale: boolean }
 type ConnectorStatus = { id: string; provider: string; region: string; enabled: boolean; health: string; last_error: string | null; last_run_at: number | null; next_run_at: number | null; requests_today: number; daily_quota: number; needs_secret: boolean }
 /** The reader filters a link or the sidebar can set. */
@@ -59,8 +57,8 @@ type Filter = { topic: string | null; source: string | null; q?: string }
 
 const copy = {
   vi: {
-    today: 'Hôm nay', topics: 'Chủ đề', stories: 'Câu chuyện', reports: 'Báo cáo', alerts: 'Cảnh báo', timeline: 'Dòng thời gian', saved: 'Đã lưu', settings: 'Cài đặt',
-    subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Dùng khóa MANAGEMENT_KEY được cấu hình cho ứng dụng.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa cấu hình MANAGEMENT_KEY trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
+    today: 'Hôm nay', topics: 'Chủ đề', stories: 'Câu chuyện', reports: 'Báo cáo', alerts: 'Cảnh báo', timeline: 'Dòng thời gian', saved: 'Đã lưu', 'api-keys': 'Khóa API', 'llm-providers': 'Nhà cung cấp AI', 'mcp-connectors': 'Trình kết nối MCP', settings: 'Cài đặt',
+    subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Dùng khóa MANAGEMENT_KEY được cấu hình cho ứng dụng.', ssoPrimary: 'Đăng nhập qua LNC SSO', breakGlassSummary: 'Đăng nhập khẩn cấp (Khóa quản trị)', ssoHint: 'Đăng nhập qua Keycloak SSO, hoặc mở khối khẩn cấp bên dưới khi cần.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa cấu hình MANAGEMENT_KEY trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
     briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật — lưu sẵn tóm tắt và toàn văn sạch để đọc ngay trong ứng dụng, tìm kiếm toàn văn hoặc cho Agent phân tích sâu.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập & Lưu trữ nội dung',
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', loadFailed: 'Không tải thêm được — thử lại', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
@@ -120,8 +118,8 @@ const copy = {
     ...AGENT_COPY.vi,
   },
   en: {
-    today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', settings: 'Settings',
-    subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Use the MANAGEMENT_KEY configured for this application.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'MANAGEMENT_KEY is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
+    today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', 'api-keys': 'API Keys', 'llm-providers': 'LLM Providers', 'mcp-connectors': 'MCP Connectors', settings: 'Settings',
+    subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Use the MANAGEMENT_KEY configured for this application.', ssoPrimary: 'Sign in with LNC SSO', breakGlassSummary: 'Break-glass management key sign-in', ssoHint: 'Sign in via Keycloak SSO, or expand the break-glass key form below.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'MANAGEMENT_KEY is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
     briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources with stored excerpts and clean extracted full text for distraction-free reading, full-text search and grounded AI analysis.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Collection & Content Archive',
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', loadFailed: 'Could not load more — try again', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
@@ -200,19 +198,43 @@ function storageSet(key: string, value: string) { try { localStorage.setItem(key
 const validLang = (value: string | null): value is Lang => value === 'vi' || value === 'en'
 const isLocal = () => location.hostname === '127.0.0.1' || location.hostname === 'localhost'
 /**
- * Pages the app can actually route to. Everything else would render an empty
- * placeholder, so the phone tab bar offers only real destinations and the rest stay
- * in the desktop sidebar until their phase lands.
+ * Pages the app can actually route to. Canonical admin tabs sit at the bottom
+ * of the sidebar in fixed order ending with `settings`.
  */
-const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'agents', 'alerts', 'settings']
-const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'agents', 'alerts', 'timeline', 'saved', 'settings']
-function currentPage(): Page { const hash = location.hash.slice(1) as Page; return pages.includes(hash) ? hash : 'today' }
+const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'agents', 'alerts', 'api-keys', 'llm-providers', 'mcp-connectors', 'settings']
+const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'agents', 'alerts', 'timeline', 'saved', 'api-keys', 'llm-providers', 'mcp-connectors', 'settings']
+const HASH_ALIASES: Record<string, Page> = {
+  keys: 'api-keys',
+  tokens: 'api-keys',
+  providers: 'llm-providers',
+  models: 'llm-providers',
+  connections: 'llm-providers',
+  ai: 'llm-providers',
+  connectors: 'mcp-connectors',
+  mcp: 'mcp-connectors',
+  integrations: 'mcp-connectors',
+  tools: 'mcp-connectors',
+  general: 'settings',
+  admin: 'settings',
+}
+function currentPage(): Page {
+  const raw = location.hash.slice(1).toLowerCase()
+  const aliased = HASH_ALIASES[raw]
+  if (aliased) {
+    history.replaceState(null, '', `#${aliased}`)
+    return aliased
+  }
+  return pages.includes(raw as Page) ? (raw as Page) : 'today'
+}
 
 function App() {
   const storedLang = storageGet('lnc-newsman-language')
   const storedMode = storageGet('lnc-newsman-reader-mode')
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [managementConfigured, setManagementConfigured] = useState(false)
+  const [oidcEnabled, setOidcEnabled] = useState(false)
+  const [authMethod, setAuthMethod] = useState<string>('management_key')
+  const [username, setUsername] = useState<string>('admin')
   const [lang, setLangState] = useState<Lang>(validLang(storedLang) ? storedLang : 'vi')
   const [mode, setModeState] = useState<ReaderMode>(isMode(storedMode) ? storedMode : 'paper')
   const [page, setPage] = useState<Page>(currentPage)
@@ -242,8 +264,14 @@ function App() {
     return () => vv.removeEventListener('resize', sync)
   }, [])
   useEffect(() => {
-    api<{ authenticated: boolean; management_configured: boolean }>('/api/auth/status')
-      .then((status) => { setAuthenticated(status.authenticated); setManagementConfigured(status.management_configured) })
+    api<{ authenticated: boolean; management_configured: boolean; oidc_enabled?: boolean; auth_method?: string; username?: string }>('/api/auth/status')
+      .then((status) => {
+        setAuthenticated(status.authenticated)
+        setManagementConfigured(status.management_configured)
+        setOidcEnabled(Boolean(status.oidc_enabled))
+        if (status.auth_method) setAuthMethod(status.auth_method)
+        if (status.username) setUsername(status.username)
+      })
       .catch(() => { setAuthenticated(false); setError('offline') })
     const expired = () => { setDashboard(null); setAuthenticated(false); history.replaceState(null, '', '/login.html') }
     const hashChanged = () => setPage(currentPage())
@@ -268,14 +296,14 @@ function App() {
     // other dependencies are stable callbacks.
   }, [authenticated, regions, activeRegion])
   if (authenticated === null) return <div className="loading-screen"><img src="/favicon.svg" alt="" /><span>Loading Newsman…</span></div>
-  if (!authenticated) return <Login lang={lang} setLang={setLang} mode={mode} configured={managementConfigured} offline={error === 'offline'} />
-  return <Shell lang={lang} setLang={setLang} mode={mode} setMode={setMode} page={page} setPage={setPage} dashboard={dashboard} regions={regions} region={activeRegion} setRegion={setRegion} onRegionsChanged={refreshRegions} error={error} setError={setError} onCatalogChanged={() => refreshDashboard(activeRegion)} onSignOut={() => { setDashboard(null); setAuthenticated(false); history.replaceState(null, '', '/login.html') }} />
+  if (!authenticated) return <Login lang={lang} setLang={setLang} oidcEnabled={oidcEnabled} configured={managementConfigured} offline={error === 'offline'} />
+  return <Shell lang={lang} setLang={setLang} mode={mode} setMode={setMode} page={page} setPage={setPage} dashboard={dashboard} regions={regions} region={activeRegion} setRegion={setRegion} onRegionsChanged={refreshRegions} error={error} setError={setError} onCatalogChanged={() => refreshDashboard(activeRegion)} authMethod={authMethod} username={username} onSignOut={() => { setDashboard(null); setAuthenticated(false); history.replaceState(null, '', '/login.html') }} />
 }
 
-function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; configured: boolean; offline: boolean }) {
+function Login({ lang, setLang, oidcEnabled, configured, offline }: { lang: Lang; setLang: (v: Lang) => void; oidcEnabled: boolean; configured: boolean; offline: boolean }) {
   const t = copy[lang]
   const [key, setKey] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
   const [pending, setPending] = useState(false)
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setPending(true); setError('')
@@ -285,15 +313,20 @@ function Login({ lang, setLang, mode, configured, offline }: { lang: Lang; setLa
   }
   return <main className="login-page"><section className="login-card">
     <div className="login-brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>{t.subtitle}</span></div></div>
-    <div className="login-copy"><p className="eyebrow">{t.signIn}</p><h1>{t.welcome}</h1><p>{offline ? t.loadError : configured ? t.keyHint : t.missing}</p></div>
-    <form onSubmit={submit} className="login-form"><label htmlFor="management-key">{t.key}</label><input id="management-key" type="password" autoComplete="current-password" autoFocus value={key} onChange={(e) => setKey(e.target.value)} placeholder="••••••••••••" /><button className="btn primary" disabled={!key || pending || !configured}>{pending ? t.checking : t.enter}</button>{error && <div className="form-error" role="alert">{error}</div>}</form>
+    <div className="login-copy"><p className="eyebrow">{t.signIn}</p><h1>{t.welcome}</h1><p>{offline ? t.loadError : oidcEnabled ? t.ssoHint : configured ? t.keyHint : t.missing}</p></div>
+    {oidcEnabled && <a className="btn primary login-sso-primary" href="/api/auth/oidc/login">{t.ssoPrimary}</a>}
+    <details className="login-breakglass" open={!oidcEnabled}>
+      <summary>{t.breakGlassSummary}</summary>
+      <form onSubmit={submit} className="login-form"><label htmlFor="management-key">{t.key}</label><input id="management-key" type="password" autoComplete="current-password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="••••••••••••" /><button className="btn primary" disabled={!key || pending || !configured}>{pending ? t.checking : t.enter}</button></form>
+    </details>
+    {error && <div className="form-error" role="alert">{error}</div>}
     <div className="login-footer"><span>Private internal workspace</span><button type="button" className="language-link" onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang === 'vi' ? 'English' : 'Tiếng Việt'}</button></div>
   </section></main>
 }
 
-const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', agents: '✦', alerts: '◈', timeline: '⌁', saved: '♡', settings: '⚙' }
+const icons: Record<Page, string> = { today: '⌂', topics: '◌', regions: '⌖', market: '◭', stories: '▤', reports: '◫', agents: '✦', alerts: '◈', timeline: '⌁', saved: '♡', 'api-keys': '⚷', 'llm-providers': '⬡', 'mcp-connectors': '⊶', settings: '⚙' }
 
-function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions, region, setRegion, onRegionsChanged, error, setError, onCatalogChanged, onSignOut }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; setMode: (v: ReaderMode) => void; page: Page; setPage: (v: Page) => void; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; setRegion: (v: string) => void; onRegionsChanged: () => void; error: string; setError: (v: string) => void; onCatalogChanged: () => void; onSignOut: () => void }) {
+function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions, region, setRegion, onRegionsChanged, error, setError, onCatalogChanged, authMethod, username, onSignOut }: { lang: Lang; setLang: (v: Lang) => void; mode: ReaderMode; setMode: (v: ReaderMode) => void; page: Page; setPage: (v: Page) => void; dashboard: Dashboard | null; regions: RegionsPayload | null; region: string; setRegion: (v: string) => void; onRegionsChanged: () => void; error: string; setError: (v: string) => void; onCatalogChanged: () => void; authMethod: string; username: string; onSignOut: () => void }) {
   const t = copy[lang]
   // The browse panel narrows the reader: a topic from the tree, or one enabled source.
   // Both are plain filters on /api/articles, so nothing here needs new server state.
@@ -311,9 +344,17 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
       <BrowseSidebar t={t} lang={lang} dashboard={dashboard} regions={regions} region={region} filter={filter} query={railFilter} setQuery={setRailFilter} onPick={openFilter} />
       <div className="side-divider" />
       <div className="sidebar-footer">
-        <div className="version">v{__APP_VERSION__} <span>· Reader + MCP</span></div>
-        <button className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}><span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>{themeName(mode, lang)}</button>
-        <button className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button>
+        <div className="footer-row-identity">
+          <div className="footer-user-badge"><strong>{username || 'admin'}</strong><span className="tier-badge">{authMethod === 'oidc' ? 'SSO' : 'Key'}</span></div>
+          <div className="version">v{__APP_VERSION__}</div>
+        </div>
+        <div className="footer-row-controls">
+          <button type="button" className="footer-action" onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')} aria-label={t.changeLanguage}>{lang.toUpperCase()}</button>
+          <button type="button" className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}><span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>{themeName(mode, lang)}</button>
+        </div>
+        <div className="footer-row-signout">
+          <button type="button" className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button>
+        </div>
       </div>
     </aside>
     <main className="page-shell">
@@ -335,7 +376,10 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} onOpenAgents={() => setRoute('agents')} />}
         {page === 'agents' && <AgentsWorkspace lang={lang} onOpenArticle={setReadingId} onOpenRegions={() => setRoute('regions')} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
-        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} onOpenAgentsModels={() => { try { sessionStorage.setItem('lnc-newsman-agents-surface', 'settings') } catch { /* ignore */ } setRoute('agents') }} regions={regions} dashboard={dashboard} />}
+        {page === 'api-keys' && <ApiKeysPanel lang={lang} api={api} />}
+        {page === 'llm-providers' && <ProvidersPanel lang={lang} api={api} />}
+        {page === 'mcp-connectors' && <McpConnectorsPanel lang={lang} api={api} />}
+        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} regions={regions} dashboard={dashboard} />}
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>
@@ -704,7 +748,7 @@ function AlertRulesManager({ t, lang }: { t: Copy; lang: Lang }) {
   </section>
 }
 function EmptyPage({ t }: { t: Copy }) { return <div className="content-stack"><div className="empty-card"><div className="empty-art">✦</div><h3>{t.emptyTitle}</h3><p>{t.emptySub}</p></div></div> }
-function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onRegionsChanged, onOpenAgentsModels, regions, dashboard }: { t: Copy; lang: Lang; mode: ReaderMode; setMode: (v: ReaderMode) => void; setLang: (v: Lang) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; onOpenAgentsModels: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
+function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onRegionsChanged, regions, dashboard }: { t: Copy; lang: Lang; mode: ReaderMode; setMode: (v: ReaderMode) => void; setLang: (v: Lang) => void; onCatalogChanged: () => void; onRegionsChanged: () => void; regions: RegionsPayload | null; dashboard: Dashboard | null }) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [error, setError] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -788,12 +832,12 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
         </div>
       </div>
       <div className="btn-row">
-        <button type="button" className="btn secondary" onClick={onOpenAgentsModels}>
-          ✦ {t.settingsAgentsCardBtn}
-        </button>
+        <a className="btn secondary" href="#llm-providers">⬡ {t['llm-providers']}</a>
+        <a className="btn secondary" href="#mcp-connectors">⊶ {t['mcp-connectors']}</a>
+        <a className="btn secondary" href="#api-keys">⚷ {t['api-keys']}</a>
       </div>
     </section>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><HubManager t={t} /><ConnectorHubPanel t={t} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -874,59 +918,6 @@ function Market({ t, lang, region }: { t: Copy; lang: Lang; region: string }) {
       {!points ? <p className="muted">{t.observing}…</p> : points.length === 0 ? <p className="muted">{t.noSeries}</p> : <dl className="stat-pairs"><div><dt>{t.latestValue}</dt><dd>{latest?.value}</dd></div><div><dt>{t.observedAt}</dt><dd>{latest ? formatPoint(lang, latest.observed_at) : '—'}</dd></div><div><dt>{t.asOf}</dt><dd>{latest ? formatPoint(lang, latest.as_of) : '—'}</dd></div><div><dt>{t.revision(latest?.revision ?? 1)}</dt><dd>{t.seriesPoints(points.length)}</dd></div></dl>}
     </section>}
   </div>
-}
-
-function HubManager({ t }: { t: Copy }) {
-  const [status, setStatus] = useState<ProviderStatus | null>(null)
-  const [key, setKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [check, setCheck] = useState<{ ok: boolean; text: string } | null>(null)
-  const [notice, setNotice] = useState('')
-  const [error, setError] = useState(false)
-  const load = () => api<ProviderStatus>('/api/admin/provider').then(setStatus).catch(() => setStatus(null))
-  useEffect(() => { void load() }, [])
-  const saveKey = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError(false); setNotice('')
-    try {
-      await api(`/api/admin/secrets/${encodeURIComponent(t.hubKeyName)}`, { method: 'PUT', body: JSON.stringify({ value: key }) })
-      // The field is cleared at once; nothing reads the value back.
-      setKey(''); setNotice(t.hubSaved); await load()
-    } catch { setError(true) } finally { setBusy(false) }
-  }
-  const runCheck = async () => {
-    setBusy(true); setError(false); setCheck(null)
-    try {
-      const result = await api<{ models: string[] }>('/api/admin/provider/check', { method: 'POST' })
-      setCheck({ ok: true, text: t.hubCheckOk(result.models.length) })
-    } catch {
-      setCheck({ ok: false, text: t.hubCheckFail })
-    } finally { setBusy(false); await load() }
-  }
-  return <section className="secrets-admin" aria-labelledby="hub-title">
-    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="hub-title">{t.hubTitle}</h2><p>{t.hubSub}</p></div>
-      {status && <span className={status.configured ? 'catalog-status' : 'catalog-status inactive'}>{status.configured ? t.hubHasKey : t.hubNotConfigured}</span>}</div>
-    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
-    {notice && <div className="save-state" role="status">✓ {notice}</div>}
-    {check && <div className={check.ok ? 'catalog-notice' : 'form-error'} role="status">{check.text}</div>}
-    {status && <dl className="stat-pairs">
-      <div><dt>{t.hubHost}</dt><dd>{status.base_host ?? '—'}</dd></div>
-      <div><dt>{t.hubAllowed}</dt><dd>{status.allowed_hosts.join(', ') || '—'}</dd></div>
-      <div><dt>{t.hubClassify}</dt><dd>{status.models[0]}</dd></div>
-      <div><dt>{t.hubSummarise}</dt><dd>{status.models[1]}</dd></div>
-      <div><dt>{t.hubAnalyse}</dt><dd>{status.models[2]}</dd></div>
-      <div><dt>{t.hubAgent}</dt><dd>{status.agent}</dd></div>
-      <div><dt>{t.hubBudget}</dt><dd>{status.tokens_used_today}/{status.daily_budget}</dd></div>
-      <div><dt>{t.hubSecret}</dt><dd>{status.has_secret ? t.hubHasKey : t.hubNoKey}</dd></div>
-    </dl>}
-    <form className="catalog-form" onSubmit={saveKey} autoComplete="off">
-      <h3>{t.hubKeyName}</h3>
-      <label className="field"><span>{t.hubSecret}</span><input required type="password" autoComplete="new-password" maxLength={8192} value={key} onChange={(e) => setKey(e.target.value)} /><small>{t.hubKeyHint}</small></label>
-      <div className="btn-row catalog-form-actions">
-        <button className="btn primary" disabled={busy || !key}>{busy ? t.saving : t.saveSecret}</button>
-        <button type="button" className="btn secondary" disabled={busy || !status?.configured} onClick={() => void runCheck()}>{busy ? t.hubChecking : t.hubCheck}</button>
-      </div>
-    </form>
-  </section>
 }
 
 function TelegramPanel({ t }: { t: Copy }) {
@@ -1078,67 +1069,6 @@ function LegalSourcesPanel({ t, lang }: { t: Copy; lang: Lang }) {
 /// is set — never the value itself, because both of the important ones are secrets.
 /// Saving here only touches the audience and the scope ceiling; the two secrets are
 /// written through the provider-keys panel like every other sealed value.
-function ConnectorHubPanel({ t }: { t: Copy }) {
-  const [card, setCard] = useState<ConnectorCard | null>(null)
-  const [writes, setWrites] = useState<AgentWrite[] | null>(null)
-  const [analyses, setAnalyses] = useState<AgentAnalysis[] | null>(null)
-  const [audience, setAudience] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(false)
-  const [notice, setNotice] = useState('')
-  const load = () => api<ConnectorCard>('/api/admin/connector').then((next) => { setCard(next); setAudience(next.audience) }).catch(() => setCard(null))
-  const loadAgentWork = () => {
-    api<{ data: AgentWrite[] }>('/api/admin/connector/writes').then((p) => setWrites(p.data)).catch(() => setWrites([]))
-    api<{ data: AgentAnalysis[] }>('/api/admin/connector/analyses').then((p) => setAnalyses(p.data)).catch(() => setAnalyses([]))
-  }
-  useEffect(() => { void load(); loadAgentWork() }, [])
-  useEffect(() => { void load() }, [])
-  const save = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError(false); setNotice('')
-    try {
-      await api('/api/admin/connector', { method: 'PATCH', body: JSON.stringify({ audience: audience.trim() }) })
-      setNotice(t.mcpSaved); await load()
-    } catch { setError(true) } finally { setBusy(false) }
-  }
-  // "set" must come from the source, not be printed unconditionally: an unset value
-  // read as "đã đặt · chưa đặt" and told the owner nothing.
-  const source = (value: ConnectorSource) => value === 'unset' ? t.mcpUnset : `${t.mcpSet} · ${value === 'env' ? t.mcpFromEnv : t.mcpFromAdmin}`
-  return <section className="secrets-admin" aria-labelledby="mcp-title">
-    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="mcp-title">{t.mcpTitle}</h2><p>{t.mcpSub}</p></div>
-      {card && <span className={card.enabled ? 'catalog-status' : 'catalog-status inactive'}>{card.enabled ? t.mcpReady : t.mcpNotReady}</span>}</div>
-    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
-    {notice && <div className="save-state" role="status">✓ {notice}</div>}
-    {card && !card.secret_store_open && <div className="form-error" role="alert">{t.mcpStoreClosed}</div>}
-    {card && <dl className="stat-pairs">
-      <div><dt>{t.mcpBearer}</dt><dd>{source(card.bearer)}</dd></div>
-      <div><dt>{t.mcpSecret}</dt><dd>{source(card.delegation_secret)}</dd></div>
-      <div><dt>{t.mcpScopes}</dt><dd>{card.max_scopes.join(', ') || '—'}</dd></div>
-    </dl>}
-    <form className="catalog-form" onSubmit={save} autoComplete="off">
-      <label className="field"><span>{t.mcpAudience}</span><input value={audience} maxLength={64} onChange={(e) => setAudience(e.target.value)} /><small>{t.mcpHint}</small></label>
-      <div className="btn-row catalog-form-actions"><button className="btn primary" disabled={busy}>{busy ? t.saving : t.mcpSave}</button></div>
-    </form>
-    <h3>{t.mcpAnalyses}</h3>
-    {!analyses ? <p className="muted">{t.loading}</p> : analyses.length === 0 ? <p className="muted">{t.mcpNoAnalyses}</p> : <div className="catalog-list">{analyses.map((row) => <article className="catalog-entry" key={row.id}>
-      <div className="catalog-entry-main"><strong>{row.title}</strong>
-        <span>{row.kind}{row.topic_slug ? ` · ${row.topic_slug}` : ''}{row.region_code ? ` · ${row.region_code}` : ''} · {row.source_article_ids.length} {t.mcpSources}</span>
-        {/* The author label is the whole point: the owner must be able to tell an agent's
-            output from their own at a glance. */}
-        <span className="catalog-status">{row.author ?? t.mcpOwner}</span>
-      </div>
-    </article>)}</div>}
-    <h3>{t.mcpWrites}</h3>
-    <p className="muted">{t.mcpWritesSub}</p>
-    {!writes ? <p className="muted">{t.loading}</p> : writes.length === 0 ? <p className="muted">{t.mcpNoWrites}</p> : <div className="catalog-list">{writes.map((row) => <article className="catalog-entry" key={row.id}>
-      <div className="catalog-entry-main"><strong>{row.tool}</strong>
-        <span>{row.record_kind}{row.record_id !== null ? ` #${row.record_id}` : ''}{row.note ? ` · ${row.note}` : ''}</span>
-        <span className="catalog-status">{row.client_id ?? t.mcpOwner}</span>
-        <span className="catalog-health">{new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(row.at * 1000))}</span>
-      </div>
-    </article>)}</div>}
-  </section>
-}
-
 function ConnectorsPanel({ t }: { t: Copy }) {
   const [items, setItems] = useState<ConnectorStatus[] | null>(null)
   const [autoEnabled, setAutoEnabled] = useState(false)

@@ -59,13 +59,14 @@ impl Config {
             .map(ToOwned::to_owned)
             .collect();
         let secure_cookie = match env::var("COOKIE_SECURE")
-            .unwrap_or_else(|_| "true".into())
+            .unwrap_or_else(|_| "auto".into())
+            .trim()
             .to_ascii_lowercase()
             .as_str()
         {
             "true" | "1" => true,
-            "false" | "0" => false,
-            _ => anyhow::bail!("COOKIE_SECURE must be true or false"),
+            "false" | "0" | "auto" | "" => false,
+            _ => anyhow::bail!("COOKIE_SECURE must be auto, true, or false"),
         };
         Ok(Self {
             data_dir,

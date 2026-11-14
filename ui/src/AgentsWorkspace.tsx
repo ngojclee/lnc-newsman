@@ -38,7 +38,7 @@ export interface AgentsWorkspaceProps {
   onOpenRegions?: () => void
 }
 
-type NewsmanSettingsTab = 'connections' | 'models' | 'mcp' | 'memory' | 'general' | 'telegram'
+type NewsmanSettingsTab = 'connections' | 'mcp' | 'memory' | 'general' | 'telegram'
 
 const DISCUSSION_MODES: readonly {
   id: DiscussionMode
@@ -134,7 +134,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     manifest,
     modelCatalog,
     mcpNamespaces,
-    customProviders,
     memoryGraph,
     agents,
     models,
@@ -158,12 +157,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     telegramRoutes,
     saveBridgeConfig,
     probeConnections,
-    fetchModelCatalog,
-    toggleCatalogModels,
-    saveModelRoles,
     saveMcpNamespaces,
-    createCustomProvider,
-    deleteCustomProvider,
     saveAgent,
     deleteAgent,
     pullAgentFromHub,
@@ -209,50 +203,15 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     [memoryGraph],
   )
 
-  const [initialRequestedSurface] = useState<string | null>(() => {
-    try {
-      const requested = sessionStorage.getItem('lnc-newsman-agents-surface')
-      if (requested) sessionStorage.removeItem('lnc-newsman-agents-surface')
-      return requested
-    } catch {
-      return null
-    }
-  })
-
-  const [surface, setSurface] = useState<'chat' | 'cowriter' | 'studio' | 'memory' | 'settings'>(() => {
-    if (
-      initialRequestedSurface === 'models' ||
-      initialRequestedSurface === 'settings' ||
-      initialRequestedSurface === 'connections'
-    ) {
-      return 'settings'
-    }
-    if (
-      initialRequestedSurface === 'agents' ||
-      initialRequestedSurface === 'workspaces' ||
-      initialRequestedSurface === 'skills' ||
-      initialRequestedSurface === 'studio'
-    ) {
-      return 'studio'
-    }
-    if (initialRequestedSurface === 'cowriter') return 'cowriter'
-    if (initialRequestedSurface === 'memory') return 'memory'
-    return 'chat'
-  })
-  const [studioSubTab, setStudioSubTab] = useState<'agents' | 'workspaces' | 'skills'>(() => {
-    if (initialRequestedSurface === 'workspaces') return 'workspaces'
-    if (initialRequestedSurface === 'skills') return 'skills'
-    return 'agents'
-  })
+  const [surface, setSurface] = useState<'chat' | 'cowriter' | 'studio' | 'memory' | 'settings'>('chat')
+  const [studioSubTab, setStudioSubTab] = useState<'agents' | 'workspaces' | 'skills'>('agents')
   const caps = manifest?.capabilities ?? manifest?.features
   const visibleSettingsTabs = useMemo<NewsmanSettingsTab[]>(() => {
-    const tabs: NewsmanSettingsTab[] = ['connections', 'models', 'mcp', 'memory', 'general']
+    const tabs: NewsmanSettingsTab[] = ['connections', 'mcp', 'memory', 'general']
     if (caps?.telegram !== false) tabs.push('telegram')
     return tabs
   }, [caps?.telegram])
-  const [settingsTab, setSettingsTab] = useState<NewsmanSettingsTab>(() =>
-    initialRequestedSurface === 'models' ? 'models' : 'connections',
-  )
+  const [settingsTab, setSettingsTab] = useState<NewsmanSettingsTab>('connections')
   useEffect(() => {
     if (!visibleSettingsTabs.includes(settingsTab)) {
       setSettingsTab('connections')
@@ -330,11 +289,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [memEditingId, setMemEditingId] = useState<string | null>(null)
   const [memEditContent, setMemEditContent] = useState('')
 
-  // Settings / v2 Custom Provider & Roles state
-  const [provName, setProvName] = useState('')
-  const [provBaseUrl, setProvBaseUrl] = useState('')
-  const [provApiKey, setProvApiKey] = useState('')
-  const [provBusy, setProvBusy] = useState(false)
+  // Settings / MCP Namespace state
   const [mcpDraft, setMcpDraft] = useState<Record<string, boolean>>({})
 
   const openAccessModalFor = (kind: AccessRequestTargetKind, slug: string, label?: string) => {
@@ -387,11 +342,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   // Settings Surface state
   const [connForm, setConnForm] = useState({
     astraea_url: bridgeStatus.astraea_url ?? '',
-    hub_url: bridgeStatus.hub_url ?? '',
-    llm_base_url: bridgeStatus.llm_base_url ?? '',
-    default_model: bridgeStatus.default_model ?? 'gpt-5.4-mini',
-    default_smart_model: bridgeStatus.default_smart_model ?? bridgeStatus.default_model ?? 'gpt-5.4-mini',
-    fast_background_model: bridgeStatus.fast_background_model ?? '',
     interface_language: (bridgeStatus.interface_language ?? 'en') as 'en' | 'vi',
     model_output_language: (bridgeStatus.model_output_language ?? 'vi') as 'vi' | 'en' | 'auto',
     send_key_mode: (bridgeStatus.send_key_mode ?? 'enter') as 'enter' | 'ctrl_enter',
@@ -400,8 +350,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     default_temperature: bridgeStatus.default_temperature ?? 0.4,
     allowed_hosts: (bridgeStatus.allowed_hosts ?? []).join(', '),
     astraea_token: '',
-    hub_token: '',
-    llm_api_key: '',
     thread_title: bridgeStatus.task_models?.thread_title ?? '',
     round_summary: bridgeStatus.task_models?.round_summary ?? '',
     companion_brief: bridgeStatus.task_models?.companion_brief ?? '',
@@ -443,12 +391,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     setConnForm((prev) => ({
       ...prev,
       astraea_url: bridgeStatus.astraea_url ?? prev.astraea_url,
-      hub_url: bridgeStatus.hub_url ?? prev.hub_url,
-      llm_base_url: bridgeStatus.llm_base_url ?? prev.llm_base_url,
-      default_model: bridgeStatus.default_model ?? prev.default_model,
-      default_smart_model:
-        bridgeStatus.default_smart_model ?? bridgeStatus.default_model ?? prev.default_smart_model,
-      fast_background_model: bridgeStatus.fast_background_model ?? '',
       interface_language: (bridgeStatus.interface_language ?? prev.interface_language) as 'en' | 'vi',
       model_output_language: (bridgeStatus.model_output_language ??
         prev.model_output_language) as 'vi' | 'en' | 'auto',
@@ -940,10 +882,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
       label: uiLang === 'vi' ? 'Kết nối Hub' : 'Connections',
       icon: '🔌',
     },
-    models: {
-      label: uiLang === 'vi' ? 'Mô hình ngôn ngữ' : 'Language Models',
-      icon: '🧠',
-    },
     mcp: {
       label: uiLang === 'vi' ? 'Công cụ & MCP' : 'Tools & MCP',
       icon: '🧰',
@@ -971,12 +909,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
       .filter(Boolean)
     return void saveBridgeConfig({
       astraea_url: connForm.astraea_url.trim(),
-      hub_url: connForm.hub_url.trim(),
-      llm_base_url: connForm.llm_base_url.trim(),
-      default_model: connForm.default_model.trim() || connForm.default_smart_model.trim() || 'gpt-5.4-mini',
-      default_smart_model:
-        connForm.default_smart_model.trim() || connForm.default_model.trim() || 'gpt-5.4-mini',
-      fast_background_model: connForm.fast_background_model.trim(),
       interface_language: connForm.interface_language,
       model_output_language: connForm.model_output_language,
       send_key_mode: connForm.send_key_mode,
@@ -990,16 +922,12 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
         companion_brief: connForm.companion_brief || null,
         tax_doc_digest: connForm.tax_doc_digest || null,
       },
-      ...(connForm.hub_token ? { hub_token: connForm.hub_token } : {}),
       ...(connForm.astraea_token ? { astraea_token: connForm.astraea_token } : {}),
-      ...(connForm.llm_api_key ? { llm_api_key: connForm.llm_api_key } : {}),
     })
       .then(() => {
         setConnForm((p) => ({
           ...p,
-          hub_token: '',
           astraea_token: '',
-          llm_api_key: '',
         }))
         setConnNotice(successMsg)
       })
@@ -2384,30 +2312,24 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         <div>
                           <h3>⚡ LNC Agents Hub</h3>
                           <p className="muted-sub" style={{ marginTop: 4 }}>
-                            {c.connHubFirstSub}
+                            {uiLang === 'vi'
+                              ? 'Nhà cung cấp AI (LNC Agents Hub & OpenAI tương thích), API key và vai trò Smart/Fast Model được cấu hình thống nhất trong Nhà cung cấp AI.'
+                              : 'LNC Agents Hub credentials, custom LLM providers, and Smart/Fast model roles are managed centrally under LLM Providers.'}
                           </p>
                         </div>
                         <span className="tier-badge">{statusLabel}</span>
                       </div>
 
-                      <div className="catalog-form-row">
-                        <label className="field">
-                          <span>{c.bridgeHubUrl}</span>
-                          <input
-                            value={connForm.hub_url}
-                            placeholder="https://agents-hub.lengoc.me"
-                            onChange={(e) => setConnForm((p) => ({ ...p, hub_url: e.target.value }))}
-                          />
-                        </label>
-                        <label className="field">
-                          <span>{c.bridgeHubToken}</span>
-                          <input
-                            type="password"
-                            value={connForm.hub_token}
-                            placeholder={bridgeStatus.has_hub_token ? '••••••••' : ''}
-                            onChange={(e) => setConnForm((p) => ({ ...p, hub_token: e.target.value }))}
-                          />
-                        </label>
+                      <div className="chip-row" style={{ margin: '10px 0' }}>
+                        <span className="chip">
+                          Hub: <strong>{bridgeStatus.hub_url || '—'}</strong>
+                        </span>
+                        <span className="chip">
+                          Smart: <strong>{roleSummary.smartModel}</strong>
+                        </span>
+                        <span className="chip">
+                          Fast: <strong>{roleSummary.fastModel}</strong>
+                        </span>
                       </div>
 
                       <div className="ak-unlock-grid">
@@ -2437,16 +2359,15 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                       </div>
 
                       <div className="probe-bar">
+                        <a className="btn primary btn-sm" href="#llm-providers">
+                          {uiLang === 'vi' ? 'Cấu hình Nhà cung cấp AI →' : 'Configure LLM Providers →'}
+                        </a>
+                        <a className="btn secondary btn-sm" href="#mcp-connectors">
+                          {uiLang === 'vi' ? 'Trình kết nối MCP →' : 'MCP Connectors →'}
+                        </a>
                         <button
                           type="button"
-                          className="btn primary"
-                          onClick={() => saveBridgeConfigPayload(c.bridgeTokenSaved)}
-                        >
-                          {c.taskModelsSaveBtn}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn secondary"
+                          className="btn secondary btn-sm"
                           disabled={probingConnections}
                           onClick={() => void probeConnections()}
                         >
@@ -2454,7 +2375,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         </button>
                         <button
                           type="button"
-                          className="btn secondary"
+                          className="btn secondary btn-sm"
                           disabled={syncingSkills || probingConnections}
                           onClick={() => void Promise.all([syncSkills(), probeConnections()])}
                         >
@@ -2559,15 +2480,17 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
                     <details
                       className="studio-scope-box"
-                      open={Boolean(
-                        connForm.astraea_url || connForm.llm_base_url || customProviders.length > 0,
-                      )}
+                      open={Boolean(connForm.astraea_url)}
                     >
                       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                        {c.connDirectOverridesTitle}
+                        {uiLang === 'vi'
+                          ? 'Ghi đè Astraea Relay & Host Allowlist'
+                          : 'Astraea Relay Overrides & Allowed Hosts'}
                       </summary>
                       <p className="muted-sub" style={{ marginTop: 6 }}>
-                        {c.connDirectOverridesHint}
+                        {uiLang === 'vi'
+                          ? 'Chỉ dùng khi cần trỏ riêng Astraea WS/HTTP Relay hoặc thêm host nội bộ vào allowlist.'
+                          : 'Only needed to override the Astraea WS/HTTP relay target or allow additional internal hosts.'}
                       </p>
 
                       <div className="catalog-form-row">
@@ -2593,29 +2516,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           />
                         </label>
                       </div>
-                      <div className="catalog-form-row">
-                        <label className="field">
-                          <span>{c.bridgeLlmBaseUrl}</span>
-                          <input
-                            value={connForm.llm_base_url}
-                            placeholder=""
-                            onChange={(e) =>
-                              setConnForm((p) => ({ ...p, llm_base_url: e.target.value }))
-                            }
-                          />
-                        </label>
-                        <label className="field">
-                          <span>{c.bridgeLlmApiKey}</span>
-                          <input
-                            type="password"
-                            value={connForm.llm_api_key}
-                            placeholder={bridgeStatus.has_llm_api_key ? '••••••••' : ''}
-                            onChange={(e) =>
-                              setConnForm((p) => ({ ...p, llm_api_key: e.target.value }))
-                            }
-                          />
-                        </label>
-                      </div>
                       <label className="field">
                         <span>{c.bridgeAllowedHosts}</span>
                         <input
@@ -2635,219 +2535,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           {c.taskModelsSaveBtn}
                         </button>
                       </div>
-
-                      <div className="studio-field-group" style={{ marginTop: 14 }}>
-                        <h4>
-                          {uiLang === 'vi'
-                            ? 'Nhà cung cấp OpenAI tương thích'
-                            : 'Custom OpenAI-Compatible Providers'}
-                        </h4>
-                        {customProviders.length > 0 && (
-                          <div className="chat-sched-table" style={{ marginBottom: 10 }}>
-                            {customProviders.map((prov) => (
-                              <div key={prov.id} className="chat-sched-row">
-                                <div className="chat-sched-main">
-                                  <b>{prov.name}</b>
-                                  <small className="muted">
-                                    {prov.base_url} · {prov.has_secret ? '••••••••' : 'no key'}
-                                  </small>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="icon-del"
-                                  aria-label={`Delete ${prov.name}`}
-                                  onClick={() => void deleteCustomProvider(prov.id)}
-                                >
-                                  🗑
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <div className="catalog-form-row">
-                          <label className="field">
-                            <span>Provider Name</span>
-                            <input
-                              value={provName}
-                              placeholder="Ollama / OpenRouter / vLLM"
-                              onChange={(e) => setProvName(e.target.value)}
-                            />
-                          </label>
-                          <label className="field">
-                            <span>Base URL</span>
-                            <input
-                              value={provBaseUrl}
-                              placeholder="https://api.example.com/v1"
-                              onChange={(e) => setProvBaseUrl(e.target.value)}
-                            />
-                          </label>
-                          <label className="field">
-                            <span>API Key (write-only)</span>
-                            <input
-                              type="password"
-                              value={provApiKey}
-                              placeholder="sk-..."
-                              onChange={(e) => setProvApiKey(e.target.value)}
-                            />
-                          </label>
-                        </div>
-                        <div className="btn-row">
-                          <button
-                            type="button"
-                            className="btn secondary btn-sm"
-                            disabled={provBusy || !provName.trim() || !provBaseUrl.trim()}
-                            onClick={() => {
-                              setProvBusy(true)
-                              setConnError('')
-                              void createCustomProvider({
-                                name: provName.trim(),
-                                base_url: provBaseUrl.trim(),
-                                api_key: provApiKey.trim() || undefined,
-                              })
-                                .then(() => {
-                                  setProvName('')
-                                  setProvBaseUrl('')
-                                  setProvApiKey('')
-                                  setConnNotice('Custom provider saved.')
-                                })
-                                .catch((err) =>
-                                  setConnError(err instanceof Error ? err.message : 'Save failed'),
-                                )
-                                .finally(() => setProvBusy(false))
-                            }}
-                          >
-                            + {c.v2AddProviderBtn}
-                          </button>
-                        </div>
-                      </div>
                     </details>
-                  </>
-                )}
-
-                {settingsTab === 'models' && (
-                  <>
-                    <section className="studio-section">
-                      <div className="ak-toolbar">
-                        <div>
-                          <h4>
-                            {uiLang === 'vi'
-                              ? '2 Vai trò Mô hình Toàn cục'
-                              : '2 Global Model Roles'}
-                          </h4>
-                          <small className="muted-sub">
-                            Smart: <code>{roleSummary.smartModel}</code> · Fast:{' '}
-                            <code>{roleSummary.fastModel}</code>
-                          </small>
-                        </div>
-                        <button
-                          type="button"
-                          className="btn secondary btn-sm"
-                          onClick={() => {
-                            setConnError('')
-                            void fetchModelCatalog()
-                              .then((res) =>
-                                setConnNotice(
-                                  `Fetched ${res.fetched_count ?? 0} models${res.auto_enabled ? ' (auto-enabled)' : ''}.`,
-                                ),
-                              )
-                              .catch((err) =>
-                                setConnError(
-                                  err instanceof Error ? err.message : 'Fetch catalog failed',
-                                ),
-                              )
-                          }}
-                        >
-                          ⇣ {c.v2FetchCatalogBtn}
-                        </button>
-                      </div>
-
-                      <div className="catalog-form-row" style={{ marginTop: 10 }}>
-                        <div className="field">
-                          <span>{c.v2SmartModelLabel}</span>
-                          <AgentSelect
-                            ariaLabel={c.v2SmartModelLabel}
-                            value={connForm.default_smart_model}
-                            onChange={(v) =>
-                              setConnForm((p) => ({
-                                ...p,
-                                default_smart_model: v,
-                                default_model: v,
-                              }))
-                            }
-                            options={selectableModels.map((m) => ({ value: m, label: m }))}
-                          />
-                        </div>
-                        <div className="field">
-                          <span>{c.v2FastModelLabel}</span>
-                          <AgentSelect
-                            ariaLabel={c.v2FastModelLabel}
-                            value={connForm.fast_background_model}
-                            onChange={(v) =>
-                              setConnForm((p) => ({ ...p, fast_background_model: v }))
-                            }
-                            options={[
-                              { value: '', label: c.v2FastFollowSmart },
-                              ...selectableModels.map((m) => ({ value: m, label: m })),
-                            ]}
-                          />
-                        </div>
-                      </div>
-                      <div className="btn-row" style={{ marginTop: 10 }}>
-                        <button
-                          type="button"
-                          className="btn primary btn-sm"
-                          onClick={() => {
-                            setConnError('')
-                            void saveModelRoles({
-                              default_smart_model: connForm.default_smart_model,
-                              fast_background_model: connForm.fast_background_model,
-                            })
-                              .then(() => setConnNotice('Model roles saved.'))
-                              .catch((err) =>
-                                setConnError(err instanceof Error ? err.message : 'Save failed'),
-                              )
-                          }}
-                        >
-                          {c.v2SaveRolesBtn}
-                        </button>
-                      </div>
-                    </section>
-
-                    <section className="studio-section">
-                      <div className="ak-toolbar">
-                        <h4>
-                          {c.modelsCatalogTitle} ({enabledCatalogModels.length}/
-                          {modelCatalog.length > 0 ? modelCatalog.length : selectableModels.length})
-                        </h4>
-                      </div>
-                      {modelCatalog.length > 0 ? (
-                        <div className="chip-row" style={{ marginTop: 10 }}>
-                          {modelCatalog.map((item) => (
-                            <button
-                              key={item.model_id}
-                              type="button"
-                              className={item.enabled ? 'chip active' : 'chip'}
-                              onClick={() =>
-                                void toggleCatalogModels([
-                                  { model_id: item.model_id, enabled: !item.enabled },
-                                ])
-                              }
-                            >
-                              {item.enabled ? '✓ ' : ''}
-                              {item.model_id}
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="chip-row" style={{ marginTop: 10 }}>
-                          {selectableModels.map((m) => (
-                            <span key={m} className="chip">
-                              {m}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </section>
                   </>
                 )}
 

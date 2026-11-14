@@ -733,6 +733,11 @@ pub fn verify_v4s_grant(
 /// matters: the bearer is the cheap check, and failing it must not advertise whether
 /// a signature would have been accepted.
 pub fn authenticate(state: &SharedState, headers: &HeaderMap) -> Result<Caller, Denied> {
+    if stored_setting(state, "connector_revoked").as_deref() == Some("1")
+        && !(state.connector.bearer.is_some() && state.connector.delegation_secret.is_some())
+    {
+        return Err(Denied::unauthorized());
+    }
     let resolved = resolve(state);
     let (Some(expected_bearer), Some(secret)) =
         (resolved.bearer.as_deref(), resolved.delegation_secret.as_deref())

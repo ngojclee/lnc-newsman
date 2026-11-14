@@ -22,8 +22,8 @@
   --ak-accent: var(--accent, #2383e2);
   --ak-accent-soft: var(--accent-soft, rgba(35, 131, 226, 0.12));
   --ak-accent-subtle: var(--ak-accent-soft);
-  --ak-radius: 8px;
-  --ak-radius-lg: 11px;
+  --ak-radius: 6px;
+  --ak-radius-lg: 10px;
   --ak-shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.18);
   color: var(--ak-ink);
 }
@@ -249,8 +249,10 @@
   position: fixed;
   z-index: 900;
   max-height: 280px;
+  max-width: calc(100vw - 24px);
   overflow-y: auto;
-  padding: 5px;
+  overflow-x: hidden;
+  padding: 4px;
   border: 1px solid var(--ak-border);
   border-radius: var(--ak-radius-lg);
   background: var(--ak-surface-elevated);
