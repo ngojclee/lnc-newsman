@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SEED_AGENTS,
+  omitBlankSecrets,
   type AccessRequestTargetKind,
   type ActiveViewContext,
   type AgentMessage,
@@ -1168,9 +1169,10 @@ export function useAppAgents() {
       hub_token?: string
       llm_api_key?: string
     }) => {
+      const sanitized = omitBlankSecrets(patch, ['astraea_token', 'hub_token', 'llm_api_key'])
       await appAgentsApi('/api/app-agents/bridge-config', {
         method: 'PUT',
-        body: JSON.stringify(patch),
+        body: JSON.stringify(sanitized),
       })
       await Promise.all([loadBridgeStatus(), loadModels(), loadSkills(), loadTelegram()])
     },
@@ -1344,9 +1346,10 @@ export function useAppAgents() {
       webhook_secret?: string
       cygnus_key?: string
     }) => {
+      const sanitized = omitBlankSecrets(input, ['bot_token', 'webhook_secret', 'cygnus_key'])
       await appAgentsApi('/api/app-agents/telegram/config', {
         method: 'PUT',
-        body: JSON.stringify(input),
+        body: JSON.stringify(sanitized),
       })
       await Promise.all([loadTelegram(), loadBridgeStatus()])
     },

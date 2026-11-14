@@ -469,6 +469,26 @@ export const MCP_BRIDGE_TOOLS: readonly { name: string; label_vi: string; label_
   { name: 'obsidian__vault_notes', label_vi: 'Đồng bộ sổ ghi chú Obsidian', label_en: 'Obsidian notebook sync' },
 ] as const
 
+/** Strip blank write-only secret fields before PUT so saved credentials are preserved. */
+export function omitBlankSecrets<T extends Record<string, unknown>>(
+  payload: T,
+  secretKeys: readonly (keyof T)[],
+): Partial<T> {
+  const next: Record<string, unknown> = { ...payload }
+  for (const key of secretKeys) {
+    const raw = next[key as string]
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (!trimmed) {
+        delete next[key as string]
+      } else {
+        next[key as string] = trimmed
+      }
+    }
+  }
+  return next as Partial<T>
+}
+
 export const AGENT_COPY = {
   vi: {
     agents: 'Bàn Trợ lý',
@@ -742,9 +762,8 @@ export const AGENT_COPY = {
     salonScopeNoWorkspace: 'Toàn tòa soạn',
     salonScopeDisjoint: 'Không có vùng chung',
     workspaceLaunchSalonBtn: 'Mở phòng thảo luận ngay',
-    connFleetPresetBtn: '⚡ 1-Click Hub-First (agents-hub.lengoc.me)',
-    connFleetPresetApplied: 'Đã điền cấu hình Trạm Hub Trung tâm (Hub-First) và xóa các nhánh nối trực tiếp — dán Khóa LNC Hub rồi bấm Lưu.',
-    connHubFirstSub: 'Mô hình Sao 1-Chạm: Chỉ cần điền Địa chỉ Hub + Khóa LNC Hub là toàn bộ Astraea HTTP/WS, Model Fabric, Skill/MCP và Telegram Cygnus tự định tuyến qua Hub.',
+    connHubFirstSub:
+      'Cấu hình kết nối thủ công: Điền Địa chỉ Hub + Khóa LNC Hub để định tuyến Astraea HTTP/WS, Model Fabric, Skill/MCP và Telegram Cygnus qua Hub (hoặc mở mục Ngoại lệ bên dưới nếu cần nối trực tiếp từng nhánh).',
     connSyncAllBtn: '🔄 Đồng bộ Hub & Thử kết nối',
     connDirectOverridesTitle: 'Ngoại lệ nối trực tiếp từng nhánh (Tùy chọn)',
     connDirectOverridesHint: 'Để trống để mọi nhánh tự động đi qua LNC Agent Hub. Chỉ điền khi cần vượt trạm trực tiếp tới Astraea hoặc OpenAI-compatible Endpoint riêng.',
@@ -1065,9 +1084,8 @@ export const AGENT_COPY = {
     salonScopeNoWorkspace: 'Entire newsroom',
     salonScopeDisjoint: 'No shared coverage',
     workspaceLaunchSalonBtn: 'Open Discussion in Workspace',
-    connFleetPresetBtn: '⚡ 1-Click Hub-First (agents-hub.lengoc.me)',
-    connFleetPresetApplied: 'Applied Hub-First Star Topology defaults and cleared direct overrides — paste your LNC Hub Token and click Save.',
-    connHubFirstSub: '1-Click Star Topology: Configure only Hub URL + Hub Token to route Astraea HTTP/WS, Model Fabric, Skills/MCP, and Cygnus Telegram through LNC Agent Hub.',
+    connHubFirstSub:
+      'Manual Connection Setup: Enter Hub URL + LNC Hub Token to route Astraea HTTP/WS, Model Fabric, Skills/MCP, and Cygnus Telegram through LNC Agent Hub (or expand Direct Overrides below to connect a specific leg directly).',
     connSyncAllBtn: '🔄 Sync Hub & Probe',
     connDirectOverridesTitle: 'Per-Leg Direct Overrides (Optional)',
     connDirectOverridesHint: 'Leave these fields blank to route everything cleanly via LNC Agent Hub. Fill only to bypass the Hub for a specific direct endpoint.',

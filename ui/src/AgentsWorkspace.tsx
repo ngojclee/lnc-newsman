@@ -1494,29 +1494,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
             <button
               type="button"
               className="btn secondary"
-              onClick={() => {
-                setConnForm((p) => {
-                  const existing = p.allowed_hosts
-                    .split(',')
-                    .map((h) => h.trim())
-                    .filter(Boolean)
-                  const merged = Array.from(new Set([...existing, 'agents-hub.lengoc.me']))
-                  return {
-                    ...p,
-                    hub_url: 'https://agents-hub.lengoc.me',
-                    astraea_url: '',
-                    llm_base_url: '',
-                    allowed_hosts: merged.join(', '),
-                  }
-                })
-                setConnNotice(c.connFleetPresetApplied)
-              }}
-            >
-              {c.connFleetPresetBtn}
-            </button>
-            <button
-              type="button"
-              className="btn secondary"
               disabled={syncingSkills || probingConnections}
               onClick={() => void Promise.all([syncSkills(), probeConnections()])}
             >

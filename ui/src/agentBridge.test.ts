@@ -4,6 +4,7 @@ import {
   formatBridgeModeLabel,
   formatDiscussionModeShort,
   NEWSMAN_APP_TOOLS,
+  omitBlankSecrets,
   type HubSkillGroupSummary,
   type HubSkillSummary,
   type SkillAccessRequest,
@@ -481,6 +482,23 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   assertEqual(routing.models, 'hub')
   assertEqual(routing.skills_and_mcp, 'hub')
   assertEqual(routing.telegram, 'hub_cygnus')
+
+  const sanitizedBridge = omitBlankSecrets(
+    {
+      hub_url: 'https://agents-hub.lengoc.me',
+      astraea_url: '',
+      llm_base_url: '',
+      hub_token: '   ',
+      astraea_token: '',
+      llm_api_key: ' sk-live-kept ',
+    },
+    ['astraea_token', 'hub_token', 'llm_api_key'],
+  )
+  assertEqual('hub_token' in sanitizedBridge, false)
+  assertEqual('astraea_token' in sanitizedBridge, false)
+  assertEqual(sanitizedBridge.llm_api_key, 'sk-live-kept')
+  assertEqual(sanitizedBridge.astraea_url, '')
+  assertEqual(sanitizedBridge.llm_base_url, '')
 }
 
 console.log('10/10 agentBridge tests passed')
