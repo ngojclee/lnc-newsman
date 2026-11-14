@@ -304,20 +304,20 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 
 | Endpoint | Auth & CSRF | Purpose |
 |---|---|---|
-| `GET /api/app-agents/bridge-config` | Session | Read non-secret bridge settings, `mode` (`astraea_relay` or `hub_standby`), `relay_connected`, `astraea_reachable`, `secret_store_open`, `task_models` (`thread_title`, `round_summary`, `companion_brief`, `tax_doc_digest`), and redacted `has_*` flags |
-| `PUT /api/app-agents/bridge-config` | Session + CSRF | Update bridge URLs, default model, `task_models`, allowed private hosts, and write-only secrets (returns 503 `secret_store_not_configured` if `LNC_MASTER_KEY` is unset when writing a secret) |
-| `POST /api/app-agents/bridge-config/probe` | Session + CSRF | Probe Hub, Astraea health, and LLM models list endpoint via `fetch::Fetcher` (never calls chat completions), returning `{ ok, probed_at, hub, astraea, llm }` without echoing secrets |
-| `GET /api/app-agents/models` | Session | List available model aliases from LNC Agent Hub or standby defaults |
+| `GET /api/app-agents/bridge-config` | Session | Read non-secret bridge settings, `mode` (`astraea_relay` or `hub_standby`), `relay_connected`, `relay_route` (`hub` / `direct` / `disabled`), `routing` (5-leg Star Topology matrix), `astraea_reachable`, `secret_store_open`, `hub_bundle`, `capability_bundles`, `mcp_groups`, `allowed_mcp_tools`, `allowed_model_aliases`, `channel_grants`, `task_models` (`thread_title`, `round_summary`, `companion_brief`, `tax_doc_digest`), and redacted `has_*` flags |
+| `PUT /api/app-agents/bridge-config` | Session + CSRF | Update Hub-First URL/token and optional direct override URLs, default model, `task_models`, allowed private hosts, and write-only secrets (returns 503 `secret_store_not_configured` if `LNC_MASTER_KEY` is unset when writing a secret); triggers background Hub sync when configured |
+| `POST /api/app-agents/bridge-config/probe` | Session + CSRF | Probe Hub, Astraea (or Hub `/effective-bundle` `via_hub`), and Model Fabric `/models` endpoint via `fetch::Fetcher` (never calls chat completions), returning `{ ok, probed_at, hub, astraea, llm, routing, relay_route }` without echoing secrets |
+| `GET /api/app-agents/models` | Session | List available model aliases from Model Fabric (`llm_base_url` override or `{hub_root}/v1/models` with `hub_token`) or standby defaults |
 | `GET /api/app-agents/workspaces` | Session | List newsroom workspaces (seeded `newsroom-general` and `vn-macro-tax-desk` plus custom workspaces) |
 | `POST /api/app-agents/workspaces` | Session + CSRF | Create a workspace (`custom_instructions_md`, `resource_ctx`, `default_skill_slugs`, `default_agent_slugs`, `default_discussion_mode`, `is_default`) |
 | `PUT /api/app-agents/workspaces/{id}` | Session + CSRF | Create or update a workspace |
 | `DELETE /api/app-agents/workspaces/{id}` | Session + CSRF | Delete a workspace (unlinks `workspace_id` on existing threads) |
-| `GET /api/app-agents/skills` | Session | List cached Hub/builtin skills (`display_name`, `granted`, local `enabled`, `group_slugs`, `body_md`, safe `body_preview`) and merged `groups` (`display_name`, `description`, `category`, `icon`, `granted_count`/`total_count`, `granted`) |
-| `POST /api/app-agents/skills/sync` | Session + CSRF | Sync skills, `groups[]`, and approval statuses (`skill-access-requests`) from LNC Agent Hub via `fetch::Fetcher`, preserving local `enabled`, clearing `body_md` when `granted` is revoked, and returning `sync_mode` + `access_requests`; degrades cleanly when offline |
+| `GET /api/app-agents/skills` | Session | List cached Hub/builtin skills (`display_name`, `granted`, local `enabled`, `group_slugs`, `body_md`, safe `body_preview`), merged `groups`, `access_requests`, and cached Hub bundle (`capability_bundles`, `mcp_groups`, `allowed_mcp_tools`, `allowed_model_aliases`, `channel_grants`, `astraea_bridge_ready`, `hub_bundle`) |
+| `POST /api/app-agents/skills/sync` | Session + CSRF | Push `sync_blueprint_to_hub` agents via `/agents/sync` and sync `/effective-bundle` (fallback `/skills` -> `/v1/skills`) plus `/access-requests` (fallback `/skill-access-requests`) via `fetch::Fetcher`, preserving local `enabled`, clearing `body_md` when revoked, and returning `sync_mode`, `bundle_synced`, `agents_synced`, `capability_bundles`, `mcp_groups`, `hub_bundle`, and `access_requests`; degrades cleanly when offline |
 | `GET /api/app-agents/skills/{slug}` | Session | Fetch a single cached skill playbook |
 | `PATCH /api/app-agents/skills/{slug}` | Session + CSRF | Toggle local `enabled` state only (never elevates Hub `granted`) |
-| `GET /api/app-agents/skills/access-requests` | Session | List recorded skill/group access requests (`status`, `hub_request_id`, `approval_request_id`, `reviewed_by`, `review_note`) |
-| `POST /api/app-agents/skills/access-requests` | Session + CSRF | Idempotently submit/upsert a Hub skill or `skill_group` access request (forwards to Hub via `fetch::Fetcher` for `"pending"` + `approval_request_id`, or records `recorded_local` when offline/404) |
+| `GET /api/app-agents/skills/access-requests` | Session | Reconcile access requests from Hub `/access-requests` (fallback `/skill-access-requests`) when online and list local rows (`status`, `hub_request_id`, `approval_request_id`, `reviewed_by`, `review_note`) |
+| `POST /api/app-agents/skills/access-requests` | Session + CSRF | Idempotently submit/upsert a Hub access request (`target_kind`: `capability_bundle`, `mcp_group`, `skill_group`, `skill`, `model_alias`, or `channel`) to `/access-requests` (404/405 fallback `/skill-access-requests`), returning `"pending"` + `approval_request_id` or `"recorded_local"` when offline |
 | `GET /api/app-agents/agents` | Session | List newsroom agent blueprints (`AppAgentConfig`, including `enabled_skills` and `enabled_skill_groups`) |
 | `PUT /api/app-agents/agents/{slug}` | Session + CSRF | Create or update an agent blueprint (`vault://` secret references only; optional Hub binding sync) |
 | `DELETE /api/app-agents/agents/{slug}` | Session + CSRF | Delete an agent blueprint |
@@ -338,7 +338,7 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `PATCH /api/app-agents/schedules/{id}` | Session + CSRF | Update or toggle a schedule |
 | `DELETE /api/app-agents/schedules/{id}` | Session + CSRF | Delete a schedule |
 | `POST /api/app-agents/schedules/{id}/run-now` | Session + CSRF | Trigger an immediate schedule turn |
-| `GET /api/app-agents/telegram/config` | Session | Read conversational Telegram transport (`direct_poll`, `direct_webhook`, `cygnus_poll`, `cygnus_webhook`), `chat_policy` (`open`, `mention`, `topics_only`), and `has_*` flags |
+| `GET /api/app-agents/telegram/config` | Session | Read conversational Telegram transport (`direct_poll`, `direct_webhook`, `cygnus_poll`, `cygnus_webhook`), `telegram_route` (`hub_cygnus`, `direct_cygnus`, `direct_bot_api`, `disabled`), `chat_policy` (`open`, `mention`, `topics_only`), and `has_*` flags |
 | `PUT /api/app-agents/telegram/config` | Session + CSRF | Update conversational Telegram transport, policy, URLs, and write-only secrets |
 | `GET /api/app-agents/telegram/routes` | Session | List conversational Telegram chat/topic-to-agent bindings |
 | `POST /api/app-agents/telegram/routes` | Session + CSRF | Create a conversational Telegram route (`chat_id`, optional `message_thread_id`, `agent_slug`, `policy`) |

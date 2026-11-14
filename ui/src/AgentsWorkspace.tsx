@@ -5,6 +5,7 @@ import {
   AGENT_COPY,
   formatBridgeModeLabel,
   formatDiscussionModeShort,
+  type AccessRequestTargetKind,
   type AgentMessage,
   type AgentThread,
   type AgentWorkspace,
@@ -131,6 +132,11 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     setActiveWorkspaceId,
     skills,
     skillGroups,
+    capabilityBundles,
+    mcpGroups,
+    allowedMcpTools,
+    allowedModelAliases,
+    channelGrants,
     accessRequests,
     probeReport,
     probingConnections,
@@ -210,10 +216,57 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [skillSearch, setSkillSearch] = useState('')
   const [selectedSkillSlug, setSelectedSkillSlug] = useState<string>('macro-cross-impact-brief')
   const [accessModalOpen, setAccessModalOpen] = useState(false)
-  const [accessKind, setAccessKind] = useState<'skill' | 'skill_group'>('skill')
+  const [accessKind, setAccessKind] = useState<AccessRequestTargetKind>('skill')
   const [accessSlug, setAccessSlug] = useState('global-commodities-pack-sync')
   const [accessReason, setAccessReason] = useState('')
   const [accessNotice, setAccessNotice] = useState('')
+
+  const openAccessModalFor = (kind: AccessRequestTargetKind, slug: string, label?: string) => {
+    setAccessKind(kind)
+    setAccessSlug(slug)
+    if (label) {
+      setAccessReason(
+        lang === 'vi'
+          ? `Yêu cầu cấp quyền ${label} từ LNC Newsman.`
+          : `Requesting access to ${label} from LNC Newsman.`,
+      )
+    }
+    setAccessModalOpen(true)
+  }
+
+  const formatTargetKindTag = (kind: string): string => {
+    switch (kind) {
+      case 'capability_bundle':
+        return c.targetKindBundleTag
+      case 'mcp_group':
+        return c.targetKindMcpGroupTag
+      case 'skill_group':
+        return c.targetKindGroupTag
+      case 'model_alias':
+        return c.targetKindModelTag
+      case 'channel':
+        return c.targetKindChannelTag
+      default:
+        return c.targetKindSkillTag
+    }
+  }
+
+  const formatRouteLabel = (val: string | undefined): string => {
+    switch (val) {
+      case 'hub':
+        return c.routeViaHub
+      case 'direct':
+        return c.routeViaDirect
+      case 'hub_cygnus':
+        return c.routeViaHubCygnus
+      case 'direct_cygnus':
+        return c.routeViaDirectCygnus
+      case 'direct_bot_api':
+        return c.routeViaDirectBot
+      default:
+        return c.routeDisabled
+    }
+  }
 
   // Models & Connections Surface state
   const [connForm, setConnForm] = useState({
@@ -691,6 +744,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
           bridgeStatus={bridgeStatus}
           skills={skills}
           skillGroups={skillGroups}
+          allowedMcpTools={allowedMcpTools}
           workspaces={workspaces}
           onSelectWorkspace={(id) => {
             setActiveWorkspaceId(id)
@@ -969,6 +1023,130 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
           {accessNotice && <p className="status-ok">{accessNotice}</p>}
 
+          {(capabilityBundles.length > 0 ||
+            mcpGroups.length > 0 ||
+            allowedModelAliases.length > 0 ||
+            channelGrants.length > 0) && (
+            <section className="skill-group-packs-section" aria-label={c.skillsBundlesTitle}>
+              {capabilityBundles.length > 0 && (
+                <>
+                  <h4 className="skill-packs-heading">{c.skillsBundlesTitle}</h4>
+                  <div className="skill-group-packs-grid">
+                    {capabilityBundles.map((bundle) => {
+                      const bLabel = bundle.display_name || bundle.name || bundle.slug
+                      return (
+                        <article key={bundle.slug} className="skill-pack-card">
+                          <div className="skill-pack-head">
+                            <div className="skill-pack-title">
+                              <span className="skill-pack-icon" aria-hidden="true">
+                                {bundle.icon || '🎁'}
+                              </span>
+                              <div>
+                                <strong>{bLabel}</strong>
+                                <span className="skill-pack-cat">
+                                  {bundle.skill_group_slugs.length} skills · {bundle.mcp_group_slugs.length} MCP
+                                </span>
+                              </div>
+                            </div>
+                            <span className="scope-badge">{bundle.allowed_model_aliases.length} models</span>
+                          </div>
+                          {bundle.description && <p className="skill-pack-desc">{bundle.description}</p>}
+                          <div className="skill-pack-foot">
+                            <code>{bundle.slug}</code>
+                            {bundle.granted ? (
+                              <span className="tier-badge tier-read status-approved">
+                                {c.skillsBundleGrantedBadge}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn small secondary"
+                                onClick={() => openAccessModalFor('capability_bundle', bundle.slug, bLabel)}
+                              >
+                                🔐 {c.skillsBundleRequestBtn}
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {mcpGroups.length > 0 && (
+                <>
+                  <h4 className="skill-packs-heading">{c.skillsMcpGroupsTitle}</h4>
+                  <div className="skill-group-packs-grid">
+                    {mcpGroups.map((mg) => {
+                      const mLabel = mg.display_name || mg.name || mg.slug
+                      return (
+                        <article key={mg.slug} className="skill-pack-card">
+                          <div className="skill-pack-head">
+                            <div className="skill-pack-title">
+                              <span className="skill-pack-icon" aria-hidden="true">
+                                {mg.icon || '🧩'}
+                              </span>
+                              <div>
+                                <strong>{mLabel}</strong>
+                                {mg.category && <span className="skill-pack-cat">{mg.category}</span>}
+                              </div>
+                            </div>
+                            <span className="scope-badge">
+                              {mg.item_count || mg.patterns.length} tools
+                            </span>
+                          </div>
+                          {mg.description && <p className="skill-pack-desc">{mg.description}</p>}
+                          <div className="skill-pack-foot">
+                            <code>{mg.patterns.slice(0, 2).join(', ') || mg.slug}</code>
+                            {mg.granted ? (
+                              <span className="tier-badge tier-read status-approved">
+                                {c.skillsMcpGrantedBadge}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn small secondary"
+                                onClick={() => openAccessModalFor('mcp_group', mg.slug, mLabel)}
+                              >
+                                🔐 {c.skillsMcpGroupRequestBtn}
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {(allowedModelAliases.length > 0 || channelGrants.length > 0) && (
+                <div className="chip-row" style={{ marginTop: 10 }}>
+                  {allowedModelAliases.length > 0 && (
+                    <>
+                      <span className="muted-sub">{c.skillsModelsGrantedTitle}:</span>
+                      {allowedModelAliases.map((m) => (
+                        <span key={m} className="chip active">
+                          ✨ {m}
+                        </span>
+                      ))}
+                    </>
+                  )}
+                  {channelGrants.length > 0 && (
+                    <>
+                      <span className="muted-sub">{c.skillsChannelsGrantedTitle}:</span>
+                      {channelGrants.map((ch) => (
+                        <span key={ch} className="chip active">
+                          📡 {ch}
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
           {skillGroups.length > 0 && (
             <section className="skill-group-packs-section" aria-label={c.skillsGroupPacksTitle}>
               <h4 className="skill-packs-heading">{c.skillsGroupPacksTitle}</h4>
@@ -1209,7 +1387,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         <div key={req.id} className="access-request-row">
                           <div className="access-request-info">
                             <strong>
-                              {req.target_kind === 'skill_group' ? c.targetKindGroupTag : c.targetKindSkillTag}:{' '}
+                              {formatTargetKindTag(req.target_kind)}:{' '}
                               {req.target_slug}
                             </strong>
                             <p>{req.reason || '—'}</p>
@@ -1252,10 +1430,14 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   variant="field"
                   label={c.skillsRequestKindLabel}
                   value={accessKind}
-                  onChange={(v) => setAccessKind(v as 'skill' | 'skill_group')}
+                  onChange={(v) => setAccessKind(v as AccessRequestTargetKind)}
                   options={[
-                    { value: 'skill', label: c.skillsRequestKindSkill },
+                    { value: 'capability_bundle', label: c.skillsRequestKindBundle },
+                    { value: 'mcp_group', label: c.skillsRequestKindMcpGroup },
                     { value: 'skill_group', label: c.skillsRequestKindGroup },
+                    { value: 'skill', label: c.skillsRequestKindSkill },
+                    { value: 'model_alias', label: c.skillsRequestKindModel },
+                    { value: 'channel', label: c.skillsRequestKindChannel },
                   ]}
                 />
                 <label className="field">
@@ -1307,6 +1489,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
       {surface === 'models' && (
         <div className="models-connections-shell">
+          <div className="catalog-notice">{c.connHubFirstSub}</div>
           <div className="probe-bar">
             <button
               type="button"
@@ -1317,14 +1500,12 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     .split(',')
                     .map((h) => h.trim())
                     .filter(Boolean)
-                  const merged = Array.from(
-                    new Set([...existing, 'agents-hub.lengoc.me', 'astraea.lengoc.me', 'telegram.lengoc.me']),
-                  )
+                  const merged = Array.from(new Set([...existing, 'agents-hub.lengoc.me']))
                   return {
                     ...p,
                     hub_url: 'https://agents-hub.lengoc.me',
-                    astraea_url: 'https://astraea.lengoc.me',
-                    llm_base_url: 'https://agents-hub.lengoc.me/v1',
+                    astraea_url: '',
+                    llm_base_url: '',
                     allowed_hosts: merged.join(', '),
                   }
                 })
@@ -1332,6 +1513,14 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
               }}
             >
               {c.connFleetPresetBtn}
+            </button>
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={syncingSkills || probingConnections}
+              onClick={() => void Promise.all([syncSkills(), probeConnections()])}
+            >
+              {syncingSkills || probingConnections ? c.modelsProbing : c.connSyncAllBtn}
             </button>
             <button
               type="button"
@@ -1352,7 +1541,11 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
             {(
               [
                 [c.modelsServiceHub, probeReport?.hub, Boolean(bridgeStatus.hub_url)],
-                [c.modelsServiceAstraea, probeReport?.astraea, Boolean(bridgeStatus.astraea_url)],
+                [
+                  c.modelsServiceAstraea,
+                  probeReport?.astraea,
+                  Boolean(bridgeStatus.astraea_url || bridgeStatus.hub_url),
+                ],
                 [
                   c.modelsServiceLlm,
                   probeReport?.llm,
@@ -1385,6 +1578,50 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
           <section className="studio-section conn-diag-section">
             <div className="probe-card-head">
+              <strong>{c.routeMatrixTitle}</strong>
+              <span className="tier-badge">
+                {formatRouteLabel(probeReport?.relay_route ?? bridgeStatus.relay_route)}
+              </span>
+            </div>
+            <div className="chip-row conn-diag-chips">
+              {(
+                [
+                  [
+                    c.routeLegAstraeaHttp,
+                    probeReport?.routing?.astraea_http ?? bridgeStatus.routing?.astraea_http,
+                  ],
+                  [
+                    c.routeLegAstraeaWs,
+                    probeReport?.routing?.astraea_ws ?? bridgeStatus.routing?.astraea_ws,
+                  ],
+                  [
+                    c.routeLegModels,
+                    probeReport?.routing?.models ?? bridgeStatus.routing?.models,
+                  ],
+                  [
+                    c.routeLegSkillsMcp,
+                    probeReport?.routing?.skills_and_mcp ?? bridgeStatus.routing?.skills_and_mcp,
+                  ],
+                  [
+                    c.routeLegTelegram,
+                    telegramConfig.telegram_route ??
+                      probeReport?.routing?.telegram ??
+                      bridgeStatus.routing?.telegram,
+                  ],
+                ] as const
+              ).map(([label, routeVal]) => (
+                <span
+                  key={label}
+                  className={routeVal && routeVal !== 'none' && routeVal !== 'disabled' ? 'chip active' : 'chip'}
+                >
+                  {label}: <strong>{formatRouteLabel(routeVal)}</strong>
+                </span>
+              ))}
+            </div>
+          </section>
+
+          <section className="studio-section conn-diag-section">
+            <div className="probe-card-head">
               <strong>{c.connDiagTitle}</strong>
               <span className="tier-badge">{statusLabel}</span>
             </div>
@@ -1406,6 +1643,9 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                 {c.diagSkillsCount}: {skills.filter((s) => s.granted).length}/{skills.length}
               </span>
               <span className="chip">
+                {c.skillsMcpGroupsTitle}: {mcpGroups.filter((g) => g.granted).length}/{mcpGroups.length}
+              </span>
+              <span className="chip">
                 {c.diagHostsCount}: {(bridgeStatus.allowed_hosts ?? []).length}
               </span>
             </div>
@@ -1419,24 +1659,17 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   <span>{c.bridgeHubUrl}</span>
                   <input
                     value={connForm.hub_url}
-                    placeholder="http://127.0.0.1:4000"
+                    placeholder="https://agents-hub.lengoc.me"
                     onChange={(e) => setConnForm((p) => ({ ...p, hub_url: e.target.value }))}
                   />
                 </label>
                 <label className="field">
-                  <span>{c.bridgeAstraeaUrl}</span>
+                  <span>{c.bridgeHubToken}</span>
                   <input
-                    value={connForm.astraea_url}
-                    placeholder="http://127.0.0.1:4100"
-                    onChange={(e) => setConnForm((p) => ({ ...p, astraea_url: e.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>{c.bridgeLlmBaseUrl}</span>
-                  <input
-                    value={connForm.llm_base_url}
-                    placeholder="https://api.openai.com/v1"
-                    onChange={(e) => setConnForm((p) => ({ ...p, llm_base_url: e.target.value }))}
+                    type="password"
+                    value={connForm.hub_token}
+                    placeholder={bridgeStatus.has_hub_token ? '••••••••' : ''}
+                    onChange={(e) => setConnForm((p) => ({ ...p, hub_token: e.target.value }))}
                   />
                 </label>
               </div>
@@ -1453,41 +1686,61 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   <span>{c.bridgeAllowedHosts}</span>
                   <input
                     value={connForm.allowed_hosts}
-                    placeholder="127.0.0.1, cortex.internal"
+                    placeholder="agents-hub.lengoc.me, 127.0.0.1"
                     onChange={(e) => setConnForm((p) => ({ ...p, allowed_hosts: e.target.value }))}
                   />
                 </label>
               </div>
 
-              <div className="catalog-form-row">
-                <label className="field">
-                  <span>{c.bridgeHubToken}</span>
-                  <input
-                    type="password"
-                    value={connForm.hub_token}
-                    placeholder={bridgeStatus.has_hub_token ? '••••••••' : ''}
-                    onChange={(e) => setConnForm((p) => ({ ...p, hub_token: e.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>{c.bridgeAstraeaToken}</span>
-                  <input
-                    type="password"
-                    value={connForm.astraea_token}
-                    placeholder={bridgeStatus.has_astraea_token ? '••••••••' : ''}
-                    onChange={(e) => setConnForm((p) => ({ ...p, astraea_token: e.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>{c.bridgeLlmApiKey}</span>
-                  <input
-                    type="password"
-                    value={connForm.llm_api_key}
-                    placeholder={bridgeStatus.has_llm_api_key ? '••••••••' : ''}
-                    onChange={(e) => setConnForm((p) => ({ ...p, llm_api_key: e.target.value }))}
-                  />
-                </label>
-              </div>
+              <details
+                className="studio-scope-box"
+                open={Boolean(connForm.astraea_url || connForm.llm_base_url)}
+              >
+                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                  {c.connDirectOverridesTitle}
+                </summary>
+                <p className="muted-sub" style={{ marginTop: 6 }}>
+                  {c.connDirectOverridesHint}
+                </p>
+                <div className="catalog-form-row">
+                  <label className="field">
+                    <span>{c.bridgeAstraeaUrl}</span>
+                    <input
+                      value={connForm.astraea_url}
+                      placeholder=""
+                      onChange={(e) => setConnForm((p) => ({ ...p, astraea_url: e.target.value }))}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{c.bridgeAstraeaToken}</span>
+                    <input
+                      type="password"
+                      value={connForm.astraea_token}
+                      placeholder={bridgeStatus.has_astraea_token ? '••••••••' : ''}
+                      onChange={(e) => setConnForm((p) => ({ ...p, astraea_token: e.target.value }))}
+                    />
+                  </label>
+                </div>
+                <div className="catalog-form-row">
+                  <label className="field">
+                    <span>{c.bridgeLlmBaseUrl}</span>
+                    <input
+                      value={connForm.llm_base_url}
+                      placeholder=""
+                      onChange={(e) => setConnForm((p) => ({ ...p, llm_base_url: e.target.value }))}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{c.bridgeLlmApiKey}</span>
+                    <input
+                      type="password"
+                      value={connForm.llm_api_key}
+                      placeholder={bridgeStatus.has_llm_api_key ? '••••••••' : ''}
+                      onChange={(e) => setConnForm((p) => ({ ...p, llm_api_key: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              </details>
             </section>
 
             <section className="studio-section">

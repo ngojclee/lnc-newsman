@@ -132,9 +132,68 @@ export interface HubSkillGroupSummary {
   granted?: boolean
 }
 
+export type AccessRequestTargetKind =
+  | 'capability_bundle'
+  | 'mcp_group'
+  | 'skill_group'
+  | 'skill'
+  | 'model_alias'
+  | 'channel'
+
+export interface HubCapabilityBundleSummary {
+  slug: string
+  name: string
+  display_name?: string
+  description?: string
+  icon?: string
+  skill_group_slugs: string[]
+  mcp_group_slugs: string[]
+  allowed_model_aliases: string[]
+  allowed_channels: string[]
+  status: string
+  granted: boolean
+}
+
+export interface HubMcpGroupSummary {
+  slug: string
+  name: string
+  display_name?: string
+  description?: string
+  category?: string
+  icon?: string
+  status: string
+  patterns: string[]
+  item_count: number
+  granted: boolean
+}
+
+export interface HubEffectiveBundleCache {
+  astraea_bridge_ready: boolean
+  ws_relay_path: string
+  app_agents_proxy_path: string
+  mcp_endpoint_path: string
+  llm_base_path: string
+  telegram_send_path: string
+  telegram_replies_path: string
+  capability_bundles: HubCapabilityBundleSummary[]
+  mcp_groups: HubMcpGroupSummary[]
+  allowed_mcp_tools: string[]
+  allowed_model_aliases: string[]
+  channel_grants: string[]
+  synced_at: string
+}
+
+export interface BridgeRoutingSummary {
+  astraea_http: 'hub' | 'direct' | 'none' | string
+  astraea_ws: 'hub' | 'direct' | 'none' | string
+  models: 'hub' | 'direct' | 'none' | string
+  skills_and_mcp: 'hub' | 'none' | string
+  telegram: 'hub_cygnus' | 'direct_cygnus' | 'direct_bot_api' | 'disabled' | string
+}
+
 export interface SkillAccessRequest {
   id: string
-  target_kind: 'skill' | 'skill_group' | string
+  target_kind: AccessRequestTargetKind | string
   target_slug: string
   reason: string
   status: string
@@ -162,6 +221,8 @@ export interface ConnectionProbeReport {
   hub: ProbeServiceResult
   astraea: ProbeServiceResult
   llm: ProbeServiceResult
+  relay_route?: 'hub' | 'direct' | 'disabled' | string
+  routing?: BridgeRoutingSummary
 }
 
 export type WorkspaceSurface = 'salon' | 'agents' | 'workspaces' | 'skills' | 'models'
@@ -278,6 +339,7 @@ export interface TelegramRouteConfig {
 
 export interface TelegramBridgeConfig {
   transport_mode: TelegramTransportMode
+  telegram_route?: 'hub_cygnus' | 'direct_cygnus' | 'direct_bot_api' | 'disabled' | string
   bot_name: string
   cygnus_url: string
   chat_policy: TelegramChatPolicy
@@ -290,6 +352,9 @@ export interface BridgeStatus {
   mode: 'astraea_relay' | 'hub_standby' | 'disconnected'
   relay_connected: boolean
   astraea_reachable: boolean
+  relay_route?: 'hub' | 'direct' | 'disabled' | string
+  routing?: BridgeRoutingSummary
+  hub_bundle?: HubEffectiveBundleCache
   secret_store_open?: boolean
   astraea_url?: string
   hub_url?: string
@@ -677,8 +742,44 @@ export const AGENT_COPY = {
     salonScopeNoWorkspace: 'Toàn tòa soạn',
     salonScopeDisjoint: 'Không có vùng chung',
     workspaceLaunchSalonBtn: 'Mở phòng thảo luận ngay',
-    connFleetPresetBtn: '⚡ Điền nhanh cấu hình chuẩn LNC',
-    connFleetPresetApplied: 'Đã điền sẵn địa chỉ máy chủ chuẩn LNC — nhập khóa mới nếu cần rồi bấm Lưu.',
+    connFleetPresetBtn: '⚡ 1-Click Hub-First (agents-hub.lengoc.me)',
+    connFleetPresetApplied: 'Đã điền cấu hình Trạm Hub Trung tâm (Hub-First) và xóa các nhánh nối trực tiếp — dán Khóa LNC Hub rồi bấm Lưu.',
+    connHubFirstSub: 'Mô hình Sao 1-Chạm: Chỉ cần điền Địa chỉ Hub + Khóa LNC Hub là toàn bộ Astraea HTTP/WS, Model Fabric, Skill/MCP và Telegram Cygnus tự định tuyến qua Hub.',
+    connSyncAllBtn: '🔄 Đồng bộ Hub & Thử kết nối',
+    connDirectOverridesTitle: 'Ngoại lệ nối trực tiếp từng nhánh (Tùy chọn)',
+    connDirectOverridesHint: 'Để trống để mọi nhánh tự động đi qua LNC Agent Hub. Chỉ điền khi cần vượt trạm trực tiếp tới Astraea hoặc OpenAI-compatible Endpoint riêng.',
+    routeMatrixTitle: 'Ma trận Định tuyến 5 Nhánh (Star Topology)',
+    routeLegAstraeaHttp: '1. Astraea HTTP (Turns)',
+    routeLegAstraeaWs: '2. Astraea Relay (WSS)',
+    routeLegModels: '3. Model Fabric (LLM)',
+    routeLegSkillsMcp: '4. Gói Quyền, Skill & MCP',
+    routeLegTelegram: '5. Kênh Telegram (Cygnus)',
+    routeViaHub: 'Qua LNC Hub',
+    routeViaDirect: 'Nối trực tiếp (Override)',
+    routeViaHubCygnus: 'Cygnus qua Hub',
+    routeViaDirectCygnus: 'Cygnus trực tiếp',
+    routeViaDirectBot: 'Telegram Bot API trực tiếp',
+    routeDisabled: 'Chưa bật',
+    skillsBundlesTitle: 'Gói Quyền Hợp nhất (Capability Bundles)',
+    skillsBundleRequestBtn: 'Xin mở gói quyền',
+    skillsBundleGrantedBadge: '✓ Đã cấp gói quyền',
+    skillsMcpGroupsTitle: 'Nhóm công cụ Business MCP được cấp phép',
+    skillsMcpGroupRequestBtn: 'Xin mở nhóm MCP',
+    skillsMcpGrantedBadge: '✓ Đã cấp nhóm MCP',
+    skillsModelsGrantedTitle: 'Mô hình được cấp phép qua Hub',
+    skillsChannelsGrantedTitle: 'Kênh giao tiếp được cấp',
+    skillsGrantedEmpty: 'Chưa có mục nào được đồng bộ từ LNC Hub.',
+    targetKindBundleTag: 'Gói Quyền',
+    targetKindMcpGroupTag: 'Nhóm MCP',
+    targetKindModelTag: 'Mô hình',
+    targetKindChannelTag: 'Kênh',
+    skillsRequestKindBundle: 'Gói Quyền hợp nhất (Capability Bundle)',
+    skillsRequestKindMcpGroup: 'Nhóm Business MCP (MCP Group)',
+    skillsRequestKindModel: 'Mô hình AI (Model Alias)',
+    skillsRequestKindChannel: 'Kênh liên lạc (Channel)',
+    studioMcpToolsHintHub: 'Danh sách công cụ MCP được hợp nhất từ Business MCP Groups đã cấp trên Hub.',
+    studioTelegramRouteLabel: 'Tuyến gửi/nhận Telegram',
+    studioTelegramHubBrokerNote: 'Để trống Cygnus URL để gửi/nhận qua Hub Cygnus Broker (chỉ điền URL khi muốn vượt trạm tới Cygnus riêng).',
     connDiagTitle: 'Tổng quan trạng thái vận hành',
     connDiagSub: 'Khóa bí mật được lưu mã hóa an toàn trên máy chủ; mọi kết nối ra ngoài đều đi qua bộ kiểm duyệt địa chỉ mạng của ứng dụng.',
     diagModePrefix: 'Chế độ',
@@ -964,8 +1065,44 @@ export const AGENT_COPY = {
     salonScopeNoWorkspace: 'Entire newsroom',
     salonScopeDisjoint: 'No shared coverage',
     workspaceLaunchSalonBtn: 'Open Discussion in Workspace',
-    connFleetPresetBtn: '⚡ Fill LNC Fleet Defaults',
-    connFleetPresetApplied: 'Filled standard LNC server URLs and trusted hosts — add keys if needed, then click Save.',
+    connFleetPresetBtn: '⚡ 1-Click Hub-First (agents-hub.lengoc.me)',
+    connFleetPresetApplied: 'Applied Hub-First Star Topology defaults and cleared direct overrides — paste your LNC Hub Token and click Save.',
+    connHubFirstSub: '1-Click Star Topology: Configure only Hub URL + Hub Token to route Astraea HTTP/WS, Model Fabric, Skills/MCP, and Cygnus Telegram through LNC Agent Hub.',
+    connSyncAllBtn: '🔄 Sync Hub & Probe',
+    connDirectOverridesTitle: 'Per-Leg Direct Overrides (Optional)',
+    connDirectOverridesHint: 'Leave these fields blank to route everything cleanly via LNC Agent Hub. Fill only to bypass the Hub for a specific direct endpoint.',
+    routeMatrixTitle: '5-Leg Star Topology Routing Matrix',
+    routeLegAstraeaHttp: '1. Astraea HTTP (Turns)',
+    routeLegAstraeaWs: '2. Astraea Relay (WSS)',
+    routeLegModels: '3. Model Fabric (LLM)',
+    routeLegSkillsMcp: '4. Bundles, Skills & MCP',
+    routeLegTelegram: '5. Telegram Channel (Cygnus)',
+    routeViaHub: 'Via LNC Hub',
+    routeViaDirect: 'Direct Override',
+    routeViaHubCygnus: 'Cygnus via Hub',
+    routeViaDirectCygnus: 'Direct Cygnus',
+    routeViaDirectBot: 'Direct Bot API',
+    routeDisabled: 'Disabled',
+    skillsBundlesTitle: 'Unified Capability Bundles',
+    skillsBundleRequestBtn: 'Request Bundle',
+    skillsBundleGrantedBadge: '✓ Bundle Granted',
+    skillsMcpGroupsTitle: 'Granted Business MCP Groups',
+    skillsMcpGroupRequestBtn: 'Request MCP Group',
+    skillsMcpGrantedBadge: '✓ MCP Group Granted',
+    skillsModelsGrantedTitle: 'Hub-Granted Model Aliases',
+    skillsChannelsGrantedTitle: 'Granted Channels',
+    skillsGrantedEmpty: 'No items synced from LNC Hub yet.',
+    targetKindBundleTag: 'Bundle',
+    targetKindMcpGroupTag: 'MCP Group',
+    targetKindModelTag: 'Model',
+    targetKindChannelTag: 'Channel',
+    skillsRequestKindBundle: 'Unified Capability Bundle',
+    skillsRequestKindMcpGroup: 'Business MCP Group',
+    skillsRequestKindModel: 'Model Alias',
+    skillsRequestKindChannel: 'Channel Grant',
+    studioMcpToolsHintHub: 'Dynamically populated from Business MCP Groups granted via LNC Agent Hub.',
+    studioTelegramRouteLabel: 'Active Telegram Route',
+    studioTelegramHubBrokerNote: 'Leave Cygnus URL empty to route Telegram through the Hub Cygnus broker (fill only for a direct override).',
     connDiagTitle: 'Connection & Security Summary',
     connDiagSub: 'Keys are encrypted on the server and outbound requests pass through the application’s safe-network guard.',
     diagModePrefix: 'Status',

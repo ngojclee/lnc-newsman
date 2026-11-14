@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SEED_AGENTS,
+  type AccessRequestTargetKind,
   type ActiveViewContext,
   type AgentMessage,
   type AgentSchedule,
@@ -8,9 +9,13 @@ import {
   type AgentWorkspace,
   type AppAgentConfig,
   type ApprovalRequiredMeta,
+  type BridgeRoutingSummary,
   type BridgeStatus,
   type ConnectionProbeReport,
   type DiscussionMode,
+  type HubCapabilityBundleSummary,
+  type HubEffectiveBundleCache,
+  type HubMcpGroupSummary,
   type HubSkillGroupSummary,
   type HubSkillSummary,
   type MergedToolInvocation,
@@ -792,11 +797,120 @@ function normalizeMessage(raw: Record<string, unknown>): AgentMessage {
   }
 }
 
+export function emptyHubEffectiveBundle(): HubEffectiveBundleCache {
+  return {
+    astraea_bridge_ready: false,
+    ws_relay_path: '',
+    app_agents_proxy_path: '',
+    mcp_endpoint_path: '',
+    llm_base_path: '',
+    telegram_send_path: '',
+    telegram_replies_path: '',
+    capability_bundles: [],
+    mcp_groups: [],
+    allowed_mcp_tools: [],
+    allowed_model_aliases: [],
+    channel_grants: [],
+    synced_at: '',
+  }
+}
+
+export function normalizeBridgeRouting(raw: unknown): BridgeRoutingSummary {
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  return {
+    astraea_http: String(obj.astraea_http ?? 'none'),
+    astraea_ws: String(obj.astraea_ws ?? 'none'),
+    models: String(obj.models ?? 'none'),
+    skills_and_mcp: String(obj.skills_and_mcp ?? 'none'),
+    telegram: String(obj.telegram ?? 'disabled'),
+  }
+}
+
+export function normalizeHubEffectiveBundle(raw: unknown): HubEffectiveBundleCache {
+  if (!raw || typeof raw !== 'object') {
+    return emptyHubEffectiveBundle()
+  }
+  const obj = raw as Record<string, unknown>
+  const nested =
+    obj.hub_bundle && typeof obj.hub_bundle === 'object'
+      ? (obj.hub_bundle as Record<string, unknown>)
+      : obj
+  const toStrArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+  const rawBundles = nested.capability_bundles ?? obj.capability_bundles
+  const capability_bundles: HubCapabilityBundleSummary[] = Array.isArray(rawBundles)
+    ? rawBundles
+        .filter((b): b is Record<string, unknown> => Boolean(b && typeof b === 'object'))
+        .map((b) => {
+          const st = String(b.status ?? '')
+          return {
+            slug: String(b.slug ?? b.bundle_slug ?? b.id ?? '').trim(),
+            name: String(b.name ?? b.display_name ?? b.slug ?? '').trim(),
+            display_name: b.display_name ? String(b.display_name) : undefined,
+            description: b.description ? String(b.description) : undefined,
+            icon: b.icon ? String(b.icon) : undefined,
+            skill_group_slugs: toStrArr(b.skill_group_slugs),
+            mcp_group_slugs: toStrArr(b.mcp_group_slugs),
+            allowed_model_aliases: toStrArr(b.allowed_model_aliases),
+            allowed_channels: toStrArr(b.allowed_channels),
+            status: st,
+            granted:
+              Boolean(b.granted) ||
+              ['granted', 'approved', 'active', 'enabled'].includes(st.trim().toLowerCase()),
+          }
+        })
+        .filter((b) => b.slug.length > 0)
+    : []
+  const rawMcpGroups = nested.mcp_groups ?? obj.mcp_groups
+  const mcp_groups: HubMcpGroupSummary[] = Array.isArray(rawMcpGroups)
+    ? rawMcpGroups
+        .filter((g): g is Record<string, unknown> => Boolean(g && typeof g === 'object'))
+        .map((g) => {
+          const patterns = toStrArr(g.patterns)
+          const st = String(g.status ?? '')
+          return {
+            slug: String(g.slug ?? g.group_slug ?? g.id ?? '').trim(),
+            name: String(g.name ?? g.display_name ?? g.slug ?? '').trim(),
+            display_name: g.display_name ? String(g.display_name) : undefined,
+            description: g.description ? String(g.description) : undefined,
+            category: g.category ? String(g.category) : undefined,
+            icon: g.icon ? String(g.icon) : undefined,
+            status: st,
+            patterns,
+            item_count: typeof g.item_count === 'number' ? g.item_count : patterns.length,
+            granted:
+              Boolean(g.granted) ||
+              ['granted', 'approved', 'active', 'enabled'].includes(st.trim().toLowerCase()),
+          }
+        })
+        .filter((g) => g.slug.length > 0)
+    : []
+
+  return {
+    astraea_bridge_ready: Boolean(nested.astraea_bridge_ready ?? obj.astraea_bridge_ready),
+    ws_relay_path: String(nested.ws_relay_path ?? ''),
+    app_agents_proxy_path: String(nested.app_agents_proxy_path ?? ''),
+    mcp_endpoint_path: String(nested.mcp_endpoint_path ?? ''),
+    llm_base_path: String(nested.llm_base_path ?? ''),
+    telegram_send_path: String(nested.telegram_send_path ?? ''),
+    telegram_replies_path: String(nested.telegram_replies_path ?? ''),
+    capability_bundles,
+    mcp_groups,
+    allowed_mcp_tools: toStrArr(nested.allowed_mcp_tools ?? obj.allowed_mcp_tools),
+    allowed_model_aliases: toStrArr(nested.allowed_model_aliases ?? obj.allowed_model_aliases),
+    channel_grants: toStrArr(nested.channel_grants ?? obj.channel_grants),
+    synced_at: String(nested.synced_at ?? ''),
+  }
+}
+
 export function useAppAgents() {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({
     mode: 'hub_standby',
     relay_connected: false,
     astraea_reachable: false,
+    relay_route: 'disabled',
+    routing: normalizeBridgeRouting(null),
+    hub_bundle: emptyHubEffectiveBundle(),
     astraea_url: '',
     hub_url: '',
     default_model: 'gpt-5.4-mini',
@@ -817,6 +931,7 @@ export function useAppAgents() {
   const [schedules, setSchedules] = useState<AgentSchedule[]>([])
   const [telegramConfig, setTelegramConfig] = useState<TelegramBridgeConfig>({
     transport_mode: 'direct_poll',
+    telegram_route: 'disabled',
     bot_name: '',
     cygnus_url: '',
     chat_policy: 'mention',
@@ -829,6 +944,7 @@ export function useAppAgents() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [skills, setSkills] = useState<HubSkillSummary[]>([])
   const [skillGroups, setSkillGroups] = useState<HubSkillGroupSummary[]>([])
+  const [hubBundle, setHubBundle] = useState<HubEffectiveBundleCache>(() => emptyHubEffectiveBundle())
   const [accessRequests, setAccessRequests] = useState<SkillAccessRequest[]>([])
   const [probeReport, setProbeReport] = useState<ConnectionProbeReport | null>(null)
   const [probingConnections, setProbingConnections] = useState(false)
@@ -845,10 +961,16 @@ export function useAppAgents() {
         rawMode === 'astraea_relay' || rawMode === 'hub_standby' || rawMode === 'disconnected'
           ? rawMode
           : 'hub_standby'
+      const parsedBundle = normalizeHubEffectiveBundle(r)
+      const routing = normalizeBridgeRouting(r.routing)
+      setHubBundle(parsedBundle)
       setBridgeStatus({
         mode,
         relay_connected: Boolean(statusObj.relay_connected ?? r.relay_connected),
         astraea_reachable: Boolean(statusObj.astraea_reachable ?? r.astraea_reachable),
+        relay_route: String(statusObj.relay_route ?? r.relay_route ?? routing.astraea_ws ?? 'disabled'),
+        routing,
+        hub_bundle: parsedBundle,
         secret_store_open: Boolean(r.secret_store_open ?? true),
         astraea_url: String(r.astraea_url ?? ''),
         hub_url: String(r.hub_url ?? ''),
@@ -934,6 +1056,7 @@ export function useAppAgents() {
         >
         setTelegramConfig({
           transport_mode: (c.transport_mode as TelegramBridgeConfig['transport_mode']) ?? 'direct_poll',
+          telegram_route: String(c.telegram_route ?? cfgRes.telegram_route ?? 'disabled'),
           bot_name: String(c.bot_name ?? ''),
           cygnus_url: String(c.cygnus_url ?? ''),
           chat_policy: (c.chat_policy as TelegramBridgeConfig['chat_policy']) ?? 'mention',
@@ -969,13 +1092,18 @@ export function useAppAgents() {
 
   const loadSkills = useCallback(async () => {
     try {
-      const r = await appAgentsApi<{
+      const r = await appAgentsApi<Record<string, unknown> & {
         items?: HubSkillSummary[]
         skills?: HubSkillSummary[]
         groups?: HubSkillGroupSummary[]
+        access_requests?: SkillAccessRequest[]
       }>('/api/app-agents/skills')
       setSkills(r.items ?? r.skills ?? [])
       setSkillGroups(r.groups ?? [])
+      if (Array.isArray(r.access_requests)) {
+        setAccessRequests(r.access_requests)
+      }
+      setHubBundle(normalizeHubEffectiveBundle(r))
     } catch {
       /* ignore */
     }
@@ -1044,9 +1172,9 @@ export function useAppAgents() {
         method: 'PUT',
         body: JSON.stringify(patch),
       })
-      await Promise.all([loadBridgeStatus(), loadModels()])
+      await Promise.all([loadBridgeStatus(), loadModels(), loadSkills(), loadTelegram()])
     },
-    [loadBridgeStatus, loadModels],
+    [loadBridgeStatus, loadModels, loadSkills, loadTelegram],
   )
 
   const probeConnections = useCallback(async (): Promise<ConnectionProbeReport> => {
@@ -1274,8 +1402,10 @@ export function useAppAgents() {
   const syncSkills = useCallback(async () => {
     setSyncingSkills(true)
     try {
-      const res = await appAgentsApi<{
+      const res = await appAgentsApi<Record<string, unknown> & {
         synced?: boolean
+        bundle_synced?: boolean
+        agents_synced?: number
         sync_mode?: string
         offline?: boolean
         items?: HubSkillSummary[]
@@ -1291,11 +1421,13 @@ export function useAppAgents() {
       if (Array.isArray(res.access_requests)) {
         setAccessRequests(res.access_requests)
       }
+      setHubBundle(normalizeHubEffectiveBundle(res))
+      await Promise.all([loadBridgeStatus(), loadModels(), loadTelegram()])
       return res
     } finally {
       setSyncingSkills(false)
     }
-  }, [])
+  }, [loadBridgeStatus, loadModels, loadTelegram])
 
   const toggleSkillEnabled = useCallback(async (slug: string, enabled: boolean) => {
     const res = await appAgentsApi<{ skill?: HubSkillSummary; item?: HubSkillSummary }>(
@@ -1314,7 +1446,11 @@ export function useAppAgents() {
   }, [])
 
   const requestSkillAccess = useCallback(
-    async (input: { target_kind: 'skill' | 'skill_group'; target_slug: string; reason: string }) => {
+    async (input: {
+      target_kind: AccessRequestTargetKind | string
+      target_slug: string
+      reason: string
+    }) => {
       const res = await appAgentsApi<{ request?: SkillAccessRequest; item?: SkillAccessRequest }>(
         '/api/app-agents/skills/access-requests',
         {
@@ -1343,6 +1479,12 @@ export function useAppAgents() {
     setActiveWorkspaceId,
     skills,
     skillGroups,
+    hubBundle,
+    capabilityBundles: hubBundle.capability_bundles,
+    mcpGroups: hubBundle.mcp_groups,
+    allowedMcpTools: hubBundle.allowed_mcp_tools,
+    allowedModelAliases: hubBundle.allowed_model_aliases,
+    channelGrants: hubBundle.channel_grants,
     accessRequests,
     probeReport,
     probingConnections,

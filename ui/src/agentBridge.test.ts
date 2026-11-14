@@ -15,9 +15,12 @@ import {
   buildSeatTraceId,
   computeEffectiveScope,
   createInitialStreamTurnState,
+  emptyHubEffectiveBundle,
   extractMentions,
   intersectScopeLists,
   MAX_ACTIVE_VIEW_CONTEXT_BYTES,
+  normalizeBridgeRouting,
+  normalizeHubEffectiveBundle,
   parseComposerTrigger,
   parseSseFrame,
   parseSseStreamChunk,
@@ -427,4 +430,57 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   )
 }
 
-console.log('9/9 agentBridge tests passed')
+// 10. Hub-First effective-bundle & 5-leg Star Topology routing normalizers
+{
+  const blankBundle = emptyHubEffectiveBundle()
+  assertEqual(blankBundle.astraea_bridge_ready, false)
+  assertDeepEqual(blankBundle.capability_bundles, [])
+  assertDeepEqual(blankBundle.mcp_groups, [])
+
+  const normBundle = normalizeHubEffectiveBundle({
+    astraea_bridge_ready: true,
+    ws_relay_path: '/v1/app-connectors/lnc-newsman/ws',
+    capability_bundles: [
+      {
+        slug: 'bundle-lnc-newsman',
+        name: 'Newsman Bundle',
+        skill_group_slugs: ['vn-macro-tax'],
+        mcp_group_slugs: ['newsman-editorial'],
+        allowed_model_aliases: ['gpt-5-hub'],
+        status: 'granted',
+      },
+    ],
+    mcp_groups: [
+      {
+        slug: 'newsman-editorial',
+        name: 'Newsman Editorial',
+        patterns: ['newsman__*', 'obsidian__agent_*'],
+        status: 'active',
+      },
+    ],
+    allowed_mcp_tools: ['newsman__*', 'obsidian__agent_*'],
+    allowed_model_aliases: ['gpt-5-hub'],
+    channel_grants: ['telegram:cygnus'],
+  })
+  assertEqual(normBundle.astraea_bridge_ready, true)
+  assertEqual(normBundle.capability_bundles[0].granted, true)
+  assertEqual(normBundle.mcp_groups[0].granted, true)
+  assertEqual(normBundle.mcp_groups[0].item_count, 2)
+  assertDeepEqual(normBundle.allowed_mcp_tools, ['newsman__*', 'obsidian__agent_*'])
+  assertDeepEqual(normBundle.channel_grants, ['telegram:cygnus'])
+
+  const routing = normalizeBridgeRouting({
+    astraea_http: 'hub',
+    astraea_ws: 'hub',
+    models: 'hub',
+    skills_and_mcp: 'hub',
+    telegram: 'hub_cygnus',
+  })
+  assertEqual(routing.astraea_http, 'hub')
+  assertEqual(routing.astraea_ws, 'hub')
+  assertEqual(routing.models, 'hub')
+  assertEqual(routing.skills_and_mcp, 'hub')
+  assertEqual(routing.telegram, 'hub_cygnus')
+}
+
+console.log('10/10 agentBridge tests passed')

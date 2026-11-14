@@ -2501,3 +2501,649 @@ async fn test_6_hub_0026_skill_groups_body_preview_revocation_and_approval_repla
 
     hub_task.abort();
 }
+
+#[derive(Default)]
+struct HubStarMockState {
+    astraea_proxy_healthy: AtomicBool,
+    agents_sync_calls: Mutex<Vec<(String, Value)>>,
+    access_req_calls: Mutex<Vec<(String, Value)>>,
+    astraea_turn_calls: Mutex<Vec<(String, String, Value)>>,
+    llm_completion_calls: Mutex<Vec<(String, Value)>>,
+    tg_send_calls: Mutex<Vec<(String, Value)>>,
+    tg_replies_calls: Mutex<Vec<String>>,
+    queued_tg_replies: Mutex<Vec<Value>>,
+}
+
+#[tokio::test]
+async fn test_7_hub_first_star_topology_5_legs_bundles_mcp_groups_and_telegram_broker() {
+    use axum::response::IntoResponse;
+    use tokio::io::copy_bidirectional;
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::accept_hdr_async;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as WsHandshakeRequest, Response as WsHandshakeResponse,
+    };
+
+    let dir = unique_temp_dir("hubstar");
+    let db = Database::in_memory().unwrap();
+    let seeded = seed_newsroom_fixture(&db);
+    let vault = secrets::SecretBox::from_bytes([0x77; 32], None);
+
+    let hub_mock = Arc::new(HubStarMockState::default());
+    hub_mock.astraea_proxy_healthy.store(true, Ordering::Relaxed);
+    hub_mock.queued_tg_replies.lock().unwrap().push(json!({
+        "id": 701,
+        "bot": "newsman_bot",
+        "correlation_id": "corr-hub-star-701",
+        "payload": {
+            "chat_id": "-100999",
+            "message_thread_id": 808,
+            "text": "Tổng hợp vĩ mô sáng nay qua Hub Cygnus"
+        }
+    }));
+
+    let hm = Arc::clone(&hub_mock);
+    let http_router = Router::new()
+        .route(
+            "/v1/app-connectors/lnc-newsman/agents/sync",
+            post(
+                |State(s): State<Arc<HubStarMockState>>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let count = body
+                        .get("agents")
+                        .and_then(Value::as_array)
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    s.agents_sync_calls.lock().unwrap().push((auth, body));
+                    Json(json!({ "ok": true, "synced": count }))
+                },
+            ),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/effective-bundle",
+            get(|State(_s): State<Arc<HubStarMockState>>| async move {
+                Json(json!({
+                    "ok": true,
+                    "app_id": "lnc-newsman",
+                    "astraea_bridge_ready": true,
+                    "ws_relay_path": "/v1/app-connectors/lnc-newsman/ws",
+                    "app_agents_proxy_path": "/v1/app-agents/lnc-newsman",
+                    "mcp_endpoint_path": "/mcp",
+                    "llm_base_path": "/v1",
+                    "telegram_send_path": "/v1/app-connectors/lnc-newsman/telegram/send",
+                    "telegram_replies_path": "/v1/app-connectors/lnc-newsman/telegram/replies",
+                    "capability_bundles": [
+                        {
+                            "slug": "bundle-lnc-newsman",
+                            "name": "Newsman Editorial Bundle",
+                            "display_name": "Gói Tòa soạn & Vĩ mô LNC Newsman",
+                            "description": "Full editorial intelligence, Hub models, and Cygnus channel.",
+                            "icon": "📰",
+                            "skill_group_slugs": ["vn-macro-tax"],
+                            "mcp_group_slugs": ["newsman-editorial"],
+                            "allowed_model_aliases": ["gpt-5-hub-star", "claude-sonnet-hub"],
+                            "allowed_channels": ["telegram:cygnus"],
+                            "status": "granted",
+                            "granted": true
+                        }
+                    ],
+                    "mcp_groups": [
+                        {
+                            "slug": "newsman-editorial",
+                            "name": "Newsman Editorial MCP",
+                            "display_name": "Nhóm MCP Tòa soạn & Obsidian",
+                            "description": "Read newsroom feeds, tax calendar, and propose agent notes.",
+                            "category": "editorial",
+                            "icon": "🧩",
+                            "patterns": ["newsman__*", "obsidian__agent_*"],
+                            "item_count": 2,
+                            "status": "granted",
+                            "granted": true
+                        }
+                    ],
+                    "allowed_mcp_tools": ["newsman__*", "obsidian__agent_*"],
+                    "allowed_model_aliases": ["gpt-5-hub-star", "claude-sonnet-hub"],
+                    "channel_grants": ["telegram:cygnus"],
+                    "skill_groups": [
+                        {
+                            "slug": "vn-macro-tax",
+                            "name": "VN Macro & Tax",
+                            "display_name": "Vĩ mô & Thuế VN",
+                            "description": "Kỹ năng phân tích vĩ mô và lịch thuế Việt Nam.",
+                            "category": "macro",
+                            "icon": "📊",
+                            "granted": true,
+                            "skill_slugs": ["vn-tax-brief"]
+                        }
+                    ],
+                    "skills": [
+                        {
+                            "slug": "vn-tax-brief",
+                            "name": "VN Tax Brief",
+                            "display_name": "Bản tin Thuế VN",
+                            "description": "Grounded tax brief playbook.",
+                            "category": "tax",
+                            "group_slugs": ["vn-macro-tax"],
+                            "granted": true,
+                            "version": "2.0.0",
+                            "source": "hub",
+                            "body_md": "# VN Tax Brief\nAlways preserve verified=false disclaimer."
+                        }
+                    ]
+                }))
+            }),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/access-requests",
+            get(|| async move { Json(json!({ "ok": true, "data": [] })) }).post(
+                |State(s): State<Arc<HubStarMockState>>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    let idx = {
+                        let mut calls = s.access_req_calls.lock().unwrap();
+                        calls.push((auth, body));
+                        calls.len()
+                    };
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "ok": true,
+                            "request_id": format!("hub-star-req-{idx}"),
+                            "approval_request_id": format!("appr-star-{idx}"),
+                            "status": "pending"
+                        })),
+                    )
+                },
+            ),
+        )
+        .route(
+            "/v1/models",
+            get(|headers: axum::http::HeaderMap| async move {
+                let auth = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                if auth != "Bearer hub-star-secret-token" {
+                    return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" })))
+                        .into_response();
+                }
+                Json(json!({
+                    "object": "list",
+                    "data": [
+                        { "id": "gpt-5-hub-star", "object": "model", "owned_by": "hub" },
+                        { "id": "claude-sonnet-hub", "object": "model", "owned_by": "hub" }
+                    ]
+                }))
+                .into_response()
+            }),
+        )
+        .route(
+            "/v1/app-agents/lnc-newsman/threads/{thread_id}/turns",
+            post(
+                |State(s): State<Arc<HubStarMockState>>, axum::extract::Path(thread_id): axum::extract::Path<String>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    s.astraea_turn_calls
+                        .lock()
+                        .unwrap()
+                        .push((thread_id, auth, body));
+                    if !s.astraea_proxy_healthy.load(Ordering::Relaxed) {
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({ "ok": false, "error": "astraea_unavailable" })),
+                        )
+                            .into_response();
+                    }
+                    Json(json!({
+                        "ok": true,
+                        "messages": [
+                            {
+                                "sender_slug": "macro-argus",
+                                "content": "Astraea Hub Proxy OK",
+                                "model_used": "gpt-5-hub-star"
+                            }
+                        ]
+                    }))
+                    .into_response()
+                },
+            ),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(
+                |State(s): State<Arc<HubStarMockState>>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    s.llm_completion_calls.lock().unwrap().push((auth, body));
+                    Json(json!({
+                        "id": "chatcmpl-hub-star",
+                        "model": "gpt-5-hub-star",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hub Standby Fallback OK"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    }))
+                },
+            ),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/telegram/replies",
+            post(
+                |State(s): State<Arc<HubStarMockState>>, headers: axum::http::HeaderMap| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    s.tg_replies_calls.lock().unwrap().push(auth);
+                    let mut q = s.queued_tg_replies.lock().unwrap();
+                    let out = q.clone();
+                    q.clear();
+                    Json(json!({ "ok": true, "replies": out }))
+                },
+            ),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/telegram/send",
+            post(
+                |State(s): State<Arc<HubStarMockState>>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    s.tg_send_calls.lock().unwrap().push((auth, body));
+                    Json(json!({ "ok": true }))
+                },
+            ),
+        )
+        .with_state(hm);
+
+    let axum_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let axum_addr = axum_listener.local_addr().unwrap();
+    let axum_task = tokio::spawn(async move {
+        let _ = axum::serve(axum_listener, http_router).await;
+    });
+
+    // Multiplex HTTP + WS on ONE single Hub listener address (`hub_addr`), proving all 5 legs
+    // derive automatically from a single `hub_url` (`http://{hub_addr}`).
+    let mux_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hub_addr = mux_listener.local_addr().unwrap();
+    let (tx_ws, mut rx_ws) = mpsc::channel(4);
+
+    let mux_task = tokio::spawn(async move {
+        while let Ok((mut client_stream, _)) = mux_listener.accept().await {
+            let tx_c = tx_ws.clone();
+            tokio::spawn(async move {
+                let mut peek_buf = [0u8; 2048];
+                let mut n = 0usize;
+                for _ in 0..25 {
+                    match client_stream.peek(&mut peek_buf).await {
+                        Ok(read) if read > 0 => {
+                            n = read;
+                            if peek_buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                let head = String::from_utf8_lossy(&peek_buf[..n]).to_ascii_lowercase();
+                if head.contains("upgrade: websocket") && head.contains("/v1/app-connectors/lnc-newsman/ws") {
+                    let captured_uri = Arc::new(Mutex::new(String::new()));
+                    let captured_auth = Arc::new(Mutex::new(String::new()));
+                    let captured_app = Arc::new(Mutex::new(String::new()));
+                    let u_c = Arc::clone(&captured_uri);
+                    let a_c = Arc::clone(&captured_auth);
+                    let p_c = Arc::clone(&captured_app);
+                    if let Ok(ws_stream) = accept_hdr_async(
+                        client_stream,
+                        move |req: &WsHandshakeRequest, resp: WsHandshakeResponse| {
+                            *u_c.lock().unwrap() = req.uri().path().to_string();
+                            *a_c.lock().unwrap() = req
+                                .headers()
+                                .get("authorization")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            *p_c.lock().unwrap() = req
+                                .headers()
+                                .get("x-lnc-app-id")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            Ok(resp)
+                        },
+                    )
+                    .await
+                    {
+                        let uri = captured_uri.lock().unwrap().clone();
+                        let auth = captured_auth.lock().unwrap().clone();
+                        let app_hdr = captured_app.lock().unwrap().clone();
+                        let _ = tx_c.send((ws_stream, uri, auth, app_hdr)).await;
+                    }
+                } else if let Ok(mut upstream) = tokio::net::TcpStream::connect(axum_addr).await {
+                    let _ = copy_bidirectional(&mut client_stream, &mut upstream).await;
+                }
+            });
+        }
+    });
+
+    // Strict SSRF `Fetcher::public_only()` without explicit `allowed_hosts`:
+    // configuring `hub_url = "http://{hub_addr}"` alone must auto-allowlist `127.0.0.1` across all legs!
+    let state = build_test_state(dir, db, Fetcher::public_only(), Some(vault));
+    let app = crate::router(state.clone());
+    let cookie = login_cookie(&app).await;
+
+    // 7A. 1-Click Hub-First config (`hub_url` + `hub_token` only; clear direct overrides).
+    let (st_cfg, cfg_body) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/bridge-config",
+        Some(json!({
+            "hub_url": format!("http://{hub_addr}"),
+            "hub_token": "hub-star-secret-token",
+            "astraea_url": "",
+            "llm_base_url": "",
+        })),
+    )
+    .await;
+    assert_eq!(st_cfg, StatusCode::OK, "{cfg_body}");
+    assert_eq!(cfg_body["has_hub_token"], true);
+    assert_eq!(cfg_body["relay_route"], "hub");
+    assert_eq!(cfg_body["routing"]["astraea_http"], "hub");
+    assert_eq!(cfg_body["routing"]["astraea_ws"], "hub");
+    assert_eq!(cfg_body["routing"]["models"], "hub");
+    assert_eq!(cfg_body["routing"]["skills_and_mcp"], "hub");
+
+    // 7B. Leg 4: `/skills/sync` pushes agents to `/agents/sync` & consumes `/effective-bundle`.
+    let (st_sync, sync_body) =
+        authed_json(&app, &cookie, "POST", "/api/app-agents/skills/sync", Some(json!({}))).await;
+    assert_eq!(st_sync, StatusCode::OK, "{sync_body}");
+    assert_eq!(sync_body["synced"], true, "{sync_body}");
+    assert_eq!(sync_body["bundle_synced"], true, "{sync_body}");
+    assert_eq!(sync_body["sync_mode"], "hub_effective_bundle", "{sync_body}");
+    assert!(sync_body["agents_synced"].as_u64().unwrap_or(0) >= 1, "{sync_body}");
+    assert_eq!(sync_body["astraea_bridge_ready"], true);
+    assert_eq!(
+        sync_body["capability_bundles"][0]["slug"],
+        "bundle-lnc-newsman"
+    );
+    assert_eq!(sync_body["capability_bundles"][0]["granted"], true);
+    assert_eq!(sync_body["mcp_groups"][0]["slug"], "newsman-editorial");
+    assert_eq!(sync_body["allowed_mcp_tools"], json!(["newsman__*", "obsidian__agent_*"]));
+    assert_eq!(sync_body["channel_grants"], json!(["telegram:cygnus"]));
+    assert!(
+        sync_body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["slug"] == "vn-tax-brief" && s["granted"] == true)
+    );
+    {
+        let agent_calls = hub_mock.agents_sync_calls.lock().unwrap();
+        assert!(!agent_calls.is_empty(), "must push agents via /agents/sync");
+        assert_eq!(agent_calls[0].0, "Bearer hub-star-secret-token");
+        assert!(!agent_calls[0].1["agents"].as_array().unwrap().is_empty());
+    }
+
+    // Leg 3: `GET /api/app-agents/models` reads `{hub}/v1/models` with Bearer hub_token.
+    let (st_models, models_body) =
+        authed_json(&app, &cookie, "GET", "/api/app-agents/models", None).await;
+    assert_eq!(st_models, StatusCode::OK, "{models_body}");
+    let model_ids: Vec<&str> = models_body["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m.as_str().or_else(|| m["id"].as_str()))
+        .collect();
+    assert!(model_ids.contains(&"gpt-5-hub-star"), "{models_body}");
+    assert!(model_ids.contains(&"claude-sonnet-hub"), "{models_body}");
+
+    // 7C. 6-kind `/access-requests` (`capability_bundle`, `mcp_group`, `model_alias`, `channel`).
+    for (kind, slug) in [
+        ("capability_bundle", "bundle-lnc-newsman"),
+        ("mcp_group", "newsman-editorial"),
+        ("model_alias", "gpt-5.4-pro"),
+        ("channel", "telegram:cygnus"),
+    ] {
+        let (st_r, req_body) = authed_json(
+            &app,
+            &cookie,
+            "POST",
+            "/api/app-agents/skills/access-requests",
+            Some(json!({
+                "target_kind": kind,
+                "target_slug": slug,
+                "reason": "Hub Star verification"
+            })),
+        )
+        .await;
+        assert_eq!(st_r, StatusCode::OK, "{req_body}");
+        assert_eq!(req_body["request"]["target_kind"], kind);
+        assert_eq!(req_body["request"]["target_slug"], slug);
+        assert_eq!(req_body["request"]["status"], "pending");
+    }
+    assert_eq!(hub_mock.access_req_calls.lock().unwrap().len(), 4);
+
+    // 7D. `POST /bridge-config/probe` verifies `astraea.detail == "via_hub"`, `hub.ok`, `llm.ok`.
+    let (st_probe, probe_body) =
+        authed_json(&app, &cookie, "POST", "/api/app-agents/bridge-config/probe", Some(json!({}))).await;
+    assert_eq!(st_probe, StatusCode::OK, "{probe_body}");
+    assert_eq!(probe_body["hub"]["ok"], true, "{probe_body}");
+    assert_eq!(probe_body["astraea"]["ok"], true, "{probe_body}");
+    assert_eq!(probe_body["astraea"]["detail"], "via_hub", "{probe_body}");
+    assert_eq!(probe_body["llm"]["ok"], true, "{probe_body}");
+    assert_eq!(probe_body["relay_route"], "hub");
+    assert_eq!(probe_body["routing"]["astraea_http"], "hub");
+
+    // 7E. Leg 1: Astraea HTTP Turn proxy via Hub -> fallback to Hub Standby on Astraea 503.
+    let (st_thr, thr_body) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/threads",
+        Some(json!({
+            "kind": "direct",
+            "title": "Hub Star Routing Thread",
+            "member_slugs": ["macro-argus"],
+            "discussion_mode": "mention_or_lead",
+        })),
+    )
+    .await;
+    assert_eq!(st_thr, StatusCode::OK, "{thr_body}");
+    let tid = thr_body["thread"]["id"].as_str().unwrap().to_string();
+
+    let (st_t1, t1_body) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/turns"),
+        Some(json!({ "text": "Báo cáo lãi suất qua Hub proxy" })),
+    )
+    .await;
+    assert_eq!(st_t1, StatusCode::OK, "{t1_body}");
+    assert_eq!(t1_body["messages"][0]["content"], "Astraea Hub Proxy OK", "{t1_body}");
+    {
+        let turn_calls = hub_mock.astraea_turn_calls.lock().unwrap();
+        assert_eq!(turn_calls.len(), 1);
+        assert_eq!(turn_calls[0].0, tid);
+        assert_eq!(turn_calls[0].1, "Bearer hub-star-secret-token");
+    }
+
+    // Flip Astraea proxy unhealthy (503) -> turn falls back cleanly to Hub Standby `/v1/chat/completions`.
+    hub_mock.astraea_proxy_healthy.store(false, Ordering::Relaxed);
+    let (st_t2, t2_body) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/turns"),
+        Some(json!({ "text": "Fallback sang Hub standby" })),
+    )
+    .await;
+    assert_eq!(st_t2, StatusCode::OK, "{t2_body}");
+    assert_eq!(
+        t2_body["messages"][0]["content"],
+        "Hub Standby Fallback OK",
+        "{t2_body}"
+    );
+    assert_eq!(hub_mock.llm_completion_calls.lock().unwrap().len(), 1);
+
+    // 7F. Leg 5: Hub Cygnus Telegram Broker (`cygnus_poll` + empty `cygnus_url` -> `telegram_route == "hub_cygnus"`).
+    let (st_tg, tg_cfg) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/telegram/config",
+        Some(json!({
+            "transport_mode": "cygnus_poll",
+            "cygnus_url": "",
+            "chat_policy": "open",
+        })),
+    )
+    .await;
+    assert_eq!(st_tg, StatusCode::OK, "{tg_cfg}");
+    assert_eq!(tg_cfg["telegram_route"], "hub_cygnus", "{tg_cfg}");
+
+    let (st_route, _) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/telegram/routes",
+        Some(json!({
+            "transport_mode": "cygnus_poll",
+            "policy": "open",
+            "chat_id": "-100999",
+            "message_thread_id": 808,
+            "agent_slug": "macro-argus",
+            "bot_name": "newsman_bot",
+            "enabled": true,
+        })),
+    )
+    .await;
+    assert_eq!(st_route, StatusCode::OK);
+
+    let cygnus_polled = agent_bridge::poll_cygnus_once(state.clone()).await.unwrap();
+    assert_eq!(cygnus_polled, 1);
+    {
+        let rcalls = hub_mock.tg_replies_calls.lock().unwrap();
+        assert_eq!(rcalls.as_slice(), ["Bearer hub-star-secret-token"]);
+        let scalls = hub_mock.tg_send_calls.lock().unwrap();
+        assert_eq!(scalls.len(), 1);
+        assert_eq!(scalls[0].0, "Bearer hub-star-secret-token");
+        assert_eq!(scalls[0].1["payload"]["message_thread_id"], 808);
+    }
+
+    // 7G. Leg 2: Hub Outbound WSS Reverse Relay + `hub_token`-re-signed `v4s` grant!
+    let relay_worker = agent_bridge::spawn_relay_worker(state.clone());
+    let (mut server_ws, ws_uri, ws_auth, ws_app) =
+        tokio::time::timeout(Duration::from_secs(5), rx_ws.recv())
+            .await
+            .expect("Hub WSS relay must connect")
+            .expect("WS channel open");
+    assert_eq!(ws_uri, "/v1/app-connectors/lnc-newsman/ws");
+    assert_eq!(ws_auth, "Bearer hub-star-secret-token");
+    assert_eq!(ws_app, "lnc-newsman");
+
+    let hello_raw = tokio::time::timeout(Duration::from_secs(5), server_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let hello: Value = serde_json::from_str(hello_raw.to_text().unwrap()).unwrap();
+    assert_eq!(hello["type"], "hello");
+    assert_eq!(hello["app_id"], "lnc-newsman");
+
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let (_, live_cfg) = authed_json(&app, &cookie, "GET", "/api/app-agents/bridge-config", None).await;
+    assert_eq!(live_cfg["mode"], "astraea_relay");
+    assert_eq!(live_cfg["relay_connected"], true);
+    assert_eq!(live_cfg["relay_route"], "hub");
+
+    // Sign `v4s` grant using `hub_token` (`hub-star-secret-token`) instead of `astraea_token`:
+    let now_ts = Utc::now().timestamp();
+    let vn_ctx = connector::ResourceCtx {
+        regions: Some(vec!["vn".into()]),
+        topics: None,
+    };
+    let scopes = vec!["newsman:read".to_string()];
+    let hub_sig = connector::sign_v4s(
+        "hub-star-secret-token",
+        "lnc-newsman",
+        "macro-argus",
+        "owner",
+        "lnc-newsman",
+        now_ts,
+        "nonce-hub-star-ws-1",
+        &scopes,
+        &vn_ctx,
+    );
+    let hub_grant = connector::V4sGrant {
+        version: "v4s".into(),
+        audience: "lnc-newsman".into(),
+        caller_agent: "macro-argus".into(),
+        delegated_user: "owner".into(),
+        app_id: "lnc-newsman".into(),
+        timestamp: now_ts,
+        nonce: "nonce-hub-star-ws-1".into(),
+        scopes,
+        resource_ctx: serde_json::to_value(&vn_ctx).unwrap(),
+        signature: hub_sig,
+    };
+    server_ws
+        .send(WsMessage::Text(
+            json!({
+                "type": "tool_call",
+                "call_id": "c_hub_ws_1",
+                "tool_name": "newsman__latest_articles",
+                "arguments": { "limit": 20 },
+                "grant": hub_grant,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let ws_res_raw = tokio::time::timeout(Duration::from_secs(5), server_ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ws_res: Value = serde_json::from_str(ws_res_raw.to_text().unwrap()).unwrap();
+    assert_eq!(ws_res["type"], "tool_result");
+    assert_eq!(ws_res["call_id"], "c_hub_ws_1");
+    assert_eq!(ws_res["is_error"], false, "{ws_res}");
+    let art_ids: Vec<i64> = ws_res["result"]["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_i64().unwrap())
+        .collect();
+    assert!(art_ids.contains(&seeded.vn_fin_art));
+    assert!(art_ids.contains(&seeded.vn_hcmc_fin_art));
+    assert!(!art_ids.contains(&seeded.us_fin_art));
+
+    relay_worker.abort();
+    mux_task.abort();
+    axum_task.abort();
+}

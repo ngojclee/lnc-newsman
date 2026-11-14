@@ -397,6 +397,16 @@ CREATE TABLE IF NOT EXISTS app_agent_skill_groups_cache (
 );
 "#;
 
+pub const MIGRATION_0024_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS app_agent_hub_bundle_cache (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO app_agent_hub_bundle_cache (id, payload_json, synced_at)
+VALUES (1, '{}', '');
+"#;
+
 pub fn seed_defaults(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO app_agent_bridge_config (id, default_model, active_engine_status) VALUES (1, 'gpt-5.4-mini', 'hub_standby')",
@@ -810,6 +820,126 @@ pub struct SkillAccessRequest {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HubMcpGroupSummary {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub item_count: usize,
+    #[serde(default)]
+    pub granted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HubCapabilityBundleSummary {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub skill_group_slugs: Vec<String>,
+    #[serde(default)]
+    pub mcp_group_slugs: Vec<String>,
+    #[serde(default)]
+    pub allowed_model_aliases: Vec<String>,
+    #[serde(default)]
+    pub allowed_channels: Vec<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub granted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HubEffectiveBundleCache {
+    #[serde(default)]
+    pub astraea_bridge_ready: bool,
+    #[serde(default)]
+    pub ws_relay_path: String,
+    #[serde(default)]
+    pub app_agents_proxy_path: String,
+    #[serde(default)]
+    pub mcp_endpoint_path: String,
+    #[serde(default)]
+    pub llm_base_path: String,
+    #[serde(default)]
+    pub telegram_send_path: String,
+    #[serde(default)]
+    pub telegram_replies_path: String,
+    #[serde(default)]
+    pub capability_bundles: Vec<HubCapabilityBundleSummary>,
+    #[serde(default)]
+    pub mcp_groups: Vec<HubMcpGroupSummary>,
+    #[serde(default)]
+    pub allowed_mcp_tools: Vec<String>,
+    #[serde(default)]
+    pub allowed_model_aliases: Vec<String>,
+    #[serde(default)]
+    pub channel_grants: Vec<String>,
+    #[serde(default)]
+    pub synced_at: String,
+}
+
+fn load_hub_bundle_cache_db(conn: &Connection) -> HubEffectiveBundleCache {
+    conn.query_row(
+        "SELECT payload_json, synced_at FROM app_agent_hub_bundle_cache WHERE id = 1",
+        [],
+        |row| {
+            let raw: String = row.get(0)?;
+            let synced: String = row.get(1)?;
+            Ok((raw, synced))
+        },
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(|(raw, synced)| {
+        let mut parsed = serde_json::from_str::<HubEffectiveBundleCache>(&raw).ok()?;
+        if parsed.synced_at.trim().is_empty() {
+            parsed.synced_at = synced;
+        }
+        Some(parsed)
+    })
+    .unwrap_or_default()
+}
+
+fn save_hub_bundle_cache_db(
+    conn: &Connection,
+    bundle: &HubEffectiveBundleCache,
+    now: &str,
+) -> Result<()> {
+    let payload_json = serde_json::to_string(bundle)?;
+    conn.execute(
+        "INSERT INTO app_agent_hub_bundle_cache (id, payload_json, synced_at)
+         VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET
+             payload_json = excluded.payload_json,
+             synced_at = excluded.synced_at",
+        params![payload_json, now],
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TurnOptions {
     pub skill_slugs: Vec<String>,
@@ -1017,6 +1147,11 @@ fn load_bridge_config_db(conn: &Connection) -> BridgeConfigRow {
         cfg.hub_url = std::env::var("AGENT_HUB_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                std::env::var("LNC_HUB_URL")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
             .unwrap_or_default();
     }
     if cfg.telegram_api_base_url.trim().is_empty() {
@@ -1053,6 +1188,12 @@ fn resolve_hub_token(state: &SharedState) -> String {
         .or_else(|| read_vault_secret(state, crate::hub::SECRET_NAME))
         .or_else(|| {
             std::env::var("AGENT_HUB_TOKEN")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            std::env::var("LNC_HUB_TOKEN")
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -1131,11 +1272,85 @@ pub fn bridge_fetcher(state: &SharedState, cfg: &BridgeConfigRow) -> Fetcher {
             }
         }
     }
+    for raw_url in [
+        cfg.hub_url.as_str(),
+        cfg.astraea_url.as_str(),
+        cfg.llm_base_url.as_str(),
+        cfg.cygnus_url.as_str(),
+        state.hub.base_url.as_deref().unwrap_or(""),
+    ] {
+        let trimmed = raw_url.trim();
+        if !trimmed.is_empty()
+            && let Ok(parsed) = url::Url::parse(trimmed)
+            && let Some(host) = parsed.host_str()
+        {
+            let clean = host.trim().to_ascii_lowercase();
+            if !clean.is_empty() && !hosts.contains(&clean) {
+                hosts.push(clean);
+            }
+        }
+    }
     state
         .fetcher
         .clone()
         .with_private_hosts(hosts)
         .with_timeout(Duration::from_secs(45))
+}
+
+fn hub_root_from_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+}
+
+fn effective_hub_base(state: &SharedState, cfg: &BridgeConfigRow) -> String {
+    if !cfg.hub_url.trim().is_empty() {
+        hub_root_from_url(&cfg.hub_url)
+    } else if let Some(ref base) = state.hub.base_url
+        && !base.trim().is_empty()
+    {
+        hub_root_from_url(base)
+    } else {
+        String::new()
+    }
+}
+
+fn to_hub_connector_ws_url(hub_root: &str) -> Option<String> {
+    let trimmed = hub_root_from_url(hub_root);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let ws_base = if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else if trimmed.starts_with("wss://") || trimmed.starts_with("ws://") {
+        trimmed
+    } else {
+        return None;
+    };
+    let ws_suffix = format!("/v1/app-connectors/{APP_ID}/ws");
+    if ws_base.ends_with(&ws_suffix) {
+        Some(ws_base)
+    } else {
+        Some(format!("{ws_base}{ws_suffix}"))
+    }
+}
+
+fn resolve_relay_ws_target(state: &SharedState, cfg: &BridgeConfigRow) -> Option<(String, String)> {
+    if let Some(ws_url) = to_relay_ws_url(&cfg.astraea_url) {
+        let tok = resolve_astraea_token(state);
+        if !tok.is_empty() {
+            return Some((ws_url, tok));
+        }
+    }
+    let hub_root = effective_hub_base(state, cfg);
+    if let Some(ws_url) = to_hub_connector_ws_url(&hub_root) {
+        let tok = resolve_hub_token(state);
+        if !tok.is_empty() {
+            return Some((ws_url, tok));
+        }
+    }
+    None
 }
 
 fn outcome_json(outcome: FetchOutcome) -> Result<Value> {
@@ -1294,6 +1509,73 @@ impl AgentBridgeRuntime {
             "hub_standby"
         }
     }
+
+    pub fn relay_route(&self, state: &SharedState, cfg: &BridgeConfigRow) -> &'static str {
+        if !cfg.astraea_url.trim().is_empty() && !resolve_astraea_token(state).is_empty() {
+            "direct"
+        } else if !effective_hub_base(state, cfg).is_empty() && !resolve_hub_token(state).is_empty()
+        {
+            "hub"
+        } else {
+            "none"
+        }
+    }
+}
+
+fn telegram_route_kind(state: &SharedState, cfg: &BridgeConfigRow) -> &'static str {
+    let mode = cfg.telegram_transport_mode.trim();
+    if mode.is_empty() || mode.eq_ignore_ascii_case("disabled") {
+        return "disabled";
+    }
+    match transport_family(mode) {
+        "cygnus" => {
+            if !cfg.cygnus_url.trim().is_empty() {
+                "direct_cygnus"
+            } else if !effective_hub_base(state, cfg).is_empty()
+                && !resolve_hub_token(state).is_empty()
+            {
+                "hub_cygnus"
+            } else {
+                "disabled"
+            }
+        }
+        "direct" => {
+            if !resolve_telegram_bot_token(state).is_empty() {
+                "direct_bot_api"
+            } else {
+                "disabled"
+            }
+        }
+        _ => "disabled",
+    }
+}
+
+fn bridge_routing_summary(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
+    let has_hub = !effective_hub_base(state, cfg).is_empty() && !resolve_hub_token(state).is_empty();
+    let astraea_http = if !cfg.astraea_url.trim().is_empty() {
+        "direct"
+    } else if has_hub {
+        "hub"
+    } else {
+        "none"
+    };
+    let astraea_ws = state.agent_bridge.relay_route(state, cfg);
+    let models = if !cfg.llm_base_url.trim().is_empty() {
+        "direct"
+    } else if has_hub {
+        "hub"
+    } else {
+        "none"
+    };
+    let skills_and_mcp = if has_hub { "hub" } else { "none" };
+    let telegram = telegram_route_kind(state, cfg);
+    json!({
+        "astraea_http": astraea_http,
+        "astraea_ws": astraea_ws,
+        "models": models,
+        "skills_and_mcp": skills_and_mcp,
+        "telegram": telegram,
+    })
 }
 
 fn persist_bridge_config_row(state: &SharedState, next: BridgeConfigRow) -> Result<BridgeConfigRow> {
@@ -2175,11 +2457,23 @@ fn to_relay_ws_url(raw: &str) -> Option<String> {
 }
 
 fn v4s_verification_secret(state: &SharedState) -> String {
+    let cfg = state.agent_bridge.config();
+    if cfg.astraea_url.trim().is_empty() {
+        let hub_tok = resolve_hub_token(state);
+        if !hub_tok.is_empty() {
+            return hub_tok;
+        }
+    }
     let resolved = connector::resolve(state);
     if let Some(sec) = resolved.delegation_secret.filter(|s| !s.trim().is_empty()) {
         sec
     } else {
-        resolve_astraea_token(state)
+        let ast_tok = resolve_astraea_token(state);
+        if !ast_tok.is_empty() {
+            ast_tok
+        } else {
+            resolve_hub_token(state)
+        }
     }
 }
 
@@ -2366,9 +2660,7 @@ pub fn spawn_relay_worker(state: SharedState) -> tokio::task::JoinHandle<()> {
         let mut backoff_ms = 250u64;
         loop {
             let cfg = state.agent_bridge.config();
-            let ws_url = to_relay_ws_url(&cfg.astraea_url);
-            let token = resolve_astraea_token(&state);
-            let Some(ws_url) = ws_url.filter(|_| !token.is_empty()) else {
+            let Some((ws_url, token)) = resolve_relay_ws_target(&state, &cfg) else {
                 state
                     .agent_bridge
                     .relay_connected
@@ -3528,13 +3820,26 @@ async fn try_forward_turn_to_astraea(
     mentions: &[String],
     active_ctx: Option<&ActiveViewContext>,
 ) -> Option<Vec<AgentMessage>> {
-    let base = cfg.astraea_url.trim().trim_end_matches('/');
-    if base.is_empty() || (!base.starts_with("http://") && !base.starts_with("https://")) {
-        return None;
-    }
+    let direct_base = cfg.astraea_url.trim().trim_end_matches('/');
+    let direct_tok = resolve_astraea_token(state);
+    let hub_root = effective_hub_base(state, cfg);
+    let hub_tok = resolve_hub_token(state);
+    let (url, token) =
+        if !direct_base.is_empty() && (direct_base.starts_with("http://") || direct_base.starts_with("https://")) {
+            let turns_seg = concat!("/api/v1/apps/", "lnc-newsman/threads");
+            (format!("{direct_base}{turns_seg}/{}/turns", thread.id), direct_tok)
+        } else if !hub_root.is_empty()
+            && !hub_tok.is_empty()
+            && (hub_root.starts_with("http://") || hub_root.starts_with("https://"))
+        {
+            (
+                format!("{hub_root}/v1/app-agents/{APP_ID}/threads/{}/turns", thread.id),
+                hub_tok,
+            )
+        } else {
+            return None;
+        };
     let fetcher = bridge_fetcher(state, cfg);
-    let turns_seg = concat!("/api/v1/apps/", "lnc-newsman/threads");
-    let url = format!("{base}{turns_seg}/{}/turns", thread.id);
     let payload = json!({
         "turn_id": turn_id,
         "text": user_msg.content,
@@ -3543,7 +3848,6 @@ async fn try_forward_turn_to_astraea(
         "thread": thread,
     })
     .to_string();
-    let token = resolve_astraea_token(state);
     let auth_header = format!("Bearer {token}");
     let headers: Vec<(&str, &str)> = if token.is_empty() {
         vec![("X-LNC-App-Id", APP_ID)]
@@ -4633,11 +4937,18 @@ async fn send_outbound_telegram_reply(
     let fetcher = bridge_fetcher(state, cfg);
     let reply_topic = inbound.message_thread_id.or(route.message_thread_id);
     if transport_family(transport_mode) == "cygnus" {
-        let base = cfg.cygnus_url.trim().trim_end_matches('/');
-        if base.is_empty() {
+        let direct_base = cfg.cygnus_url.trim().trim_end_matches('/');
+        let hub_root = effective_hub_base(state, cfg);
+        let hub_tok = resolve_hub_token(state);
+        let via_hub = direct_base.is_empty();
+        if via_hub && (hub_root.is_empty() || hub_tok.is_empty()) {
             return Ok(());
         }
-        let url = format!("{base}/send");
+        let url = if via_hub {
+            format!("{hub_root}/v1/app-connectors/{APP_ID}/telegram/send")
+        } else {
+            format!("{direct_base}/send")
+        };
         let bot_name = inbound
             .bot_name
             .clone()
@@ -4655,6 +4966,7 @@ async fn send_outbound_telegram_reply(
 
         let mut env_body = json!({
             "bot": bot_name,
+            "bot_slug": bot_name,
             "chat_id": inbound.chat_id,
             "text": reply_text,
             "payload": payload_obj,
@@ -4667,16 +4979,25 @@ async fn send_outbound_telegram_reply(
         }
 
         let body_str = serde_json::to_string(&env_body)?;
-        let cygnus_key = resolve_cygnus_key(state);
-        let headers: Vec<(&str, &str)> = if cygnus_key.is_empty() {
-            Vec::new()
+        if via_hub {
+            let auth_header = format!("Bearer {}", hub_tok.trim());
+            let headers = vec![("Authorization", auth_header.as_str())];
+            fetcher
+                .post_json_with_headers(&url, &body_str, &headers)
+                .await
+                .map_err(|e| anyhow!("Hub Cygnus POST /telegram/send failed: {}", e.code()))?;
         } else {
-            vec![("x-gateway-key", cygnus_key.as_str())]
-        };
-        fetcher
-            .post_json_with_headers(&url, &body_str, &headers)
-            .await
-            .map_err(|e| anyhow!("Cygnus outbound POST /send failed: {}", e.code()))?;
+            let cygnus_key = resolve_cygnus_key(state);
+            let headers: Vec<(&str, &str)> = if cygnus_key.is_empty() {
+                Vec::new()
+            } else {
+                vec![("x-gateway-key", cygnus_key.as_str())]
+            };
+            fetcher
+                .post_json_with_headers(&url, &body_str, &headers)
+                .await
+                .map_err(|e| anyhow!("Cygnus outbound POST /send failed: {}", e.code()))?;
+        }
     } else {
         let token = resolve_telegram_bot_token(state);
         if token.is_empty() {
@@ -4831,10 +5152,35 @@ pub async fn poll_direct_once(state: SharedState) -> Result<usize> {
     Ok(handled)
 }
 
+fn extract_cygnus_reply_items(body: &Value) -> Vec<Value> {
+    if let Some(arr) = body.as_array() {
+        return arr.clone();
+    }
+    for key in ["replies", "items", "updates", "messages"] {
+        if let Some(arr) = body.get(key).and_then(Value::as_array) {
+            return arr.clone();
+        }
+    }
+    if let Some(data) = body.get("data") {
+        if let Some(arr) = data.as_array() {
+            return arr.clone();
+        }
+        for key in ["replies", "items", "updates", "messages"] {
+            if let Some(arr) = data.get(key).and_then(Value::as_array) {
+                return arr.clone();
+            }
+        }
+    }
+    Vec::new()
+}
+
 pub async fn poll_cygnus_once(state: SharedState) -> Result<usize> {
     let cfg = state.agent_bridge.config();
-    let base = cfg.cygnus_url.trim().trim_end_matches('/');
-    if base.is_empty() {
+    let direct_base = cfg.cygnus_url.trim().trim_end_matches('/');
+    let hub_root = effective_hub_base(&state, &cfg);
+    let hub_tok = resolve_hub_token(&state);
+    let via_hub = direct_base.is_empty();
+    if via_hub && (hub_root.is_empty() || hub_tok.is_empty()) {
         return Ok(0);
     }
     let offset = {
@@ -4842,30 +5188,43 @@ pub async fn poll_cygnus_once(state: SharedState) -> Result<usize> {
         get_telegram_offset_db(&db.conn, "cygnus_poll")?
     };
     let bot = cfg.telegram_bot_name.trim();
-    let url = if bot.is_empty() {
-        format!("{base}/replies?after={offset}")
-    } else {
-        format!("{base}/replies?bot={bot}&after={offset}")
-    };
     let fetcher = bridge_fetcher(&state, &cfg);
-    let cygnus_key = resolve_cygnus_key(&state);
-    let headers: Vec<(&str, &str)> = if cygnus_key.is_empty() {
-        Vec::new()
+    let body = if via_hub {
+        let url = format!("{hub_root}/v1/app-connectors/{APP_ID}/telegram/replies");
+        let poll_body = json!({
+            "bot": bot,
+            "bot_slug": bot,
+            "mode": "poll",
+            "limit": 25,
+            "auto_ack": true,
+        })
+        .to_string();
+        let auth_header = format!("Bearer {}", hub_tok.trim());
+        let headers = vec![("Authorization", auth_header.as_str())];
+        let outcome = fetcher
+            .post_json_with_headers(&url, &poll_body, &headers)
+            .await
+            .map_err(|e| anyhow!("Hub Cygnus POST /telegram/replies failed: {}", e.code()))?;
+        outcome_json(outcome)?
     } else {
-        vec![("x-gateway-key", cygnus_key.as_str())]
+        let url = if bot.is_empty() {
+            format!("{direct_base}/replies?after={offset}")
+        } else {
+            format!("{direct_base}/replies?bot={bot}&after={offset}")
+        };
+        let cygnus_key = resolve_cygnus_key(&state);
+        let headers: Vec<(&str, &str)> = if cygnus_key.is_empty() {
+            Vec::new()
+        } else {
+            vec![("x-gateway-key", cygnus_key.as_str())]
+        };
+        let outcome = fetcher
+            .get_with_headers(&url, &headers)
+            .await
+            .map_err(|e| anyhow!("cygnus_poll GET /replies failed: {}", e.code()))?;
+        outcome_json(outcome)?
     };
-    let outcome = fetcher
-        .get_with_headers(&url, &headers)
-        .await
-        .map_err(|e| anyhow!("cygnus_poll GET /replies failed: {}", e.code()))?;
-    let body = outcome_json(outcome)?;
-    let items = body
-        .as_array()
-        .cloned()
-        .or_else(|| body.get("replies").and_then(Value::as_array).cloned())
-        .or_else(|| body.get("items").and_then(Value::as_array).cloned())
-        .or_else(|| body.get("updates").and_then(Value::as_array).cloned())
-        .unwrap_or_default();
+    let items = extract_cygnus_reply_items(&body);
 
     let mut max_next_offset = offset;
     let mut handled = 0usize;
@@ -4922,7 +5281,14 @@ pub fn spawn_telegram_worker(state: SharedState) -> tokio::task::JoinHandle<()> 
 pub fn spawn_background_workers(state: SharedState) {
     let _ = spawn_relay_worker(state.clone());
     let _ = spawn_scheduler_worker(state.clone());
-    let _ = spawn_telegram_worker(state);
+    let _ = spawn_telegram_worker(state.clone());
+    let cfg = state.agent_bridge.config();
+    if !effective_hub_base(&state, &cfg).is_empty() && !resolve_hub_token(&state).is_empty() {
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let _ = sync_with_hub_internal(&state).await;
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4933,6 +5299,12 @@ fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
     let relay_connected = state.agent_bridge.relay_connected.load(Ordering::Relaxed);
     let astraea_reachable = state.agent_bridge.astraea_reachable.load(Ordering::Relaxed);
     let mode = state.agent_bridge.status_mode(cfg);
+    let relay_route = state.agent_bridge.relay_route(state, cfg);
+    let routing = bridge_routing_summary(state, cfg);
+    let hub_bundle = {
+        let db = state.db.lock().expect("database lock poisoned");
+        load_hub_bundle_cache_db(&db.conn)
+    };
     let has_astraea_token = !resolve_astraea_token(state).is_empty();
     let has_hub_token = !resolve_hub_token(state).is_empty();
     let has_llm_api_key = read_vault_secret(state, SEC_LLM_KEY).is_some()
@@ -4944,11 +5316,15 @@ fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
         "mode": mode,
         "relay_connected": relay_connected,
         "astraea_reachable": astraea_reachable,
+        "relay_route": relay_route,
+        "routing": routing,
+        "hub_bundle": hub_bundle,
         "secret_store_open": state.secrets.is_some(),
         "status": {
             "mode": mode,
             "relay_connected": relay_connected,
             "astraea_reachable": astraea_reachable,
+            "relay_route": relay_route,
         },
         "astraea_url": cfg.astraea_url,
         "hub_url": cfg.hub_url,
@@ -5043,7 +5419,16 @@ pub(crate) async fn put_bridge_config(
     }
 
     match persist_bridge_config_row(&state, next) {
-        Ok(saved) => Json(bridge_config_response(&state, &saved)).into_response(),
+        Ok(saved) => {
+            if !effective_hub_base(&state, &saved).is_empty() && !resolve_hub_token(&state).is_empty()
+            {
+                let bg_state = state.clone();
+                tokio::spawn(async move {
+                    let _ = sync_with_hub_internal(&bg_state).await;
+                });
+            }
+            Json(bridge_config_response(&state, &saved)).into_response()
+        }
         Err(err) => internal_error(err),
     }
 }
@@ -5051,10 +5436,10 @@ pub(crate) async fn put_bridge_config(
 pub(crate) async fn get_models(State(state): State<SharedState>) -> Response {
     let cfg = state.agent_bridge.config();
     let mut models: Vec<String> = Vec::new();
-    let base = if !cfg.hub_url.trim().is_empty() {
-        Some((cfg.hub_url.trim().to_string(), resolve_hub_token(&state)))
-    } else if !cfg.llm_base_url.trim().is_empty() {
+    let base = if !cfg.llm_base_url.trim().is_empty() {
         Some((cfg.llm_base_url.trim().to_string(), resolve_llm_key(&state)))
+    } else if !cfg.hub_url.trim().is_empty() {
+        Some((cfg.hub_url.trim().to_string(), resolve_hub_token(&state)))
     } else if let Some(ref hub_base) = state.hub.base_url
         && !hub_base.trim().is_empty()
     {
@@ -5135,6 +5520,69 @@ fn valid_agent_slug(slug: &str) -> bool {
     !s.is_empty() && s.len() <= 64 && s.bytes().all(is_slug_char)
 }
 
+fn agent_sync_blueprint_json(a: &AppAgentConfig) -> Value {
+    json!({
+        "slug": a.slug,
+        "display_name": a.display_name,
+        "description": a.description,
+        "emoji": a.emoji,
+        "color": a.color,
+        "reply_language": a.reply_language,
+        "soul_md": a.soul_md,
+        "app_role_addendum_md": a.app_role_addendum_md,
+        "sync_blueprint": a.sync_blueprint_to_hub,
+        "sync_blueprint_to_hub": a.sync_blueprint_to_hub,
+        "runtime_kind": a.runtime_kind,
+        "primary_model": a.primary_model,
+        "backup_model": a.backup_model,
+        "reasoning_effort": a.reasoning_effort,
+        "max_tool_steps": a.max_tool_steps,
+        "allowed_tools": a.enabled_app_tools,
+        "enabled_app_tools": a.enabled_app_tools,
+        "enabled_mcp_tools": a.enabled_mcp_tools,
+        "enabled_skills": a.enabled_skills,
+        "enabled_skill_groups": a.enabled_skill_groups,
+        "default_resource_ctx": a.default_resource_ctx,
+        "memory_mode": a.memory_mode,
+    })
+}
+
+async fn push_agents_to_hub(
+    fetcher: &Fetcher,
+    hub_root: &str,
+    token: &str,
+    agents: &[AppAgentConfig],
+) -> usize {
+    let to_sync: Vec<Value> = agents
+        .iter()
+        .filter(|a| a.sync_blueprint_to_hub)
+        .map(agent_sync_blueprint_json)
+        .collect();
+    if to_sync.is_empty() || hub_root.is_empty() {
+        return 0;
+    }
+    let url = format!("{hub_root}/v1/app-connectors/{APP_ID}/agents/sync");
+    let body = json!({ "agents": to_sync }).to_string();
+    let auth_header = format!("Bearer {}", token.trim());
+    let headers: Vec<(&str, &str)> = if token.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![("Authorization", auth_header.as_str())]
+    };
+    match fetcher.post_json_with_headers(&url, &body, &headers).await {
+        Ok(outcome) => outcome_json(outcome)
+            .ok()
+            .and_then(|v| {
+                v.get("synced")
+                    .or_else(|| v.get("count"))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize)
+            })
+            .unwrap_or(to_sync.len()),
+        Err(_) => 0,
+    }
+}
+
 pub(crate) async fn put_agent(
     State(state): State<SharedState>,
     AxumPath(slug): AxumPath<String>,
@@ -5171,15 +5619,14 @@ pub(crate) async fn put_agent(
     };
 
     let cfg = state.agent_bridge.config();
-    if saved.sync_blueprint_to_hub && !cfg.hub_url.trim().is_empty() {
-        let hub_url = format!(
-            "{}/v1/app-connectors/{APP_ID}/bindings/{}",
-            cfg.hub_url.trim().trim_end_matches('/'),
-            saved.slug
-        );
+    let hub_root = effective_hub_base(&state, &cfg);
+    if saved.sync_blueprint_to_hub && !hub_root.is_empty() {
+        let sync_url = format!("{hub_root}/v1/app-connectors/{APP_ID}/agents/sync");
+        let legacy_url = format!("{hub_root}/v1/app-connectors/{APP_ID}/bindings/{}", saved.slug);
         let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(4));
         let token = resolve_hub_token(&state);
-        let binding_payload = json!({
+        let sync_payload = json!({ "agents": [agent_sync_blueprint_json(&saved)] }).to_string();
+        let legacy_payload = json!({
             "agent_slug": saved.slug,
             "display_name": saved.display_name,
             "primary_model": saved.primary_model,
@@ -5197,14 +5644,22 @@ pub(crate) async fn put_agent(
             } else {
                 vec![("Authorization", auth_header.as_str())]
             };
-            let _ = fetcher
-                .request_json(
-                    reqwest::Method::PUT,
-                    &hub_url,
-                    Some(&binding_payload),
-                    &headers,
-                )
-                .await;
+            match fetcher
+                .post_json_with_headers(&sync_url, &sync_payload, &headers)
+                .await
+            {
+                Err(crate::fetch::FetchError::HttpStatus(404 | 405)) => {
+                    let _ = fetcher
+                        .request_json(
+                            reqwest::Method::PUT,
+                            &legacy_url,
+                            Some(&legacy_payload),
+                            &headers,
+                        )
+                        .await;
+                }
+                _ => {}
+            }
         });
     }
 
@@ -6093,6 +6548,7 @@ pub(crate) async fn post_schedule_run_now(
 }
 
 fn telegram_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
+    let telegram_route = telegram_route_kind(state, cfg);
     let has_bot_token = !resolve_telegram_bot_token(state).is_empty();
     let has_webhook_secret = !resolve_telegram_webhook_secret(state).is_empty();
     let has_cygnus_key = !resolve_cygnus_key(state).is_empty();
@@ -6102,6 +6558,7 @@ fn telegram_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value
         "api_base_url": cfg.telegram_api_base_url,
         "cygnus_url": cfg.cygnus_url,
         "chat_policy": cfg.telegram_chat_policy,
+        "telegram_route": telegram_route,
         "has_bot_token": has_bot_token,
         "has_webhook_secret": has_webhook_secret,
         "has_cygnus_key": has_cygnus_key,
@@ -6114,6 +6571,7 @@ fn telegram_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value
         "api_base_url": cfg.telegram_api_base_url,
         "cygnus_url": cfg.cygnus_url,
         "chat_policy": cfg.telegram_chat_policy,
+        "telegram_route": telegram_route,
         "has_bot_token": has_bot_token,
         "has_telegram_token": has_bot_token,
         "has_webhook_secret": has_webhook_secret,
@@ -6395,56 +6853,77 @@ pub(crate) async fn post_bridge_probe(State(state): State<SharedState>) -> Respo
     let cfg = state.agent_bridge.config();
     let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(4));
 
-    let hub_base = if !cfg.hub_url.trim().is_empty() {
-        Some(cfg.hub_url.trim().trim_end_matches('/').to_string())
-    } else {
-        state
-            .hub
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.trim_end_matches('/').to_string())
-    };
+    let hub_base_str = effective_hub_base(&state, &cfg);
+    let hub_base = (!hub_base_str.is_empty()).then_some(hub_base_str);
     let hub_token = resolve_hub_token(&state);
+    let mut hub_astraea_ready: Option<bool> = None;
     let hub_res = if let Some(ref base) = hub_base {
         let host = safe_url_host(base);
-        let health_url = format!("{base}/health");
-        match probe_json_get(&fetcher, &health_url, &hub_token).await {
-            Ok((st, _)) => ProbeServiceResult {
-                configured: true,
-                ok: true,
-                url_host: host,
-                status: st,
-                detail: Some("health_ok".into()),
-                models_count: None,
-                relay_connected: Some(state.agent_bridge.relay_connected.load(Ordering::Relaxed)),
-            },
-            Err(first_err) => {
-                let models_url = models_list_url(base);
-                match probe_json_get(&fetcher, &models_url, &hub_token).await {
+        let bundle_url = format!("{base}/v1/app-connectors/{APP_ID}/effective-bundle");
+        match probe_json_get(&fetcher, &bundle_url, &hub_token).await {
+            Ok((st, val)) => {
+                hub_astraea_ready = Some(
+                    val.get("astraea_bridge_ready")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                );
+                ProbeServiceResult {
+                    configured: true,
+                    ok: true,
+                    url_host: host,
+                    status: st,
+                    detail: Some("effective_bundle_ok".into()),
+                    models_count: None,
+                    relay_connected: Some(
+                        state.agent_bridge.relay_connected.load(Ordering::Relaxed),
+                    ),
+                }
+            }
+            Err(bundle_err) => {
+                let health_url = format!("{base}/health");
+                match probe_json_get(&fetcher, &health_url, &hub_token).await {
                     Ok((st, _)) => ProbeServiceResult {
                         configured: true,
                         ok: true,
                         url_host: host,
                         status: st,
-                        detail: Some("models_ok".into()),
+                        detail: Some("health_ok".into()),
                         models_count: None,
                         relay_connected: Some(
                             state.agent_bridge.relay_connected.load(Ordering::Relaxed),
                         ),
                     },
-                    Err(_) => ProbeServiceResult {
-                        configured: true,
-                        ok: false,
-                        url_host: host,
-                        status: None,
-                        detail: Some(first_err),
-                        models_count: None,
-                        relay_connected: Some(
-                            state.agent_bridge.relay_connected.load(Ordering::Relaxed),
-                        ),
-                    },
+                    Err(health_err) => {
+                        let models_url = models_list_url(base);
+                        match probe_json_get(&fetcher, &models_url, &hub_token).await {
+                            Ok((st, _)) => ProbeServiceResult {
+                                configured: true,
+                                ok: true,
+                                url_host: host,
+                                status: st,
+                                detail: Some("models_ok".into()),
+                                models_count: None,
+                                relay_connected: Some(
+                                    state.agent_bridge.relay_connected.load(Ordering::Relaxed),
+                                ),
+                            },
+                            Err(_) => ProbeServiceResult {
+                                configured: true,
+                                ok: false,
+                                url_host: host,
+                                status: None,
+                                detail: Some(if bundle_err == "http_404" || bundle_err == "http_405" {
+                                    health_err
+                                } else {
+                                    bundle_err
+                                }),
+                                models_count: None,
+                                relay_connected: Some(
+                                    state.agent_bridge.relay_connected.load(Ordering::Relaxed),
+                                ),
+                            },
+                        }
+                    }
                 }
             }
         }
@@ -6502,6 +6981,25 @@ pub(crate) async fn post_bridge_probe(State(state): State<SharedState>) -> Respo
                     },
                 }
             }
+        }
+    } else if let Some(ready) = hub_astraea_ready {
+        let hub_host = hub_base.as_deref().and_then(safe_url_host);
+        let ws_ready = state.agent_bridge.relay_connected.load(Ordering::Relaxed);
+        ProbeServiceResult {
+            configured: true,
+            ok: ready || ws_ready,
+            url_host: hub_host,
+            status: hub_res.status,
+            detail: Some(
+                if ready {
+                    "via_hub"
+                } else {
+                    "hub_astraea_not_ready"
+                }
+                .into(),
+            ),
+            models_count: None,
+            relay_connected: Some(ws_ready),
         }
     } else {
         ProbeServiceResult {
@@ -6568,6 +7066,8 @@ pub(crate) async fn post_bridge_probe(State(state): State<SharedState>) -> Respo
     };
 
     let any_ok = hub_res.ok || astraea_res.ok || llm_res.ok;
+    let relay_route = state.agent_bridge.relay_route(&state, &cfg);
+    let routing = bridge_routing_summary(&state, &cfg);
     let report = ConnectionProbeReport {
         ok: any_ok,
         probed_at: Utc::now().to_rfc3339(),
@@ -6575,7 +7075,12 @@ pub(crate) async fn post_bridge_probe(State(state): State<SharedState>) -> Respo
         astraea: astraea_res,
         llm: llm_res,
     };
-    Json(report).into_response()
+    let mut payload = serde_json::to_value(&report).unwrap_or_else(|_| json!({ "ok": any_ok }));
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("relay_route".into(), json!(relay_route));
+        obj.insert("routing".into(), routing);
+    }
+    Json(payload).into_response()
 }
 
 pub(crate) async fn get_workspaces(State(state): State<SharedState>) -> Response {
@@ -6706,15 +7211,25 @@ pub(crate) async fn get_skills(State(state): State<SharedState>) -> Response {
         let db = state.db.lock().expect("database lock poisoned");
         list_skills_db(&db.conn).and_then(|items| {
             let groups = summarize_skill_groups(&db.conn, &items)?;
-            Ok((items, groups))
+            let access_requests = list_access_requests_db(&db.conn)?;
+            let bundle = load_hub_bundle_cache_db(&db.conn);
+            Ok((items, groups, access_requests, bundle))
         })
     };
     match res {
-        Ok((items, groups)) => Json(json!({
+        Ok((items, groups, access_requests, bundle)) => Json(json!({
             "ok": true,
             "items": items,
             "skills": items,
             "groups": groups,
+            "access_requests": access_requests,
+            "capability_bundles": bundle.capability_bundles,
+            "mcp_groups": bundle.mcp_groups,
+            "allowed_mcp_tools": bundle.allowed_mcp_tools,
+            "allowed_model_aliases": bundle.allowed_model_aliases,
+            "channel_grants": bundle.channel_grants,
+            "astraea_bridge_ready": bundle.astraea_bridge_ready,
+            "hub_bundle": bundle,
         }))
         .into_response(),
         Err(err) => internal_error(err),
@@ -7070,174 +7585,465 @@ fn reconcile_hub_access_requests_db(
     Ok(reconciled)
 }
 
-pub(crate) async fn post_skills_sync(State(state): State<SharedState>) -> Response {
-    let cfg = state.agent_bridge.config();
-    let hub_base = if !cfg.hub_url.trim().is_empty() {
-        Some(cfg.hub_url.trim().trim_end_matches('/').to_string())
-    } else {
-        state
-            .hub
-            .base_url
-            .as_deref()
+fn push_unique_trimmed(out: &mut Vec<String>, s: &str) {
+    let trimmed = s.trim();
+    if !trimmed.is_empty() && !out.iter().any(|existing| existing == trimmed) {
+        out.push(trimmed.to_string());
+    }
+}
+
+fn parse_string_list(val: Option<&Value>) -> Vec<String> {
+    let Some(arr) = val.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        if let Some(s) = item.as_str() {
+            push_unique_trimmed(&mut out, s);
+        } else if let Some(s) = item
+            .get("slug")
+            .or_else(|| item.get("name"))
+            .or_else(|| item.get("id"))
+            .or_else(|| item.get("alias"))
+            .or_else(|| item.get("channel"))
+            .or_else(|| item.get("target_slug"))
+            .and_then(Value::as_str)
+        {
+            push_unique_trimmed(&mut out, s);
+        }
+    }
+    out
+}
+
+fn parse_hub_effective_bundle_payload(val: &Value, synced_at: &str) -> HubEffectiveBundleCache {
+    let get_str = |key: &str| {
+        val.get(key)
+            .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let mut capability_bundles = Vec::new();
+    if let Some(arr) = val.get("capability_bundles").and_then(Value::as_array) {
+        for raw in arr {
+            if let Ok(mut b) = serde_json::from_value::<HubCapabilityBundleSummary>(raw.clone()) {
+                if b.slug.trim().is_empty() {
+                    b.slug = raw
+                        .get("bundle_slug")
+                        .or_else(|| raw.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                }
+                if b.name.trim().is_empty() {
+                    b.name = raw
+                        .get("title")
+                        .or_else(|| raw.get("display_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(&b.slug)
+                        .trim()
+                        .to_string();
+                }
+                if b.display_name.trim().is_empty() {
+                    b.display_name = b.name.clone();
+                }
+                if matches!(
+                    b.status.trim().to_ascii_lowercase().as_str(),
+                    "granted" | "approved" | "active" | "enabled"
+                ) {
+                    b.granted = true;
+                }
+                if !b.slug.is_empty() {
+                    capability_bundles.push(b);
+                }
+            }
+        }
+    }
+
+    let mut mcp_groups = Vec::new();
+    if let Some(arr) = val.get("mcp_groups").and_then(Value::as_array) {
+        for raw in arr {
+            if let Ok(mut g) = serde_json::from_value::<HubMcpGroupSummary>(raw.clone()) {
+                if g.slug.trim().is_empty() {
+                    g.slug = raw
+                        .get("group_slug")
+                        .or_else(|| raw.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                }
+                if g.name.trim().is_empty() {
+                    g.name = raw
+                        .get("title")
+                        .or_else(|| raw.get("display_name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(&g.slug)
+                        .trim()
+                        .to_string();
+                }
+                if g.display_name.trim().is_empty() {
+                    g.display_name = g.name.clone();
+                }
+                if g.item_count == 0 && !g.patterns.is_empty() {
+                    g.item_count = g.patterns.len();
+                }
+                if matches!(
+                    g.status.trim().to_ascii_lowercase().as_str(),
+                    "granted" | "approved" | "active" | "enabled"
+                ) {
+                    g.granted = true;
+                }
+                if !g.slug.is_empty() {
+                    mcp_groups.push(g);
+                }
+            }
+        }
+    }
+
+    let allowed_mcp_tools = parse_string_list(val.get("allowed_mcp_tools"));
+    let mut allowed_model_aliases = parse_string_list(val.get("allowed_model_aliases"));
+    if allowed_model_aliases.is_empty() {
+        allowed_model_aliases = parse_string_list(val.get("models"));
+    }
+    let channel_grants = parse_string_list(val.get("channel_grants"));
+    let synced = val
+        .get("synced_at")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(synced_at)
+        .to_string();
+
+    HubEffectiveBundleCache {
+        astraea_bridge_ready: val
+            .get("astraea_bridge_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        ws_relay_path: get_str("ws_relay_path"),
+        app_agents_proxy_path: get_str("app_agents_proxy_path"),
+        mcp_endpoint_path: get_str("mcp_endpoint_path"),
+        llm_base_path: get_str("llm_base_path"),
+        telegram_send_path: get_str("telegram_send_path"),
+        telegram_replies_path: get_str("telegram_replies_path"),
+        capability_bundles,
+        mcp_groups,
+        allowed_mcp_tools,
+        allowed_model_aliases,
+        channel_grants,
+        synced_at: synced,
+    }
+}
+
+fn collect_hub_grants_from_payload(
+    val: &Value,
+    bundle: Option<&HubEffectiveBundleCache>,
+    granted_slugs: &mut Vec<String>,
+    granted_groups: &mut Vec<String>,
+) {
+    if let Some(grants) = val.get("grants").and_then(Value::as_array) {
+        for g in grants {
+            let status = g
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_default();
+            let active = g.get("granted").and_then(Value::as_bool).unwrap_or_else(|| {
+                status.is_empty()
+                    || matches!(
+                        status.as_str(),
+                        "granted" | "approved" | "active" | "enabled"
+                    )
+            });
+            if !active {
+                continue;
+            }
+            if let Some(s) = g.get("skill_slug").and_then(Value::as_str) {
+                push_unique_trimmed(granted_slugs, s);
+            }
+            if let Some(grp) = g.get("group_slug").and_then(Value::as_str) {
+                push_unique_trimmed(granted_groups, grp);
+            }
+            if let Some(kind) = g
+                .get("target_kind")
+                .or_else(|| g.get("kind"))
+                .and_then(Value::as_str)
+                && let Some(slug) = g.get("target_slug").and_then(Value::as_str)
+            {
+                match kind.trim() {
+                    "skill" => push_unique_trimmed(granted_slugs, slug),
+                    "skill_group" | "group" => push_unique_trimmed(granted_groups, slug),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(b) = bundle {
+        for cb in &b.capability_bundles {
+            if cb.granted {
+                for gs in &cb.skill_group_slugs {
+                    push_unique_trimmed(granted_groups, gs);
+                }
+            }
+        }
+    }
+}
+
+async fn fetch_hub_access_requests(fetcher: &Fetcher, base: &str, token: &str) -> Option<Vec<Value>> {
+    let primary = format!("{base}/v1/app-connectors/{APP_ID}/access-requests");
+    let val = match probe_json_get(fetcher, &primary, token).await {
+        Ok((_, v)) => v,
+        Err(err) if matches!(err.as_str(), "http_404" | "http_405") => {
+            let legacy = format!("{base}/v1/app-connectors/{APP_ID}/skill-access-requests");
+            probe_json_get(fetcher, &legacy, token).await.ok()?.1
+        }
+        Err(_) => return None,
+    };
+    val.get("data")
+        .or_else(|| val.get("items"))
+        .or_else(|| val.get("requests"))
+        .and_then(Value::as_array)
+        .cloned()
+}
+
+pub(crate) async fn sync_with_hub_internal(state: &SharedState) -> Result<Value> {
+    let cfg = state.agent_bridge.config();
+    let hub_base = effective_hub_base(state, &cfg);
+    let local_agents = {
+        let db = state.db.lock().expect("database lock poisoned");
+        list_agents_db(&db.conn)?
     };
 
     let mut synced = false;
+    let mut bundle_synced = false;
+    let mut agents_synced = 0usize;
     let mut sync_mode = "offline_cache".to_string();
     let mut offline_detail: Option<String> = None;
 
-    if let Some(base) = hub_base {
-        let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(5));
-        let token = resolve_hub_token(&state);
-        let primary_url = format!("{base}/v1/app-connectors/{APP_ID}/skills");
+    if !hub_base.is_empty() {
+        let fetcher = bridge_fetcher(state, &cfg).with_timeout(Duration::from_secs(5));
+        let token = resolve_hub_token(state);
+        agents_synced = push_agents_to_hub(&fetcher, &hub_base, &token, &local_agents).await;
+
         let mut raw_items: Option<Vec<Value>> = None;
         let mut raw_groups: Option<Vec<Value>> = None;
         let mut raw_requests: Option<Vec<Value>> = None;
+        let mut bundle_update: Option<HubEffectiveBundleCache> = None;
         let mut granted_slugs: Vec<String> = Vec::new();
         let mut granted_groups: Vec<String> = Vec::new();
 
-        match probe_json_get(&fetcher, &primary_url, &token).await {
+        let effective_url = format!("{hub_base}/v1/app-connectors/{APP_ID}/effective-bundle");
+        match probe_json_get(&fetcher, &effective_url, &token).await {
             Ok((_, val)) => {
-                raw_groups = val.get("groups").and_then(Value::as_array).cloned();
+                let now = Utc::now().to_rfc3339();
+                let parsed_bundle = parse_hub_effective_bundle_payload(&val, &now);
+                raw_groups = val
+                    .get("skill_groups")
+                    .or_else(|| val.get("groups"))
+                    .and_then(Value::as_array)
+                    .cloned();
                 raw_items = val
                     .get("skills")
                     .or_else(|| val.get("items"))
                     .or_else(|| val.get("data"))
                     .and_then(Value::as_array)
                     .cloned();
-                if raw_items.is_some() || raw_groups.is_some() {
-                    synced = true;
-                    sync_mode = "hub_app_connector".to_string();
-                }
-            }
-            Err(first_err) => {
-                let fallback_skills = format!("{base}/v1/skills");
-                match probe_json_get(&fetcher, &fallback_skills, &token).await {
-                    Ok((_, sk_val)) => {
-                        raw_groups = sk_val.get("groups").and_then(Value::as_array).cloned();
-                        raw_items = sk_val
-                            .get("skills")
-                            .or_else(|| sk_val.get("items"))
-                            .or_else(|| sk_val.get("data"))
-                            .and_then(Value::as_array)
-                            .cloned();
-                        let bindings_url = format!("{base}/v1/skill-bindings?app_id={APP_ID}");
-                        if let Ok((_, bind_val)) =
-                            probe_json_get(&fetcher, &bindings_url, &token).await
-                            && let Some(bindings) = bind_val
-                                .get("bindings")
-                                .or_else(|| bind_val.get("items"))
-                                .and_then(Value::as_array)
-                        {
-                            for b in bindings {
-                                if let Some(s) = b.get("skill_slug").and_then(Value::as_str) {
-                                    granted_slugs.push(s.trim().to_string());
-                                }
-                                if let Some(g) = b.get("group_slug").and_then(Value::as_str) {
-                                    granted_groups.push(g.trim().to_string());
-                                }
-                            }
-                        }
-                        if raw_items.is_some() {
-                            synced = true;
-                            sync_mode = "hub_legacy".to_string();
-                        }
-                    }
-                    Err(_) => {
-                        offline_detail = Some(first_err);
-                    }
-                }
-            }
-        }
-
-        if offline_detail.is_none() {
-            let requests_url = format!("{base}/v1/app-connectors/{APP_ID}/skill-access-requests");
-            if let Ok((_, req_val)) = probe_json_get(&fetcher, &requests_url, &token).await {
-                raw_requests = req_val
-                    .get("data")
-                    .or_else(|| req_val.get("items"))
-                    .or_else(|| req_val.get("requests"))
+                raw_requests = val
+                    .get("access_requests")
                     .and_then(Value::as_array)
                     .cloned();
+                collect_hub_grants_from_payload(
+                    &val,
+                    Some(&parsed_bundle),
+                    &mut granted_slugs,
+                    &mut granted_groups,
+                );
+                bundle_update = Some(parsed_bundle);
+                synced = true;
+                bundle_synced = true;
+                sync_mode = "hub_effective_bundle".to_string();
+            }
+            Err(_) => {
+                let primary_url = format!("{hub_base}/v1/app-connectors/{APP_ID}/skills");
+                match probe_json_get(&fetcher, &primary_url, &token).await {
+                    Ok((_, val)) => {
+                        raw_groups = val
+                            .get("skill_groups")
+                            .or_else(|| val.get("groups"))
+                            .and_then(Value::as_array)
+                            .cloned();
+                        raw_items = val
+                            .get("skills")
+                            .or_else(|| val.get("items"))
+                            .or_else(|| val.get("data"))
+                            .and_then(Value::as_array)
+                            .cloned();
+                        collect_hub_grants_from_payload(
+                            &val,
+                            None,
+                            &mut granted_slugs,
+                            &mut granted_groups,
+                        );
+                        if raw_items.is_some() || raw_groups.is_some() {
+                            synced = true;
+                            sync_mode = "hub_app_connector".to_string();
+                        }
+                    }
+                    Err(first_err) => {
+                        let fallback_skills = format!("{hub_base}/v1/skills");
+                        match probe_json_get(&fetcher, &fallback_skills, &token).await {
+                            Ok((_, sk_val)) => {
+                                raw_groups = sk_val
+                                    .get("skill_groups")
+                                    .or_else(|| sk_val.get("groups"))
+                                    .and_then(Value::as_array)
+                                    .cloned();
+                                raw_items = sk_val
+                                    .get("skills")
+                                    .or_else(|| sk_val.get("items"))
+                                    .or_else(|| sk_val.get("data"))
+                                    .and_then(Value::as_array)
+                                    .cloned();
+                                let bindings_url =
+                                    format!("{hub_base}/v1/skill-bindings?app_id={APP_ID}");
+                                if let Ok((_, bind_val)) =
+                                    probe_json_get(&fetcher, &bindings_url, &token).await
+                                    && let Some(bindings) = bind_val
+                                        .get("bindings")
+                                        .or_else(|| bind_val.get("items"))
+                                        .and_then(Value::as_array)
+                                {
+                                    for b in bindings {
+                                        if let Some(s) = b.get("skill_slug").and_then(Value::as_str)
+                                        {
+                                            push_unique_trimmed(&mut granted_slugs, s);
+                                        }
+                                        if let Some(g) = b.get("group_slug").and_then(Value::as_str)
+                                        {
+                                            push_unique_trimmed(&mut granted_groups, g);
+                                        }
+                                    }
+                                }
+                                if raw_items.is_some() {
+                                    synced = true;
+                                    sync_mode = "hub_legacy".to_string();
+                                }
+                            }
+                            Err(_) => {
+                                offline_detail = Some(first_err);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        if raw_groups.is_some() || raw_items.is_some() || raw_requests.is_some() {
+        if offline_detail.is_none() && raw_requests.is_none() {
+            raw_requests = fetch_hub_access_requests(&fetcher, &hub_base, &token).await;
+        }
+
+        if bundle_update.is_some()
+            || raw_groups.is_some()
+            || raw_items.is_some()
+            || raw_requests.is_some()
+        {
             let now = Utc::now().to_rfc3339();
             let db = state.db.lock().expect("database lock poisoned");
+            if let Some(ref b) = bundle_update {
+                save_hub_bundle_cache_db(&db.conn, b, &now)?;
+            }
             if let Some(groups_arr) = raw_groups {
                 let mut seen_groups: Vec<String> = Vec::new();
                 for grp in &groups_arr {
-                    match upsert_hub_skill_group_cache(&db.conn, grp, &now) {
-                        Ok(Some(slug)) => seen_groups.push(slug),
-                        Ok(None) => {}
-                        Err(err) => return internal_error(err),
+                    if let Some(slug) = upsert_hub_skill_group_cache(&db.conn, grp, &now)? {
+                        seen_groups.push(slug);
                     }
                 }
                 if let Ok(existing_groups) = list_skill_groups_db(&db.conn) {
                     for g in existing_groups {
-                        if !seen_groups.iter().any(|s| s == &g.slug)
-                            && let Err(err) = db.conn.execute(
+                        if !seen_groups.iter().any(|s| s == &g.slug) {
+                            db.conn.execute(
                                 "UPDATE app_agent_skill_groups_cache SET granted = 0 WHERE slug = ?1",
                                 [&g.slug],
-                            )
-                        {
-                            return internal_error(err);
+                            )?;
                         }
                     }
                 }
             }
             if let Some(arr) = raw_items {
                 for item in &arr {
-                    if let Err(err) = upsert_hub_skill_cache(
+                    upsert_hub_skill_cache(
                         &db.conn,
                         item,
                         &granted_slugs,
                         &granted_groups,
                         &now,
-                    ) {
-                        return internal_error(err);
-                    }
+                    )?;
                 }
             }
-            if let Some(reqs_arr) = raw_requests
-                && let Err(err) = reconcile_hub_access_requests_db(&db.conn, &reqs_arr, &now)
-            {
-                return internal_error(err);
+            if let Some(reqs_arr) = raw_requests {
+                reconcile_hub_access_requests_db(&db.conn, &reqs_arr, &now)?;
             }
         }
     } else {
         offline_detail = Some("hub_not_configured".into());
     }
 
-    let snapshot_res = {
+    let (items, groups, access_requests, bundle) = {
         let db = state.db.lock().expect("database lock poisoned");
-        list_skills_db(&db.conn).and_then(|items| {
-            let groups = summarize_skill_groups(&db.conn, &items)?;
-            let access_requests = list_access_requests_db(&db.conn)?;
-            Ok((items, groups, access_requests))
-        })
+        let items = list_skills_db(&db.conn)?;
+        let groups = summarize_skill_groups(&db.conn, &items)?;
+        let access_requests = list_access_requests_db(&db.conn)?;
+        let bundle = load_hub_bundle_cache_db(&db.conn);
+        (items, groups, access_requests, bundle)
     };
-    match snapshot_res {
-        Ok((items, groups, access_requests)) => Json(json!({
-            "ok": true,
-            "synced": synced,
-            "sync_mode": sync_mode,
-            "offline": !synced,
-            "detail": offline_detail,
-            "items": items,
-            "skills": items,
-            "groups": groups,
-            "access_requests": access_requests,
-        }))
-        .into_response(),
+
+    Ok(json!({
+        "ok": true,
+        "synced": synced,
+        "bundle_synced": bundle_synced,
+        "agents_synced": agents_synced,
+        "sync_mode": sync_mode,
+        "offline": !synced,
+        "detail": offline_detail,
+        "items": items,
+        "skills": items,
+        "groups": groups,
+        "capability_bundles": bundle.capability_bundles,
+        "mcp_groups": bundle.mcp_groups,
+        "allowed_mcp_tools": bundle.allowed_mcp_tools,
+        "allowed_model_aliases": bundle.allowed_model_aliases,
+        "channel_grants": bundle.channel_grants,
+        "astraea_bridge_ready": bundle.astraea_bridge_ready,
+        "hub_bundle": bundle,
+        "access_requests": access_requests,
+    }))
+}
+
+pub(crate) async fn post_skills_sync(State(state): State<SharedState>) -> Response {
+    match sync_with_hub_internal(&state).await {
+        Ok(payload) => Json(payload).into_response(),
         Err(err) => internal_error(err),
     }
 }
 
 pub(crate) async fn get_skill_access_requests(State(state): State<SharedState>) -> Response {
+    let cfg = state.agent_bridge.config();
+    let hub_base = effective_hub_base(&state, &cfg);
+    if !hub_base.is_empty() {
+        let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(4));
+        let token = resolve_hub_token(&state);
+        if let Some(reqs_arr) = fetch_hub_access_requests(&fetcher, &hub_base, &token).await {
+            let now = Utc::now().to_rfc3339();
+            let db = state.db.lock().expect("database lock poisoned");
+            if let Err(err) = reconcile_hub_access_requests_db(&db.conn, &reqs_arr, &now) {
+                return internal_error(err);
+            }
+        }
+    }
+
     let res = {
         let db = state.db.lock().expect("database lock poisoned");
         list_access_requests_db(&db.conn)
@@ -7246,6 +8052,14 @@ pub(crate) async fn get_skill_access_requests(State(state): State<SharedState>) 
         Ok(items) => Json(json!({ "ok": true, "items": items, "requests": items })).into_response(),
         Err(err) => internal_error(err),
     }
+}
+
+fn valid_access_target_slug(slug: &str) -> bool {
+    let s = slug.trim();
+    !s.is_empty()
+        && s.len() <= 96
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/' | b':' | b'*'))
 }
 
 #[derive(Debug, Deserialize)]
@@ -7260,28 +8074,27 @@ pub(crate) async fn post_skill_access_request(
     State(state): State<SharedState>,
     Json(input): Json<CreateAccessRequestInput>,
 ) -> Response {
-    let kind = input.target_kind.trim();
-    if !matches!(kind, "skill" | "skill_group") {
-        return bad_request("target_kind must be 'skill' or 'skill_group'");
-    }
+    let kind = match input.target_kind.trim().to_ascii_lowercase().as_str() {
+        "capability_bundle" | "bundle" => "capability_bundle",
+        "mcp_group" => "mcp_group",
+        "skill_group" | "group" => "skill_group",
+        "skill" => "skill",
+        "model_alias" | "model" => "model_alias",
+        "channel" => "channel",
+        _ => {
+            return bad_request(
+                "target_kind must be one of 'capability_bundle', 'mcp_group', 'skill_group', 'skill', 'model_alias', or 'channel'",
+            );
+        }
+    };
     let slug = input.target_slug.trim();
-    if slug.is_empty() || !valid_agent_slug(slug) {
+    if !valid_access_target_slug(slug) {
         return bad_request("invalid target_slug");
     }
     let reason = input.reason.trim().to_string();
 
     let cfg = state.agent_bridge.config();
-    let hub_base = if !cfg.hub_url.trim().is_empty() {
-        Some(cfg.hub_url.trim().trim_end_matches('/').to_string())
-    } else {
-        state
-            .hub
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.trim_end_matches('/').to_string())
-    };
+    let hub_base = effective_hub_base(&state, &cfg);
 
     let mut status = "recorded_local".to_string();
     let mut hub_request_id: Option<String> = None;
@@ -7289,8 +8102,9 @@ pub(crate) async fn post_skill_access_request(
     let mut reviewed_by: Option<String> = None;
     let mut review_note: Option<String> = None;
 
-    if let Some(base) = hub_base {
-        let url = format!("{base}/v1/app-connectors/{APP_ID}/skill-access-requests");
+    if !hub_base.is_empty() {
+        let primary_url = format!("{hub_base}/v1/app-connectors/{APP_ID}/access-requests");
+        let legacy_url = format!("{hub_base}/v1/app-connectors/{APP_ID}/skill-access-requests");
         let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(4));
         let token = resolve_hub_token(&state);
         let auth_header = format!("Bearer {}", token.trim());
@@ -7306,7 +8120,20 @@ pub(crate) async fn post_skill_access_request(
             "reason": reason,
         })
         .to_string();
-        if let Ok(outcome) = fetcher.post_json_with_headers(&url, &payload, &headers).await
+
+        let post_res = match fetcher
+            .post_json_with_headers(&primary_url, &payload, &headers)
+            .await
+        {
+            Err(crate::fetch::FetchError::HttpStatus(404 | 405)) => {
+                fetcher
+                    .post_json_with_headers(&legacy_url, &payload, &headers)
+                    .await
+            }
+            other => other,
+        };
+
+        if let Ok(outcome) = post_res
             && let Ok(val) = outcome_json(outcome)
         {
             status = val

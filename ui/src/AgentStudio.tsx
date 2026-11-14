@@ -88,6 +88,7 @@ export interface AgentStudioProps {
   bridgeStatus: BridgeStatus
   skills?: HubSkillSummary[]
   skillGroups?: HubSkillGroupSummary[]
+  allowedMcpTools?: string[]
   workspaces?: AgentWorkspace[]
   onSelectWorkspace?: (workspaceId: string) => void
   onSaveAgent: (agent: AppAgentConfig) => Promise<void>
@@ -134,6 +135,7 @@ export function AgentStudio({
   bridgeStatus,
   skills = [],
   skillGroups = [],
+  allowedMcpTools = [],
   workspaces = [],
   onSelectWorkspace,
   onSaveAgent,
@@ -207,7 +209,7 @@ export function AgentStudio({
   const [tgForm, setTgForm] = useState({
     transport_mode: telegramConfig.transport_mode,
     bot_name: telegramConfig.bot_name,
-    cygnus_url: telegramConfig.cygnus_url || 'https://telegram.lengoc.me',
+    cygnus_url: telegramConfig.cygnus_url ?? '',
     chat_policy: telegramConfig.chat_policy,
     bot_token: '',
     webhook_secret: '',
@@ -238,7 +240,7 @@ export function AgentStudio({
       ...prev,
       transport_mode: telegramConfig.transport_mode,
       bot_name: telegramConfig.bot_name,
-      cygnus_url: telegramConfig.cygnus_url || prev.cygnus_url,
+      cygnus_url: telegramConfig.cygnus_url ?? '',
       chat_policy: telegramConfig.chat_policy,
     }))
   }, [telegramConfig])
@@ -872,18 +874,30 @@ export function AgentStudio({
 
               <div className="field">
                 <span>{c.studioMcpToolsTitle}</span>
+                {allowedMcpTools.length > 0 && <small className="muted-sub">{c.studioMcpToolsHintHub}</small>}
                 <div className="chip-row">
-                  {MCP_BRIDGE_TOOLS.map((mcp) => {
-                    const active = draft.enabled_mcp_tools.includes(mcp.name)
+                  {Array.from(
+                    new Map<string, string>([
+                      ...MCP_BRIDGE_TOOLS.map(
+                        (m): [string, string] => [
+                          m.name,
+                          lang === 'vi' ? m.label_vi : m.label_en,
+                        ],
+                      ),
+                      ...allowedMcpTools.map((name): [string, string] => [name, name]),
+                      ...draft.enabled_mcp_tools.map((name): [string, string] => [name, name]),
+                    ]).entries(),
+                  ).map(([name, label]) => {
+                    const active = draft.enabled_mcp_tools.includes(name)
                     return (
                       <button
-                        key={mcp.name}
+                        key={name}
                         type="button"
                         className={active ? 'chip active' : 'chip'}
-                        onClick={() => toggleMcpTool(mcp.name)}
+                        onClick={() => toggleMcpTool(name)}
                       >
                         {active ? '✓ ' : '+ '}
-                        {lang === 'vi' ? mcp.label_vi : mcp.label_en}
+                        {label}
                       </button>
                     )
                   })}
@@ -1053,7 +1067,19 @@ export function AgentStudio({
 
           {activeTab === 'telegram' && (
             <section className="studio-panel">
-              <div className="catalog-notice">{c.studioTelegramCoexistenceNotice}</div>
+              <div className="catalog-notice" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>{c.studioTelegramCoexistenceNotice}</span>
+                <span className="tier-badge tier-read">
+                  {c.studioTelegramRouteLabel}:{' '}
+                  {telegramConfig.telegram_route === 'hub_cygnus'
+                    ? c.routeViaHubCygnus
+                    : telegramConfig.telegram_route === 'direct_cygnus'
+                      ? c.routeViaDirectCygnus
+                      : telegramConfig.telegram_route === 'direct_bot_api'
+                        ? c.routeViaDirectBot
+                        : c.routeDisabled}
+                </span>
+              </div>
 
               <div className="field">
                 <span>{c.studioTelegramModeTitle}</span>
@@ -1134,9 +1160,10 @@ export function AgentStudio({
                     <span>{c.studioTelegramCygnusUrl}</span>
                     <input
                       value={tgForm.cygnus_url}
-                      placeholder="https://telegram.lengoc.me"
+                      placeholder={c.routeViaHubCygnus}
                       onChange={(e) => setTgForm({ ...tgForm, cygnus_url: e.target.value })}
                     />
+                    <small className="muted-sub">{c.studioTelegramHubBrokerNote}</small>
                   </label>
                   <label className="field">
                     <span>{c.studioTelegramCygnusKey}</span>
