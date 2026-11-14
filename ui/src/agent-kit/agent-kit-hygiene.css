@@ -1,0 +1,792 @@
+/**
+ * UI Geometry, Anti-Wrap, Anti-Overflow & Custom Droplist Hygiene (`lnc-app-agents v2.0`).
+ * Maps cleanly onto Newsman Paper/Sepia/Gray/Green/Night/Black CSS variables and scopes
+ * `.btn` overrides inside `.ak-scope` so non-Agent pages remain untouched.
+ */
+
+.ak-scope,
+.ak-select-panel {
+  --ak-bg: var(--paper, #fbfbfa);
+  --ak-card: var(--paper-card, #ffffff);
+  --ak-soft: var(--paper-soft, #f3f1ec);
+  --ak-ink: var(--ink, #23211d);
+  --ak-surface: var(--ak-card);
+  --ak-surface-soft: var(--ak-soft);
+  --ak-surface-elevated: var(--ak-card);
+  --ak-input: var(--ak-bg);
+  --ak-hover: rgba(127, 127, 127, 0.09);
+  --ak-border: var(--line, #e3dfd7);
+  --ak-line: var(--ak-border);
+  --ak-text: var(--ak-ink);
+  --ak-muted: var(--muted, #6f6a61);
+  --ak-accent: var(--accent, #2383e2);
+  --ak-accent-soft: var(--accent-soft, rgba(35, 131, 226, 0.12));
+  --ak-accent-subtle: var(--ak-accent-soft);
+  --ak-radius: 8px;
+  --ak-radius-lg: 11px;
+  --ak-shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.18);
+  color: var(--ak-ink);
+}
+
+/* 1. ANTI-OVERFLOW CONTAINERS */
+.ak-grid,
+.ak-row,
+.ak-card,
+.ak-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ak-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ak-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ak-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 2. SCOPED BALANCED BUTTONS: Fixed rhythmic heights, concise labels, zero multi-line wrap */
+.ak-scope .btn,
+.ak-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: var(--ak-radius);
+  border: 1px solid var(--ak-border);
+  background: var(--ak-card);
+  color: var(--ak-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap !important;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.ak-scope .btn:hover:not(:disabled),
+.ak-btn:hover:not(:disabled) {
+  background: var(--ak-hover);
+  border-color: var(--ak-accent);
+}
+
+.ak-scope .btn.primary,
+.ak-btn.primary {
+  background: var(--ak-accent);
+  color: #ffffff;
+  border-color: var(--ak-accent);
+}
+
+.ak-scope .btn.primary:hover:not(:disabled),
+.ak-btn.primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.ak-scope .btn-sm,
+.ak-btn-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-card);
+  color: var(--ak-ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  gap: 5px;
+  white-space: nowrap !important;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.ak-scope .btn-sm.primary,
+.ak-btn-sm.primary {
+  background: var(--ak-accent);
+  border-color: var(--ak-accent);
+  color: #ffffff;
+}
+
+.ak-scope .btn-sm.secondary,
+.ak-btn-sm.secondary {
+  background: var(--ak-soft);
+  border-color: var(--ak-border);
+  color: var(--ak-ink);
+}
+
+.ak-scope .btn-sm.ghost,
+.ak-btn-sm.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ak-muted);
+}
+
+.ak-scope .btn-sm.ghost:hover:not(:disabled),
+.ak-btn-sm.ghost:hover:not(:disabled) {
+  background: var(--ak-hover);
+  color: var(--ak-ink);
+}
+
+.ak-scope .btn-sm.danger-outline,
+.ak-btn-sm.danger-outline {
+  background: transparent;
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.ak-scope .btn-sm.danger-outline:hover:not(:disabled),
+.ak-btn-sm.danger-outline:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.ak-scope .btn-sm:disabled,
+.ak-btn-sm:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.ak-scope .field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.ak-scope .field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ak-scope .field-block > span,
+.ak-scope .field-block > label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ak-muted);
+}
+
+/* 3. CUSTOM ROUNDED DROPLIST (`AgentSelect`) */
+.ak-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-input);
+  color: var(--ak-text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.ak-select-trigger.ak-select-sm {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+  border-radius: var(--ak-radius);
+}
+
+.ak-select-trigger .engine-select-arrow {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  margin-top: -3px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.14s ease, margin-top 0.14s ease;
+  opacity: 0.72;
+  flex-shrink: 0;
+}
+
+.ak-select-trigger.open .engine-select-arrow {
+  transform: rotate(-135deg);
+  margin-top: 2px;
+}
+
+.ak-select-panel {
+  position: fixed;
+  z-index: 900;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-surface-elevated);
+  box-shadow: var(--ak-shadow-lg);
+}
+
+.ak-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--ak-radius);
+  background: transparent;
+  color: var(--ak-text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ak-select-option:hover,
+.ak-select-option.is-active {
+  background: var(--ak-hover);
+}
+
+.ak-select-option.selected {
+  background: var(--ak-accent-subtle);
+  color: var(--ak-accent);
+  font-weight: 600;
+}
+
+.ak-select-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--ak-surface-soft);
+  color: var(--ak-muted);
+  flex-shrink: 0;
+}
+
+/* 4. DRAG-RESIZABLE MULTI-COLUMN SPLIT PANES (`AgentSplitPane.tsx`) */
+.ak-split-shell {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-surface);
+}
+
+.ak-split-shell.is-resizing,
+.ak-split-shell.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.ak-split-side {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--ak-surface-soft);
+  display: flex;
+  flex-direction: column;
+}
+
+.ak-split-center {
+  flex: 1 1 0%;
+  min-width: 300px;
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--ak-surface);
+}
+
+.ak-resizer {
+  position: relative;
+  flex: 0 0 7px;
+  width: 7px;
+  margin: 0 -3px;
+  z-index: 15;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  outline: none;
+}
+
+.ak-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--ak-border);
+  transition: background 0.14s ease, width 0.14s ease, left 0.14s ease;
+}
+
+.ak-resizer:hover::before,
+.ak-resizer:focus-visible::before,
+.ak-resizer.is-active::before {
+  left: 2px;
+  width: 3px;
+  background: var(--ak-accent);
+}
+
+.ak-resizer-grip {
+  position: relative;
+  z-index: 1;
+  width: 3px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--ak-border);
+  opacity: 0.7;
+  transition: background 0.14s ease, opacity 0.14s ease, transform 0.14s ease;
+}
+
+.ak-resizer:hover .ak-resizer-grip,
+.ak-resizer.is-active .ak-resizer-grip {
+  background: var(--ak-accent);
+  opacity: 1;
+  transform: scaleY(1.15);
+}
+
+/* 5. V2 WORKSPACE SHELL, COMPACT POPOVERS, TRACE TIMELINE, MEMORY RINGS */
+.ak-surface-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ak-border);
+  background: var(--ak-card);
+}
+
+.ak-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ak-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--ak-radius);
+  background: transparent;
+  color: var(--ak-muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.ak-tab-btn:hover {
+  background: var(--ak-hover);
+  color: var(--ak-ink);
+}
+
+.ak-tab-btn.active {
+  background: var(--ak-accent-soft);
+  color: var(--ak-accent);
+  border-color: var(--ak-accent);
+  font-weight: 600;
+}
+
+.ak-popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.ak-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 260;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 10px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-card);
+  box-shadow: var(--ak-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ak-trace-box {
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-soft);
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.ak-trace-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-top: 1px dashed var(--ak-border);
+}
+
+.ak-origin-pill {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--ak-accent-soft);
+  color: var(--ak-accent);
+  white-space: nowrap;
+}
+
+.ak-ask-card {
+  border: 1px solid var(--ak-accent);
+  background: var(--ak-accent-soft);
+  border-radius: var(--ak-radius-lg);
+  padding: 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ak-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+}
+
+.ak-palette-card {
+  width: min(560px, 92vw);
+  background: var(--ak-card);
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  box-shadow: var(--ak-shadow-lg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ak-concentric-rings {
+  position: relative;
+  border: 1px dashed var(--ak-border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--ak-soft);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ak-ring-col {
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-card);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  .ak-split-shell {
+    flex-direction: column;
+    height: auto !important;
+  }
+  .ak-split-side {
+    width: 100% !important;
+    max-height: 260px;
+    border-bottom: 1px solid var(--ak-border);
+  }
+  .ak-split-center {
+    min-width: 0;
+    min-height: 460px;
+  }
+  .ak-resizer {
+    display: none;
+  }
+  .ak-concentric-rings {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ak-split-wrap {
+  height: calc(100vh - 196px);
+  min-height: 520px;
+}
+
+.ak-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--ak-border);
+  background: var(--ak-soft);
+  flex-wrap: wrap;
+}
+
+.ak-composer-t1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+}
+
+.ak-ghost-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px dashed var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-soft);
+  color: var(--ak-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.ak-cowriter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+}
+
+.ak-diff-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.ak-diff-pane {
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-soft);
+  padding: 10px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.ak-diff-pane.after {
+  border-color: var(--ak-accent);
+  background: var(--ak-accent-soft);
+}
+
+.ak-palette-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-bg);
+  color: var(--ak-ink);
+  font-size: 13.5px;
+}
+
+.ak-palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ak-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ak-radius);
+  background: transparent;
+  color: var(--ak-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ak-palette-item:hover {
+  background: var(--ak-hover);
+  border-color: var(--ak-border);
+}
+
+.ak-memory-card {
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-soft);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+}
+
+.ak-notes-editor {
+  width: 100%;
+  min-height: 110px;
+  padding: 8px 10px;
+  border: 1px solid var(--ak-border);
+  border-radius: var(--ak-radius);
+  background: var(--ak-bg);
+  color: var(--ak-ink);
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.ak-badge-pin {
+  font-size: 11px;
+  color: var(--ak-accent);
+  font-weight: 600;
+}
+
+/* 6. SPLIT-PANE SETTINGS & HUB HERO CARD */
+.ak-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 10px;
+}
+
+.ak-settings-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--ak-radius);
+  background: transparent;
+  color: var(--ak-muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.ak-settings-nav-btn:hover {
+  background: var(--ak-hover);
+  color: var(--ak-ink);
+}
+
+.ak-settings-nav-btn.active {
+  background: var(--ak-accent-soft);
+  border-color: var(--ak-accent);
+  color: var(--ak-accent);
+  font-weight: 600;
+}
+
+.ak-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ak-hero-card {
+  border: 1px solid color-mix(in srgb, var(--ak-accent) 42%, var(--ak-border));
+  border-radius: var(--ak-radius-lg);
+  background: linear-gradient(135deg, var(--ak-accent-soft), var(--ak-card) 58%);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ak-hero-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ak-hero-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ak-ink);
+}
+
+.ak-unlock-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+@media (max-width: 960px) {
+  .ak-cowriter-grid,
+  .ak-diff-grid {
+    grid-template-columns: 1fr;
+  }
+  .ak-split-wrap {
+    height: auto;
+    min-height: 460px;
+  }
+}

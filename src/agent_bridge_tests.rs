@@ -3147,3 +3147,748 @@ async fn test_7_hub_first_star_topology_5_legs_bundles_mcp_groups_and_telegram_b
     mux_task.abort();
     axum_task.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Test 8: lnc-app-agents v2.0 Full Contract (Manifest, Catalog, Roles, Custom
+// Providers + Secrets/SSRF, MCP Namespaces, AskUser, Branch, Seat Retry,
+// Ghost Hint, Co-Writer, 3-Tier Memory Graph, Telegram /link NM-XXXX)
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct MockV2HubState {
+    model_fetches: Mutex<Vec<(Option<String>, Option<String>)>>,
+    chat_requests: Mutex<Vec<(Option<String>, String, Value)>>,
+    hub_pulls: Mutex<Vec<String>>,
+    hub_drafts: Mutex<Vec<Value>>,
+}
+
+async fn spawn_mock_v2_hub() -> (String, Arc<MockV2HubState>, tokio::task::JoinHandle<()>) {
+    let st = Arc::new(MockV2HubState::default());
+    let st_c = st.clone();
+    let app = Router::new()
+        .route(
+            "/v1/models",
+            get(|State(s): State<Arc<MockV2HubState>>, headers: HeaderMap| async move {
+                let auth = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let app_id = headers
+                    .get("x-lnc-app-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                s.model_fetches.lock().unwrap().push((auth, app_id));
+                Json(json!({
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "hub/newsman-smart-v2",
+                            "name": "Newsman Smart v2",
+                            "capabilities": ["text", "tools", "reasoning"],
+                            "context_window": 128000
+                        },
+                        {
+                            "id": "hub/newsman-fast-v2",
+                            "name": "Newsman Fast v2",
+                            "capabilities": ["text", "tools"],
+                            "context_window": 64000
+                        }
+                    ]
+                }))
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|State(s): State<Arc<MockV2HubState>>, headers: HeaderMap, Json(body): Json<Value>| async move {
+                let auth = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let model = body["model"].as_str().unwrap_or("").to_string();
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let has_tool = messages
+                    .iter()
+                    .any(|m| m["role"].as_str() == Some("tool"));
+                let user_text = messages
+                    .iter()
+                    .rev()
+                    .find(|m| m["role"].as_str() == Some("user"))
+                    .and_then(|m| m["content"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sys_text = messages
+                    .first()
+                    .and_then(|m| m["content"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                s.chat_requests.lock().unwrap().push((auth, model.clone(), body.clone()));
+
+                if !has_tool && user_text.contains("ASK_USER_TRIGGER") {
+                    return Json(json!({
+                        "id": "chatcmpl-ask",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "reasoning_content": "Need reader preference before summarizing.",
+                                "tool_calls": [{
+                                    "id": "call_ask_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "ask_user",
+                                        "arguments": "{\"question\":\"Chọn trọng tâm bản tin?\",\"options\":[\"Macro\",\"Tax\"],\"allow_custom\":true}"
+                                    }
+                                }]
+                            }
+                        }]
+                    }));
+                }
+                if sys_text.contains("Co-Writer") || user_text.contains("Chỉnh lại đoạn") {
+                    return Json(json!({
+                        "id": "chatcmpl-cw",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Bản biên tập chuẩn xác kèm dẫn nguồn và cờ verified."
+                            }
+                        }]
+                    }));
+                }
+                Json(json!({
+                    "id": "chatcmpl-v2-ok",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": format!("V2 reply via {model}.")
+                        }
+                    }],
+                    "usage": { "prompt_tokens": 18, "completion_tokens": 9, "total_tokens": 27 }
+                }))
+            }),
+        )
+        .route(
+            "/api/app/agents/{slug}",
+            get(|State(s): State<Arc<MockV2HubState>>, axum::extract::Path(slug): axum::extract::Path<String>| async move {
+                s.hub_pulls.lock().unwrap().push(slug.clone());
+                Json(json!({
+                    "agent": {
+                        "slug": slug,
+                        "display_name": "Macro Argus HubSynced",
+                        "description": "Synced from Hub",
+                        "primary_model": "hub/newsman-smart-v2"
+                    }
+                }))
+            }),
+        )
+        .route(
+            "/api/app/agents/{slug}/drafts",
+            post(|State(s): State<Arc<MockV2HubState>>, Json(body): Json<Value>| async move {
+                s.hub_drafts.lock().unwrap().push(body);
+                Json(json!({ "ok": true, "draft_id": "hub-draft-1" }))
+            }),
+        )
+        .with_state(st_c);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}"), st, handle)
+}
+
+#[derive(Default)]
+struct MockCustomProviderState {
+    model_fetches: Mutex<Vec<Option<String>>>,
+}
+
+async fn spawn_mock_custom_provider() -> (String, Arc<MockCustomProviderState>, tokio::task::JoinHandle<()>) {
+    let st = Arc::new(MockCustomProviderState::default());
+    let st_c = st.clone();
+    let app = Router::new()
+        .route(
+            "/v1/models",
+            get(|State(s): State<Arc<MockCustomProviderState>>, headers: HeaderMap| async move {
+                let auth = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                s.model_fetches.lock().unwrap().push(auth);
+                Json(json!({
+                    "data": [
+                        {
+                            "id": "custom/local-news-v2",
+                            "name": "Local News v2",
+                            "capabilities": ["text", "tools"],
+                            "context_window": 32768
+                        }
+                    ]
+                }))
+            }),
+        )
+        .with_state(st_c);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}"), st, handle)
+}
+
+#[tokio::test]
+async fn test_8_v2_manifest_catalog_providers_ask_user_branch_cowriter_memory_and_link() {
+    let dir = unique_temp_dir("t8");
+    let db = Database::in_memory().unwrap();
+    let seeded = seed_newsroom_fixture(&db);
+    let vault = secrets::SecretBox::from_bytes([0x99; 32], None);
+    let (hub_url, hub_st, hub_task) = spawn_mock_v2_hub().await;
+    let (cp_url, cp_st, cp_task) = spawn_mock_custom_provider().await;
+    let (tg_url, tg_st, tg_task) = spawn_mock_telegram_and_cygnus().await;
+
+    let state = build_test_state(dir, db, Fetcher::allow_loopback_for_tests(), Some(vault));
+    let app = crate::router(state.clone());
+    let cookie = login_cookie(&app).await;
+
+    // 8A. Manifest v2.0 contract + Newsroom capabilities & quick_actions
+    let (st, manifest) = authed_json(&app, &cookie, "GET", "/api/app-agents/manifest", None).await;
+    assert_eq!(st, StatusCode::OK, "{manifest}");
+    assert_eq!(manifest["protocol_version"], "2.0");
+    assert_eq!(manifest["app_id"], "lnc-newsman");
+    assert_eq!(manifest["capabilities"]["voice_tts"], false);
+    assert_eq!(manifest["capabilities"]["voice_stt"], false);
+    assert_eq!(manifest["capabilities"]["image_gen"], false);
+    assert_eq!(manifest["capabilities"]["co_writer"], true);
+    assert_eq!(manifest["capabilities"]["memory_graph"], true);
+    assert_eq!(manifest["scope_kinds"], json!(["region", "series", "topic"]));
+    assert!(manifest["quick_actions"].as_array().unwrap().len() >= 4);
+
+    // 8B. Bridge Config v2 superset + omitBlankSecrets + redaction
+    let (st, put_cfg) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/bridge-config",
+        Some(json!({
+            "hub_url": hub_url,
+            "hub_token": "hub-v2-secret",
+            "allowed_hosts": ["127.0.0.1"],
+            "interface_language": "en",
+            "model_output_language": "vi",
+            "send_key_mode": "ctrl_enter",
+            "default_smart_model": "hub/newsman-smart-v2",
+            "fast_background_model": ""
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{put_cfg}");
+    assert_eq!(put_cfg["has_hub_token"], true);
+    assert_eq!(put_cfg["send_key_mode"], "ctrl_enter");
+    assert_eq!(put_cfg["resolved_fast_model"], "hub/newsman-smart-v2");
+    assert!(!put_cfg.to_string().contains("hub-v2-secret"));
+
+    // Blank secret update must NOT erase stored hub_token
+    let (st, blank_upd) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/bridge-config",
+        Some(json!({
+            "hub_token": "   ",
+            "send_key_mode": "enter"
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{blank_upd}");
+    assert_eq!(blank_upd["has_hub_token"], true);
+    assert_eq!(blank_upd["send_key_mode"], "enter");
+
+    // 8C. Model Catalog Fetch (auto_enabled on first import) + Bearer header + Patch + Dual Roles
+    let (st, fetched1) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/models/fetch",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{fetched1}");
+    assert_eq!(fetched1["auto_enabled"], true, "initial fetch must auto-enable discovered models");
+    assert!(fetched1["fetched_count"].as_u64().unwrap() >= 2);
+    {
+        let fetches = hub_st.model_fetches.lock().unwrap();
+        assert_eq!(fetches.len(), 1);
+        assert_eq!(fetches[0].0.as_deref(), Some("Bearer hub-v2-secret"));
+        assert_eq!(fetches[0].1.as_deref(), Some("lnc-newsman"));
+    }
+
+    // 8D. Custom Providers: SSRF block on private unlisted IP + vault storage + model fetch + delete
+    let (st_ssrf, _) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/custom-providers",
+        Some(json!({
+            "name": "Bad Private LAN",
+            "base_url": "http://10.0.0.5/v1",
+            "api_key": "never-save"
+        })),
+    )
+    .await;
+    assert_eq!(st_ssrf, StatusCode::BAD_REQUEST);
+
+    let (st_cp, cp_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/custom-providers",
+        Some(json!({
+            "id": "local-cp",
+            "name": "Local Provider",
+            "base_url": cp_url,
+            "api_key": "cp-secret-xyz",
+            "capabilities": ["text", "tools"]
+        })),
+    )
+    .await;
+    assert_eq!(st_cp, StatusCode::OK, "{cp_res}");
+    assert_eq!(cp_res["provider"]["has_secret"], true);
+    assert!(!cp_res.to_string().contains("cp-secret-xyz"), "secret must never be echoed");
+
+    // Second fetch discovers custom provider model (auto_enabled = false since catalog already enabled)
+    let (st_f2, fetched2) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/models/fetch",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(st_f2, StatusCode::OK, "{fetched2}");
+    assert_eq!(fetched2["auto_enabled"], false);
+    assert_eq!(
+        cp_st.model_fetches.lock().unwrap().first().and_then(|o| o.as_deref()),
+        Some("Bearer cp-secret-xyz")
+    );
+
+    // Enable custom model & disable fast hub model via catalog PATCH, check GET /models filters to enabled=1
+    let (st_patch, _) = authed_json(
+        &app,
+        &cookie,
+        "PATCH",
+        "/api/app-agents/models/catalog",
+        Some(json!({
+            "updates": [
+                { "model_id": "custom/local-news-v2", "enabled": true },
+                { "model_id": "hub/newsman-fast-v2", "enabled": false }
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(st_patch, StatusCode::OK);
+
+    let (st_mods, enabled_mods) = authed_json(&app, &cookie, "GET", "/api/app-agents/models", None).await;
+    assert_eq!(st_mods, StatusCode::OK);
+    let enabled_ids: Vec<&str> = enabled_mods["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(enabled_ids.contains(&"hub/newsman-smart-v2"));
+    assert!(enabled_ids.contains(&"custom/local-news-v2"));
+    assert!(!enabled_ids.contains(&"hub/newsman-fast-v2"));
+
+    let (st_roles, roles_res) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/models/roles",
+        Some(json!({
+            "default_smart_model": "hub/newsman-smart-v2",
+            "fast_background_model": "hub/newsman-fast-v2"
+        })),
+    )
+    .await;
+    assert_eq!(st_roles, StatusCode::OK, "{roles_res}");
+    assert_eq!(roles_res["resolved_fast_model"], "hub/newsman-fast-v2");
+
+    let (st_del_cp, _) = authed_json(
+        &app,
+        &cookie,
+        "DELETE",
+        "/api/app-agents/custom-providers/local-cp",
+        None,
+    )
+    .await;
+    assert_eq!(st_del_cp, StatusCode::OK);
+
+    // 8E. MCP Namespaces + Hub pull/push draft
+    let (st_mcp, mcp_get) = authed_json(&app, &cookie, "GET", "/api/app-agents/mcp-namespaces", None).await;
+    assert_eq!(st_mcp, StatusCode::OK);
+    assert!(mcp_get["items"].as_array().unwrap().len() >= 8);
+
+    let (st_mcp_put, mcp_put) = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/mcp-namespaces",
+        Some(json!({ "items": [{ "namespace": "search", "enabled": false }] })),
+    )
+    .await;
+    assert_eq!(st_mcp_put, StatusCode::OK, "{mcp_put}");
+    assert!(
+        mcp_put["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|ns| ns["namespace"] == "search" && ns["enabled"] == false)
+    );
+
+    let (st_pull, pull_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/agents/macro-argus/pull-hub",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(st_pull, StatusCode::OK, "{pull_res}");
+    assert_eq!(pull_res["source"], "hub");
+    assert_eq!(pull_res["agent"]["display_name"], "Macro Argus HubSynced");
+
+    let (st_push, push_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/agents/macro-argus/push-draft",
+        Some(json!({ "notes": "v2 review draft" })),
+    )
+    .await;
+    assert_eq!(st_push, StatusCode::OK, "{push_res}");
+    assert_eq!(hub_st.hub_drafts.lock().unwrap().len(), 1);
+
+    // 8F. Thread + AskUser builtin tool + Answer + Patch v2 fields + Branch + Seat Retry + Ghost Hint + Activity
+    let (st_t, thr_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/threads",
+        Some(json!({
+            "kind": "group",
+            "title": "V2 Newsroom Thread",
+            "article_id": seeded.vn_fin_art,
+            "member_slugs": ["macro-argus", "tax-linh"],
+            "discussion_mode": "parallel_panel"
+        })),
+    )
+    .await;
+    assert_eq!(st_t, StatusCode::OK, "{thr_res}");
+    let tid = thr_res["thread"]["id"].as_str().unwrap().to_string();
+
+    let (st_turn, turn_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/turns"),
+        Some(json!({ "text": "ASK_USER_TRIGGER phân tích" })),
+    )
+    .await;
+    assert_eq!(st_turn, StatusCode::OK, "{turn_res}");
+    assert_eq!(turn_res["messages"].as_array().unwrap().len(), 2);
+
+    let (st_ask_list, ask_list) = authed_json(
+        &app,
+        &cookie,
+        "GET",
+        &format!("/api/app-agents/threads/{tid}/ask-user"),
+        None,
+    )
+    .await;
+    assert_eq!(st_ask_list, StatusCode::OK, "{ask_list}");
+    let prompt_id = ask_list["items"][0]["prompt_id"].as_str().unwrap().to_string();
+    assert_eq!(ask_list["items"][0]["status"], "pending");
+
+    let (st_ans, ans_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/ask-user/{prompt_id}/answer"),
+        Some(json!({ "answer": "Tax", "auto_continue": false })),
+    )
+    .await;
+    assert_eq!(st_ans, StatusCode::OK, "{ans_res}");
+    assert_eq!(ans_res["prompt"]["status"], "answered");
+    assert_eq!(ans_res["prompt"]["answer"], "Tax");
+
+    // Patch thread v2 metadata + branch from first assistant message + retry seat + ghost hint + activity
+    let (st_tp, tp_res) = authed_json(
+        &app,
+        &cookie,
+        "PATCH",
+        &format!("/api/app-agents/threads/{tid}"),
+        Some(json!({
+            "pinned": true,
+            "scratchpad_md": "- Note 1",
+            "chat_mode": "research",
+            "persona_style": "concise"
+        })),
+    )
+    .await;
+    assert_eq!(st_tp, StatusCode::OK, "{tp_res}");
+    assert_eq!(tp_res["thread"]["pinned"], true);
+    assert_eq!(tp_res["thread"]["scratchpad_md"], "- Note 1");
+
+    let first_msg_id = turn_res["messages"][0]["id"].as_str().unwrap().to_string();
+    let (st_br, br_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/branch"),
+        Some(json!({ "from_message_id": first_msg_id, "title": "Tax Branch" })),
+    )
+    .await;
+    assert_eq!(st_br, StatusCode::OK, "{br_res}");
+    assert_eq!(br_res["thread"]["parent_thread_id"], tid);
+    assert_eq!(br_res["thread"]["title"], "Tax Branch");
+
+    let (st_retry, retry_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/seats/macro-argus/retry"),
+        Some(json!({ "model_override": "hub/newsman-fast-v2" })),
+    )
+    .await;
+    assert_eq!(st_retry, StatusCode::OK, "{retry_res}");
+
+    let (st_gh, gh_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/composer/ghost-hint",
+        Some(json!({ "thread_id": tid, "draft": "Tóm tắt tỷ giá và lãi suất" })),
+    )
+    .await;
+    assert_eq!(st_gh, StatusCode::OK, "{gh_res}");
+    assert!(!gh_res["hint"].as_str().unwrap_or("").is_empty());
+
+    let (st_act, act_res) = authed_json(
+        &app,
+        &cookie,
+        "GET",
+        &format!("/api/app-agents/threads/{tid}/activity"),
+        None,
+    )
+    .await;
+    assert_eq!(st_act, StatusCode::OK, "{act_res}");
+    assert!(!act_res["tool_events"].as_array().unwrap().is_empty());
+
+    // 8G. Co-Writer suggest-diff + decide
+    let (st_cw, cw_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/cowriter/suggest-diff",
+        Some(json!({
+            "thread_id": tid,
+            "target_kind": "scratchpad",
+            "title": "VN Tax Draft",
+            "before_text": "Doanh nghiệp nộp thuế theo quý.",
+            "instruction": "Chỉnh lại đoạn này và thêm lưu ý verified=false."
+        })),
+    )
+    .await;
+    assert_eq!(st_cw, StatusCode::OK, "{cw_res}");
+    let draft_id = cw_res["draft"]["id"].as_str().unwrap().to_string();
+    assert_eq!(cw_res["draft"]["status"], "pending");
+
+    let (st_dec, dec_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/cowriter/drafts/{draft_id}/decide"),
+        Some(json!({ "decision": "accept" })),
+    )
+    .await;
+    assert_eq!(st_dec, StatusCode::OK, "{dec_res}");
+    assert_eq!(dec_res["draft"]["status"], "accepted");
+
+    // 8H. 3-Layer Memory Graph (seeded L2 canon + node create + update + audit + dedup + delete)
+    let (st_mg, mg_res) = authed_json(&app, &cookie, "GET", "/api/app-agents/memory/graph", None).await;
+    assert_eq!(st_mg, StatusCode::OK, "{mg_res}");
+    assert!(mg_res["nodes"].as_array().unwrap().len() >= 2);
+
+    let (st_n1, n1_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/memory/nodes",
+        Some(json!({
+            "layer": "L3",
+            "node_kind": "rule",
+            "title": "CIT Deadline Duplicate",
+            "content": "Khai thuế tạm tính quý",
+            "confidence": 0.95
+        })),
+    )
+    .await;
+    assert_eq!(st_n1, StatusCode::OK, "{n1_res}");
+    let node_id_keep = n1_res["node"]["id"].as_str().unwrap().to_string();
+
+    let (st_n2, _) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/memory/nodes",
+        Some(json!({
+            "layer": "L3",
+            "node_kind": "rule",
+            "title": "CIT Deadline Duplicate",
+            "content": "Khai thuế tạm tính quý (duplicate)",
+            "confidence": 0.60
+        })),
+    )
+    .await;
+    assert_eq!(st_n2, StatusCode::OK);
+
+    let (st_mupd, mupd_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/memory/update",
+        Some(json!({
+            "id": node_id_keep,
+            "content": "Khai thuế tạm tính quý (updated)"
+        })),
+    )
+    .await;
+    assert_eq!(st_mupd, StatusCode::OK, "{mupd_res}");
+
+    let (st_maud, maud_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/memory/audit",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(st_maud, StatusCode::OK, "{maud_res}");
+
+    let (st_mdedup, mdedup_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/memory/dedup",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(st_mdedup, StatusCode::OK, "{mdedup_res}");
+    assert_eq!(mdedup_res["removed_count"], 1);
+
+    let (st_mdel, _) = authed_json(
+        &app,
+        &cookie,
+        "DELETE",
+        &format!("/api/app-agents/memory/nodes/{node_id_keep}"),
+        None,
+    )
+    .await;
+    assert_eq!(st_mdel, StatusCode::OK);
+
+    // 8I. Telegram Link-Code Pairing (`/link NM-XXXX`) before `select_matching_route`
+    authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/telegram/config",
+        Some(json!({
+            "transport_mode": "direct_webhook",
+            "bot_name": "newsman_bot",
+            "api_base_url": tg_url,
+            "cygnus_url": tg_url,
+            "chat_policy": "mention",
+            "bot_token": "test_bot_tok",
+            "webhook_secret": "tg-v2-sec",
+            "cygnus_key": "cyg-secret-key"
+        })),
+    )
+    .await;
+
+    let (st_lc, lc_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/telegram/link-code",
+        Some(json!({ "agent_slug": "tax-linh" })),
+    )
+    .await;
+    assert_eq!(st_lc, StatusCode::OK, "{lc_res}");
+    let link_code = lc_res["code"].as_str().unwrap().to_string();
+    assert!(link_code.starts_with("NM-"));
+
+    let wh_link = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/app-agents/telegram/webhook/direct")
+                .header(header::HOST, "newsman.test")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-telegram-bot-api-secret-token", "tg-v2-sec")
+                .body(Body::from(
+                    json!({
+                        "update_id": 8801,
+                        "message": {
+                            "message_id": 501,
+                            "message_thread_id": 77,
+                            "from": { "id": 42, "username": "owner" },
+                            "chat": { "id": -100444555, "type": "supergroup" },
+                            "text": format!("/link {link_code}")
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wh_link.status(), StatusCode::OK);
+
+    // Subsequent message in `-100444555` topic `77` now hits the newly bound `tax-linh` route!
+    let wh_follow = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/app-agents/telegram/webhook/direct")
+                .header(header::HOST, "newsman.test")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-telegram-bot-api-secret-token", "tg-v2-sec")
+                .body(Body::from(
+                    json!({
+                        "update_id": 8802,
+                        "message": {
+                            "message_id": 502,
+                            "message_thread_id": 77,
+                            "from": { "id": 42, "username": "owner" },
+                            "chat": { "id": -100444555, "type": "supergroup" },
+                            "text": "@newsman_bot kiểm tra kỳ kê khai quý"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wh_follow.status(), StatusCode::OK);
+    assert!(
+        tg_st.direct_sent.lock().unwrap().len() >= 2,
+        "Telegram must confirm /link pairing and forward subsequent routed reply"
+    );
+
+    hub_task.abort();
+    cp_task.abort();
+    tg_task.abort();
+}

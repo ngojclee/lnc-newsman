@@ -75,6 +75,7 @@ impl Database {
             (22, crate::agent_bridge::MIGRATION_0022_SQL),
             (23, crate::agent_bridge::MIGRATION_0023_SQL),
             (24, crate::agent_bridge::MIGRATION_0024_SQL),
+            (25, crate::agent_bridge::MIGRATION_0025_SQL),
         ] {
             let applied: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",

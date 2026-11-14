@@ -194,7 +194,7 @@ export function CompanionDrawer({
   }
 
   return (
-    <aside className="companion-drawer" role="dialog" aria-label={c.companionHeaderTitle}>
+    <aside className="companion-drawer ak-scope" role="dialog" aria-label={c.companionHeaderTitle}>
       <header className="companion-head">
         <div>
           <span className="eyebrow">{c.companionContextBadge}</span>
@@ -323,6 +323,15 @@ export function CompanionDrawer({
                         : 'You'
                       : `${ag?.emoji ?? '📈'} ${ag?.display_name ?? m.sender_slug ?? 'Analyst'}`}
                   </b>
+                  {!isUser && (
+                    <button
+                      type="button"
+                      className="btn secondary btn-sm"
+                      onClick={() => void navigator.clipboard?.writeText(m.content)}
+                    >
+                      {c.v2CopyBtn}
+                    </button>
+                  )}
                 </header>
                 {m.reasoning && (
                   <details className="salon-reasoning">

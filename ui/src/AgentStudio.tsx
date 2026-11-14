@@ -122,6 +122,18 @@ export interface AgentStudioProps {
     astraea_token?: string
     hub_token?: string
   }) => Promise<void>
+  onPullAgentFromHub?: (slug: string) => Promise<{ source?: string; agent?: Record<string, unknown> }>
+  onPushAgentDraft?: (slug: string, notes?: string) => Promise<{ local_saved?: boolean; hub_synced?: boolean }>
+  onGenerateTelegramLinkCode?: (input?: {
+    agent_slug?: string
+    thread_id?: string | null
+  }) => Promise<{
+    code: string
+    command: string
+    agent_slug: string
+    ttl_seconds: number
+    expires_at: string
+  }>
 }
 
 export function AgentStudio({
@@ -148,6 +160,9 @@ export function AgentStudio({
   onCreateTelegramRoute,
   onDeleteTelegramRoute,
   onSaveBridgeConfig,
+  onPullAgentFromHub,
+  onPushAgentDraft,
+  onGenerateTelegramLinkCode,
 }: AgentStudioProps) {
   const c = AGENT_COPY[lang]
   const [activeTab, setActiveTab] = useState<StudioTab>('identity')
@@ -156,6 +171,11 @@ export function AgentStudio({
   const [busy, setBusy] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [linkCodeResult, setLinkCodeResult] = useState<{
+    code: string
+    command: string
+    ttl_seconds: number
+  } | null>(null)
 
   const emptyDraft = (): AppAgentConfig => ({
     slug: '',
@@ -224,6 +244,8 @@ export function AgentStudio({
     agent_slug: agents[0]?.slug ?? 'macro-argus',
     thread_id: '',
     bot_name: telegramConfig.bot_name,
+    send_progress: true,
+    send_tool_hints: false,
   })
 
   const [bridgeFormOpen, setBridgeFormOpen] = useState(false)
@@ -370,6 +392,49 @@ export function AgentStudio({
     }
   }
 
+  const handlePullHub = async () => {
+    if (!draft.slug || isNewAgent || !onPullAgentFromHub) return
+    setBusy(true)
+    setErrorMsg('')
+    setStatusMsg('')
+    try {
+      const res = await onPullAgentFromHub(draft.slug)
+      setStatusMsg(
+        lang === 'vi'
+          ? `Đã đồng bộ hồ sơ từ ${res.source === 'hub' ? 'Hub' : 'bộ nhớ cục bộ'}.`
+          : `Pulled profile from ${res.source === 'hub' ? 'Hub' : 'local store'}.`,
+      )
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Pull failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handlePushDraft = async () => {
+    if (!draft.slug || isNewAgent || !onPushAgentDraft) return
+    setBusy(true)
+    setErrorMsg('')
+    setStatusMsg('')
+    try {
+      await handleSaveAgent()
+      const res = await onPushAgentDraft(draft.slug, 'Updated from LNC Newsman v2 Studio')
+      setStatusMsg(
+        res.hub_synced
+          ? lang === 'vi'
+            ? 'Đã lưu & đẩy bản nháp lên Hub.'
+            : 'Saved & pushed draft to Hub.'
+          : lang === 'vi'
+            ? 'Đã lưu cục bộ (Hub chưa nhận push).'
+            : 'Saved locally (Hub offline or read-only).',
+      )
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Push failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const combinedPromptPreview = useMemo(() => {
     const regions = parseSlugList(regionsInput)
     const topics = parseSlugList(topicsInput)
@@ -444,7 +509,7 @@ export function AgentStudio({
         : c.studioTelegramPolicyMention
 
   return (
-    <div className="agent-studio">
+    <div className="agent-studio ak-scope">
       <header className="studio-header">
         <div>
           <p className="eyebrow">{c.agentsEyebrow}</p>
@@ -459,6 +524,26 @@ export function AgentStudio({
           >
             ⛭ {c.bridgeConfigureBtn}
           </button>
+          {!isNewAgent && onPullAgentFromHub && (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={busy}
+              onClick={() => void handlePullHub()}
+            >
+              ⇣ {c.v2StudioPullHubBtn}
+            </button>
+          )}
+          {!isNewAgent && onPushAgentDraft && (
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={busy || secretRefInvalid}
+              onClick={() => void handlePushDraft()}
+            >
+              ⇡ {c.v2StudioPushDraftBtn}
+            </button>
+          )}
           <button type="button" className="btn secondary" onClick={startNewAgent}>
             {c.studioNewAgentBtn}
           </button>
@@ -1207,6 +1292,55 @@ export function AgentStudio({
                 </button>
               </div>
 
+              {onGenerateTelegramLinkCode && (
+                <div className="studio-scope-box">
+                  <div className="studio-inline-head">
+                    <p className="eyebrow">
+                      {lang === 'vi' ? 'Liên kết nhanh bằng /link' : 'One-Tap /link Pairing'}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true)
+                        setErrorMsg('')
+                        void onGenerateTelegramLinkCode({
+                          agent_slug: routeForm.agent_slug || draft.slug,
+                          thread_id: routeForm.thread_id || null,
+                        })
+                          .then((res) => setLinkCodeResult(res))
+                          .catch((err) =>
+                            setErrorMsg(err instanceof Error ? err.message : 'Link code failed'),
+                          )
+                          .finally(() => setBusy(false))
+                      }}
+                    >
+                      🔗 {c.v2TelegramGenCodeBtn}
+                    </button>
+                  </div>
+                  <p className="muted">
+                    {lang === 'vi'
+                      ? 'Tạo mã ngắn (10 phút) rồi gửi lệnh này vào nhóm hoặc DM Telegram của bạn.'
+                      : 'Generate a 10-minute pairing code and send the command inside any Telegram group or DM.'}
+                  </p>
+                  {linkCodeResult && (
+                    <div className="btn-row">
+                      <code>{linkCodeResult.command}</code>
+                      <button
+                        type="button"
+                        className="btn secondary btn-sm"
+                        onClick={() =>
+                          void navigator.clipboard?.writeText(linkCodeResult.command)
+                        }
+                      >
+                        {c.v2CopyBtn}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="studio-scope-box">
                 <p className="eyebrow">{c.studioTelegramRoutesTitle}</p>
                 <div className="chat-sched-table">
@@ -1222,6 +1356,8 @@ export function AgentStudio({
                         <small className="muted">
                           → @{rt.agent_slug}
                           {rt.thread_id ? ` (#${rt.thread_id})` : ''} · {policyShortLabel(rt.policy)}
+                          {rt.send_progress ? ' · Progress' : ''}
+                          {rt.send_tool_hints ? ' · Tools' : ''}
                         </small>
                       </div>
                       <button
@@ -1281,6 +1417,28 @@ export function AgentStudio({
                     ]}
                   />
                 </div>
+                <div className="checkbox-row">
+                  <label className="check-inline">
+                    <input
+                      type="checkbox"
+                      checked={routeForm.send_progress}
+                      onChange={(e) =>
+                        setRouteForm({ ...routeForm, send_progress: e.target.checked })
+                      }
+                    />
+                    <span>{lang === 'vi' ? 'Gửi tiến trình live' : 'Send live progress'}</span>
+                  </label>
+                  <label className="check-inline">
+                    <input
+                      type="checkbox"
+                      checked={routeForm.send_tool_hints}
+                      onChange={(e) =>
+                        setRouteForm({ ...routeForm, send_tool_hints: e.target.checked })
+                      }
+                    />
+                    <span>{lang === 'vi' ? 'Hiện gợi ý công cụ' : 'Show tool hints'}</span>
+                  </label>
+                </div>
                 <div className="btn-row">
                   <button
                     type="button"
@@ -1297,6 +1455,8 @@ export function AgentStudio({
                         agent_slug: routeForm.agent_slug,
                         thread_id: routeForm.thread_id ? Number(routeForm.thread_id) : null,
                         bot_name: tgForm.bot_name.trim() || '@lnc_newsman_bot',
+                        send_progress: routeForm.send_progress,
+                        send_tool_hints: routeForm.send_tool_hints,
                         enabled: true,
                       }).then(() =>
                         setRouteForm((f) => ({ ...f, chat_id: '', message_thread_id: '' })),

@@ -407,11 +407,114 @@ INSERT OR IGNORE INTO app_agent_hub_bundle_cache (id, payload_json, synced_at)
 VALUES (1, '{}', '');
 "#;
 
+pub const MIGRATION_0025_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS app_agent_model_catalog (
+    model_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'hub',
+    capabilities_json TEXT NOT NULL DEFAULT '["text"]',
+    context_window INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'hub',
+    last_fetched_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS app_agent_mcp_namespaces (
+    namespace TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    tool_count INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'seed',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS app_agent_custom_providers (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'default',
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    secret_name TEXT NOT NULL DEFAULT '',
+    capabilities_json TEXT NOT NULL DEFAULT '["text"]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_agent_ask_user_prompts (
+    prompt_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    agent_slug TEXT NOT NULL,
+    question TEXT NOT NULL,
+    options_json TEXT NOT NULL DEFAULT '[]',
+    allow_custom INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'pending',
+    answer TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    answered_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ask_user_thread ON app_agent_ask_user_prompts(thread_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_agent_cowriter_drafts (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'default',
+    thread_id TEXT,
+    article_id INTEGER,
+    report_id INTEGER,
+    target_kind TEXT NOT NULL DEFAULT 'draft',
+    title TEXT NOT NULL DEFAULT '',
+    before_text TEXT NOT NULL DEFAULT '',
+    after_text TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL DEFAULT '',
+    agent_slug TEXT NOT NULL DEFAULT 'editor-minh',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    decided_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS app_agent_memory_nodes (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'default',
+    layer TEXT NOT NULL DEFAULT 'L2',
+    node_kind TEXT NOT NULL DEFAULT 'fact',
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    agent_slug TEXT NOT NULL DEFAULT '',
+    thread_id TEXT,
+    scope_json TEXT NOT NULL DEFAULT '{}',
+    confidence REAL NOT NULL DEFAULT 0.85,
+    source_ref TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_layer ON app_agent_memory_nodes(layer, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_agent_memory_edges (
+    id TEXT PRIMARY KEY,
+    from_node_id TEXT NOT NULL,
+    to_node_id TEXT NOT NULL,
+    relation TEXT NOT NULL DEFAULT 'relates_to',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_telegram_link_codes (
+    code TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL DEFAULT 'default',
+    agent_slug TEXT NOT NULL,
+    thread_id TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT NOT NULL DEFAULT '',
+    consumed_chat_id TEXT NOT NULL DEFAULT ''
+);
+"#;
+
 pub fn seed_defaults(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO app_agent_bridge_config (id, default_model, active_engine_status) VALUES (1, 'gpt-5.4-mini', 'hub_standby')",
         [],
     )?;
+    crate::agent_v2::ensure_v2_columns_and_tables(conn)?;
     let seeded: i64 = conn
         .query_row(
             "SELECT agents_seeded FROM app_agent_bridge_config WHERE id = 1",
@@ -670,6 +773,26 @@ pub struct BridgeConfigRow {
     pub hub_url: String,
     #[serde(default = "default_model_name")]
     pub default_model: String,
+    #[serde(default = "default_model_name")]
+    pub default_smart_model: String,
+    #[serde(default)]
+    pub fast_background_model: String,
+    #[serde(default = "default_interface_lang")]
+    pub interface_language: String,
+    #[serde(default = "default_output_lang")]
+    pub model_output_language: String,
+    #[serde(default = "default_send_key_mode")]
+    pub send_key_mode: String,
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u8,
+    #[serde(default = "default_max_group_hops")]
+    pub max_group_hops: u8,
+    #[serde(default = "default_temperature")]
+    pub default_temperature: f64,
+    #[serde(default = "default_write_gate_policy")]
+    pub write_gate_policy: String,
+    #[serde(default = "default_empty_obj")]
+    pub composer_prefs: Value,
     #[serde(default)]
     pub llm_base_url: String,
     #[serde(default)]
@@ -688,12 +811,76 @@ pub struct BridgeConfigRow {
     pub task_models: TaskModelsConfig,
 }
 
+fn default_interface_lang() -> String {
+    "en".to_string()
+}
+fn default_output_lang() -> String {
+    "vi".to_string()
+}
+fn default_send_key_mode() -> String {
+    "enter".to_string()
+}
+fn default_max_tool_rounds() -> u8 {
+    8
+}
+fn default_max_group_hops() -> u8 {
+    MAX_PEER_CONSULT_HOPS as u8
+}
+fn default_temperature() -> f64 {
+    0.4
+}
+fn default_write_gate_policy() -> String {
+    "write_gated".to_string()
+}
+fn default_empty_obj() -> Value {
+    json!({})
+}
+fn default_chat_mode() -> String {
+    "chat".to_string()
+}
+fn default_persona_style() -> String {
+    "default".to_string()
+}
+fn default_pinned_skill_slug() -> String {
+    "auto".to_string()
+}
+
+pub(crate) fn resolve_smart_model(cfg: &BridgeConfigRow) -> String {
+    let smart = cfg.default_smart_model.trim();
+    if !smart.is_empty() {
+        return smart.to_string();
+    }
+    let def = cfg.default_model.trim();
+    if !def.is_empty() {
+        return def.to_string();
+    }
+    default_model_name()
+}
+
+pub(crate) fn resolve_fast_model(cfg: &BridgeConfigRow) -> String {
+    let fast = cfg.fast_background_model.trim();
+    if !fast.is_empty() && fast != "follow_default" && fast != "inherit" {
+        return fast.to_string();
+    }
+    resolve_smart_model(cfg)
+}
+
 impl Default for BridgeConfigRow {
     fn default() -> Self {
         Self {
             astraea_url: String::new(),
             hub_url: String::new(),
             default_model: default_model_name(),
+            default_smart_model: default_model_name(),
+            fast_background_model: String::new(),
+            interface_language: default_interface_lang(),
+            model_output_language: default_output_lang(),
+            send_key_mode: default_send_key_mode(),
+            max_tool_rounds: default_max_tool_rounds(),
+            max_group_hops: default_max_group_hops(),
+            default_temperature: default_temperature(),
+            write_gate_policy: default_write_gate_policy(),
+            composer_prefs: json!({}),
             llm_base_url: String::new(),
             allowed_hosts: Vec::new(),
             telegram_transport_mode: default_tg_mode(),
@@ -722,6 +909,22 @@ pub struct AgentThread {
     pub pinned_skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_from_message_id: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub scratchpad_md: String,
+    #[serde(default = "default_chat_mode")]
+    pub chat_mode: String,
+    #[serde(default = "default_persona_style")]
+    pub persona_style: String,
+    #[serde(default = "default_pinned_skill_slug")]
+    pub pinned_skill_slug: String,
+    #[serde(default = "default_true")]
+    pub apply_skill_every_turn: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -900,7 +1103,7 @@ pub struct HubEffectiveBundleCache {
     pub synced_at: String,
 }
 
-fn load_hub_bundle_cache_db(conn: &Connection) -> HubEffectiveBundleCache {
+pub(crate) fn load_hub_bundle_cache_db(conn: &Connection) -> HubEffectiveBundleCache {
     conn.query_row(
         "SELECT payload_json, synced_at FROM app_agent_hub_bundle_cache WHERE id = 1",
         [],
@@ -944,6 +1147,10 @@ fn save_hub_bundle_cache_db(
 pub struct TurnOptions {
     pub skill_slugs: Vec<String>,
     pub model_override: Option<String>,
+    pub retry_seat_slug: Option<String>,
+    pub skip_insert_user_message: bool,
+    pub chat_mode_override: Option<String>,
+    pub persona_style_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,6 +1201,10 @@ pub struct MergedToolInvocation {
     pub result_text: Option<String>,
     #[serde(default)]
     pub is_error: bool,
+    #[serde(default)]
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_required: Option<ApprovalRequiredMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1046,6 +1257,12 @@ pub struct AgentMessage {
     pub context: Option<ActiveViewContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub round_idx: Option<i64>,
+    #[serde(default)]
+    pub trace_steps: Vec<Value>,
+    #[serde(default)]
+    pub artifacts: Vec<Value>,
+    #[serde(default)]
+    pub usage: Value,
     pub created_at: String,
 }
 
@@ -1084,9 +1301,13 @@ pub struct TelegramRouteConfig {
     pub thread_id: Option<String>,
     pub bot_name: String,
     pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub send_progress: bool,
+    #[serde(default = "default_true")]
+    pub send_tool_hints: bool,
 }
 
-fn bad_request(message: impl std::fmt::Display) -> Response {
+pub(crate) fn bad_request(message: impl std::fmt::Display) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({ "ok": false, "error": "bad_request", "detail": message.to_string() })),
@@ -1103,27 +1324,48 @@ fn random_u64() -> u64 {
     }
 }
 
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     let ts = Utc::now().timestamp_millis() as u64;
     let rand = random_u64() & 0xffff_ffff;
     format!("{prefix}_{ts:x}_{rand:08x}")
 }
 
-fn load_bridge_config_db(conn: &Connection) -> BridgeConfigRow {
+pub(crate) fn load_bridge_config_db(conn: &Connection) -> BridgeConfigRow {
     let mut cfg = conn
         .query_row(
             "SELECT astraea_url, hub_url, default_model, llm_base_url, allowed_hosts_json, \
                     telegram_transport_mode, telegram_bot_name, telegram_api_base_url, \
-                    cygnus_url, telegram_chat_policy, task_models_json \
+                    cygnus_url, telegram_chat_policy, task_models_json, \
+                    COALESCE(NULLIF(trim(default_smart_model), ''), default_model), \
+                    COALESCE(fast_background_model, ''), \
+                    COALESCE(NULLIF(trim(interface_language), ''), 'en'), \
+                    COALESCE(NULLIF(trim(model_output_language), ''), 'vi'), \
+                    COALESCE(NULLIF(trim(send_key_mode), ''), 'enter'), \
+                    COALESCE(max_tool_rounds, 8), \
+                    COALESCE(max_group_hops, 3), \
+                    COALESCE(default_temperature, 0.4), \
+                    COALESCE(NULLIF(trim(write_gate_policy), ''), 'write_gated'), \
+                    COALESCE(composer_prefs_json, '{}') \
              FROM app_agent_bridge_config WHERE id = 1",
             [],
             |r| {
                 let hosts_raw: String = r.get(4)?;
                 let task_models_raw: String = r.get::<_, Option<String>>(10)?.unwrap_or_default();
+                let composer_raw: String = r.get::<_, Option<String>>(20)?.unwrap_or_default();
                 Ok(BridgeConfigRow {
                     astraea_url: r.get(0)?,
                     hub_url: r.get(1)?,
                     default_model: r.get(2)?,
+                    default_smart_model: r.get(11)?,
+                    fast_background_model: r.get(12)?,
+                    interface_language: r.get(13)?,
+                    model_output_language: r.get(14)?,
+                    send_key_mode: r.get(15)?,
+                    max_tool_rounds: r.get::<_, i64>(16)?.clamp(1, 24) as u8,
+                    max_group_hops: r.get::<_, i64>(17)?.clamp(1, 12) as u8,
+                    default_temperature: r.get::<_, f64>(18)?.clamp(0.0, 2.0),
+                    write_gate_policy: r.get(19)?,
+                    composer_prefs: serde_json::from_str(&composer_raw).unwrap_or_else(|_| json!({})),
                     llm_base_url: r.get(3)?,
                     allowed_hosts: serde_json::from_str(&hosts_raw).unwrap_or_default(),
                     telegram_transport_mode: r.get(5)?,
@@ -1160,10 +1402,13 @@ fn load_bridge_config_db(conn: &Connection) -> BridgeConfigRow {
     if cfg.default_model.trim().is_empty() {
         cfg.default_model = default_model_name();
     }
+    if cfg.default_smart_model.trim().is_empty() {
+        cfg.default_smart_model = cfg.default_model.clone();
+    }
     cfg
 }
 
-fn read_vault_secret(state: &SharedState, name: &str) -> Option<String> {
+pub(crate) fn read_vault_secret(state: &SharedState, name: &str) -> Option<String> {
     let vault = state.secrets.as_ref()?;
     let db = state.db.lock().ok()?;
     secrets::get(&db, vault, name)
@@ -1183,7 +1428,7 @@ fn resolve_astraea_token(state: &SharedState) -> String {
         .unwrap_or_default()
 }
 
-fn resolve_hub_token(state: &SharedState) -> String {
+pub(crate) fn resolve_hub_token(state: &SharedState) -> String {
     read_vault_secret(state, SEC_HUB_TOKEN)
         .or_else(|| read_vault_secret(state, crate::hub::SECRET_NAME))
         .or_else(|| {
@@ -1201,7 +1446,7 @@ fn resolve_hub_token(state: &SharedState) -> String {
         .unwrap_or_default()
 }
 
-fn resolve_llm_key(state: &SharedState) -> String {
+pub(crate) fn resolve_llm_key(state: &SharedState) -> String {
     read_vault_secret(state, SEC_LLM_KEY)
         .or_else(|| read_vault_secret(state, "llm-api-key"))
         .unwrap_or_else(|| resolve_hub_token(state))
@@ -1224,7 +1469,7 @@ fn resolve_cygnus_key(state: &SharedState) -> String {
 /// - `Some("")` deletes the secret row cleanly (even if `LNC_MASTER_KEY` is unset).
 /// - `Some(non_empty)` seals under `state.secrets`, returning `Err(SecretError::NotConfigured)`
 ///   (HTTP 503 `secret_store_not_configured`) if `state.secrets` is `None`.
-fn apply_vault_secret_patch(
+pub(crate) fn apply_vault_secret_patch(
     state: &SharedState,
     db: &crate::db::Database,
     name: &str,
@@ -1234,11 +1479,10 @@ fn apply_vault_secret_patch(
         return Ok(());
     };
     let trimmed = raw.trim();
-    if trimmed == MASKED_SECRET {
-        return Ok(());
-    }
-    if trimmed.is_empty() {
-        let _ = secrets::delete(db, name)?;
+    // Preserve saved vault credentials when a caller sends a masked or blank field
+    // (`omitBlankSecrets` / v2 partial bridge-config updates); explicit secret removal
+    // goes through `/api/admin/secrets/{name}` or deleting the custom provider.
+    if trimmed.is_empty() || trimmed == MASKED_SECRET {
         return Ok(());
     }
     let vault = state.secrets.as_ref().ok_or(SecretError::NotConfigured)?;
@@ -1302,7 +1546,7 @@ fn hub_root_from_url(raw: &str) -> String {
     trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
-fn effective_hub_base(state: &SharedState, cfg: &BridgeConfigRow) -> String {
+pub(crate) fn effective_hub_base(state: &SharedState, cfg: &BridgeConfigRow) -> String {
     if !cfg.hub_url.trim().is_empty() {
         hub_root_from_url(&cfg.hub_url)
     } else if let Some(ref base) = state.hub.base_url
@@ -1353,7 +1597,7 @@ fn resolve_relay_ws_target(state: &SharedState, cfg: &BridgeConfigRow) -> Option
     None
 }
 
-fn outcome_json(outcome: FetchOutcome) -> Result<Value> {
+pub(crate) fn outcome_json(outcome: FetchOutcome) -> Result<Value> {
     match outcome {
         FetchOutcome::Body { bytes, .. } => {
             serde_json::from_slice(&bytes).context("invalid JSON response body")
@@ -1578,11 +1822,39 @@ fn bridge_routing_summary(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
     })
 }
 
-fn persist_bridge_config_row(state: &SharedState, next: BridgeConfigRow) -> Result<BridgeConfigRow> {
-    let mode = state.agent_bridge.status_mode(&next);
+pub(crate) fn persist_bridge_config_row(state: &SharedState, next: BridgeConfigRow) -> Result<BridgeConfigRow> {
+    let mut normalized = next;
+    if normalized.default_smart_model.trim().is_empty() {
+        normalized.default_smart_model = normalized.default_model.clone();
+    }
+    if normalized.default_model.trim().is_empty() {
+        normalized.default_model = normalized.default_smart_model.clone();
+    }
+    normalized.interface_language = match normalized.interface_language.trim() {
+        "vi" => "vi".to_string(),
+        _ => "en".to_string(),
+    };
+    normalized.model_output_language = match normalized.model_output_language.trim() {
+        "en" => "en".to_string(),
+        "auto" => "auto".to_string(),
+        _ => "vi".to_string(),
+    };
+    normalized.send_key_mode = match normalized.send_key_mode.trim() {
+        "ctrl_enter" => "ctrl_enter".to_string(),
+        _ => "enter".to_string(),
+    };
+    normalized.max_tool_rounds = normalized.max_tool_rounds.clamp(1, 24);
+    normalized.max_group_hops = normalized.max_group_hops.clamp(1, 12);
+    normalized.default_temperature = normalized.default_temperature.clamp(0.0, 2.0);
+    if normalized.write_gate_policy.trim().is_empty() {
+        normalized.write_gate_policy = "write_gated".to_string();
+    }
+
+    let mode = state.agent_bridge.status_mode(&normalized);
     let now = Utc::now().to_rfc3339();
-    let hosts_json = serde_json::to_string(&next.allowed_hosts)?;
-    let task_models_json = serde_json::to_string(&next.task_models)?;
+    let hosts_json = serde_json::to_string(&normalized.allowed_hosts)?;
+    let task_models_json = serde_json::to_string(&normalized.task_models)?;
+    let composer_prefs_json = serde_json::to_string(&normalized.composer_prefs)?;
     {
         let db = state.db.lock().expect("database lock poisoned");
         db.conn.execute(
@@ -1590,22 +1862,36 @@ fn persist_bridge_config_row(state: &SharedState, next: BridgeConfigRow) -> Resu
                 astraea_url = ?1, hub_url = ?2, default_model = ?3, llm_base_url = ?4, \
                 allowed_hosts_json = ?5, telegram_transport_mode = ?6, telegram_bot_name = ?7, \
                 telegram_api_base_url = ?8, cygnus_url = ?9, telegram_chat_policy = ?10, \
-                active_engine_status = ?11, task_models_json = ?12, updated_at = ?13 \
+                active_engine_status = ?11, task_models_json = ?12, updated_at = ?13, \
+                default_smart_model = ?14, fast_background_model = ?15, interface_language = ?16, \
+                model_output_language = ?17, send_key_mode = ?18, max_tool_rounds = ?19, \
+                max_group_hops = ?20, default_temperature = ?21, write_gate_policy = ?22, \
+                composer_prefs_json = ?23 \
              WHERE id = 1",
             params![
-                next.astraea_url,
-                next.hub_url,
-                next.default_model,
-                next.llm_base_url,
+                normalized.astraea_url,
+                normalized.hub_url,
+                normalized.default_model,
+                normalized.llm_base_url,
                 hosts_json,
-                next.telegram_transport_mode,
-                next.telegram_bot_name,
-                next.telegram_api_base_url,
-                next.cygnus_url,
-                next.telegram_chat_policy,
+                normalized.telegram_transport_mode,
+                normalized.telegram_bot_name,
+                normalized.telegram_api_base_url,
+                normalized.cygnus_url,
+                normalized.telegram_chat_policy,
                 mode,
                 task_models_json,
                 now,
+                normalized.default_smart_model,
+                normalized.fast_background_model,
+                normalized.interface_language,
+                normalized.model_output_language,
+                normalized.send_key_mode,
+                normalized.max_tool_rounds as i64,
+                normalized.max_group_hops as i64,
+                normalized.default_temperature,
+                normalized.write_gate_policy,
+                composer_prefs_json,
             ],
         )?;
     }
@@ -1613,9 +1899,9 @@ fn persist_bridge_config_row(state: &SharedState, next: BridgeConfigRow) -> Resu
         .agent_bridge
         .config
         .lock()
-        .expect("bridge config poisoned") = next.clone();
+        .expect("bridge config poisoned") = normalized.clone();
     state.agent_bridge.notify_reload();
-    Ok(next)
+    Ok(normalized)
 }
 
 // ---------------------------------------------------------------------------
@@ -1628,7 +1914,7 @@ pub fn normalize_tool_name(name: &str) -> &str {
         .unwrap_or_else(|| name.trim())
 }
 
-fn upsert_agent_conn(
+pub(crate) fn upsert_agent_conn(
     conn: &Connection,
     agent: &AppAgentConfig,
     ignore_existing: bool,
@@ -1751,7 +2037,7 @@ fn map_agent_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppAgentConfig> {
     })
 }
 
-fn list_agents_db(conn: &Connection) -> Result<Vec<AppAgentConfig>> {
+pub(crate) fn list_agents_db(conn: &Connection) -> Result<Vec<AppAgentConfig>> {
     let mut st = conn.prepare(
         "SELECT slug, display_name, description, emoji, color, avatar_url, reply_language, \
                 soul_md, app_role_addendum_md, sync_blueprint_to_hub, runtime_kind, \
@@ -1765,7 +2051,7 @@ fn list_agents_db(conn: &Connection) -> Result<Vec<AppAgentConfig>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn get_agent_db(conn: &Connection, slug: &str) -> Result<Option<AppAgentConfig>> {
+pub(crate) fn get_agent_db(conn: &Connection, slug: &str) -> Result<Option<AppAgentConfig>> {
     Ok(conn
         .query_row(
             "SELECT slug, display_name, description, emoji, color, avatar_url, reply_language, \
@@ -1781,7 +2067,7 @@ fn get_agent_db(conn: &Connection, slug: &str) -> Result<Option<AppAgentConfig>>
         .optional()?)
 }
 
-fn map_thread_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentThread> {
+pub(crate) fn map_thread_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentThread> {
     let members_raw: String = r.get(5)?;
     let pinned_skills_raw: String = r.get::<_, Option<String>>(9)?.unwrap_or_default();
     Ok(AgentThread {
@@ -1796,17 +2082,38 @@ fn map_thread_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentThread> {
         workspace_id: r.get::<_, Option<String>>(8)?.filter(|s| !s.trim().is_empty()),
         pinned_skills: serde_json::from_str(&pinned_skills_raw).unwrap_or_default(),
         model_override: r.get::<_, Option<String>>(10)?.filter(|s| !s.trim().is_empty()),
+        parent_thread_id: r.get::<_, Option<String>>(13)?.filter(|s| !s.trim().is_empty()),
+        fork_from_message_id: r.get::<_, Option<String>>(14)?.filter(|s| !s.trim().is_empty()),
+        pinned: r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0,
+        scratchpad_md: r.get::<_, Option<String>>(16)?.unwrap_or_default(),
+        chat_mode: r
+            .get::<_, Option<String>>(17)?
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(default_chat_mode),
+        persona_style: r
+            .get::<_, Option<String>>(18)?
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(default_persona_style),
+        pinned_skill_slug: r
+            .get::<_, Option<String>>(19)?
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(default_pinned_skill_slug),
+        apply_skill_every_turn: r.get::<_, Option<i64>>(20)?.unwrap_or(1) != 0,
         created_at: r.get(11)?,
         updated_at: r.get(12)?,
     })
 }
 
-fn get_thread_db(conn: &Connection, id: &str) -> Result<Option<AgentThread>> {
+pub(crate) fn get_thread_db(conn: &Connection, id: &str) -> Result<Option<AgentThread>> {
     Ok(conn
         .query_row(
             "SELECT id, kind, title, article_id, report_id, member_slugs_json, \
                     discussion_mode, lead_slug, workspace_id, pinned_skills_json, \
-                    model_override, created_at, updated_at \
+                    model_override, created_at, updated_at, \
+                    parent_thread_id, fork_from_message_id, COALESCE(pinned, 0), \
+                    COALESCE(scratchpad_md, ''), COALESCE(chat_mode, 'chat'), \
+                    COALESCE(persona_style, 'default'), COALESCE(pinned_skill_slug, 'auto'), \
+                    COALESCE(apply_skill_every_turn, 1) \
              FROM app_agent_threads WHERE id = ?1",
             [id],
             map_thread_row,
@@ -1814,7 +2121,7 @@ fn get_thread_db(conn: &Connection, id: &str) -> Result<Option<AgentThread>> {
         .optional()?)
 }
 
-fn list_threads_db(
+pub(crate) fn list_threads_db(
     conn: &Connection,
     article_id: Option<i64>,
     report_id: Option<i64>,
@@ -1823,12 +2130,16 @@ fn list_threads_db(
     let mut st = conn.prepare(
         "SELECT id, kind, title, article_id, report_id, member_slugs_json, \
                 discussion_mode, lead_slug, workspace_id, pinned_skills_json, \
-                model_override, created_at, updated_at \
+                model_override, created_at, updated_at, \
+                parent_thread_id, fork_from_message_id, COALESCE(pinned, 0), \
+                COALESCE(scratchpad_md, ''), COALESCE(chat_mode, 'chat'), \
+                COALESCE(persona_style, 'default'), COALESCE(pinned_skill_slug, 'auto'), \
+                COALESCE(apply_skill_every_turn, 1) \
          FROM app_agent_threads \
          WHERE (?1 IS NULL OR article_id = ?1) \
            AND (?2 IS NULL OR report_id = ?2) \
            AND (?3 IS NULL OR workspace_id = ?3) \
-         ORDER BY updated_at DESC, rowid DESC",
+         ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC, rowid DESC",
     )?;
     let rows = st.query_map(params![article_id, report_id, workspace_id], map_thread_row)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2277,9 +2588,12 @@ fn upsert_skill_access_request_db(
     )?)
 }
 
-fn map_message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessage> {
+pub(crate) fn map_message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessage> {
     let tools_raw: Option<String> = r.get(6)?;
     let ctx_raw: Option<String> = r.get(7)?;
+    let trace_raw: Option<String> = r.get(10).ok();
+    let artifacts_raw: Option<String> = r.get(11).ok();
+    let usage_raw: Option<String> = r.get(12).ok();
     Ok(AgentMessage {
         id: r.get(0)?,
         thread_id: r.get(1)?,
@@ -2295,14 +2609,28 @@ fn map_message_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AgentMessage> {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         round_idx: r.get(8)?,
+        trace_steps: trace_raw
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default(),
+        artifacts: artifacts_raw
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default(),
+        usage: usage_raw
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| json!({})),
         created_at: r.get(9)?,
     })
 }
 
-fn list_messages_db(conn: &Connection, thread_id: &str) -> Result<Vec<AgentMessage>> {
+pub(crate) fn list_messages_db(conn: &Connection, thread_id: &str) -> Result<Vec<AgentMessage>> {
     let mut st = conn.prepare(
         "SELECT id, thread_id, role, sender_slug, content, reasoning, \
-                tool_calls_json, context_json, round_idx, created_at \
+                tool_calls_json, context_json, round_idx, created_at, \
+                COALESCE(trace_steps_json, '[]'), COALESCE(artifacts_json, '[]'), \
+                COALESCE(usage_json, '{}') \
          FROM app_agent_messages WHERE thread_id = ?1 ORDER BY seq_id ASC",
     )?;
     let rows = st.query_map([thread_id], map_message_row)?;
@@ -2310,7 +2638,7 @@ fn list_messages_db(conn: &Connection, thread_id: &str) -> Result<Vec<AgentMessa
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_message_db(
+pub(crate) fn insert_message_db(
     conn: &Connection,
     thread_id: &str,
     role: &str,
@@ -2366,8 +2694,30 @@ fn insert_message_db(
         tool_calls: tool_calls.to_vec(),
         context: context.cloned(),
         round_idx,
+        trace_steps: Vec::new(),
+        artifacts: Vec::new(),
+        usage: json!({}),
         created_at: now.to_string(),
     })
+}
+
+pub(crate) fn update_message_v2_meta_db(
+    conn: &Connection,
+    message_id: &str,
+    trace_steps: &[Value],
+    artifacts: &[Value],
+    usage: &Value,
+) -> Result<()> {
+    let trace_json = serde_json::to_string(trace_steps)?;
+    let artifacts_json = serde_json::to_string(artifacts)?;
+    let usage_json = serde_json::to_string(usage)?;
+    conn.execute(
+        "UPDATE app_agent_messages \
+         SET trace_steps_json = ?1, artifacts_json = ?2, usage_json = ?3 \
+         WHERE id = ?4",
+        params![trace_json, artifacts_json, usage_json, message_id],
+    )?;
+    Ok(())
 }
 
 fn list_whiteboard_db(conn: &Connection, thread_id: &str) -> Result<Vec<WhiteboardNote>> {
@@ -2780,12 +3130,12 @@ pub fn spawn_relay_worker(state: SharedState) -> tokio::task::JoinHandle<()> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct LlmEndpoint {
-    base_url: String,
-    api_key: String,
+pub(crate) struct LlmEndpoint {
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
 }
 
-fn resolve_llm_endpoint(
+pub(crate) fn resolve_llm_endpoint(
     state: &SharedState,
     agent: &AppAgentConfig,
     cfg: &BridgeConfigRow,
@@ -2840,7 +3190,21 @@ fn resolve_llm_endpoint(
     None
 }
 
-fn chat_completions_url(base: &str) -> String {
+pub(crate) fn resolve_llm_endpoint_for_model(
+    state: &SharedState,
+    agent: &AppAgentConfig,
+    cfg: &BridgeConfigRow,
+    model_id: Option<&str>,
+) -> Option<LlmEndpoint> {
+    if let Some(mid) = model_id.map(str::trim).filter(|s| !s.is_empty())
+        && let Some(custom_ep) = crate::agent_v2::resolve_custom_provider_endpoint(state, mid)
+    {
+        return Some(custom_ep);
+    }
+    resolve_llm_endpoint(state, agent, cfg)
+}
+
+pub(crate) fn chat_completions_url(base: &str) -> String {
     let trimmed = base.trim().trim_end_matches('/');
     if trimmed.ends_with("/chat/completions") {
         trimmed.to_string()
@@ -2851,7 +3215,7 @@ fn chat_completions_url(base: &str) -> String {
     }
 }
 
-fn models_list_url(base: &str) -> String {
+pub(crate) fn models_list_url(base: &str) -> String {
     let trimmed = base.trim().trim_end_matches('/');
     if trimmed.ends_with("/models") {
         trimmed.to_string()
@@ -2923,10 +3287,13 @@ fn build_openai_tools(agent: &AppAgentConfig) -> Vec<Value> {
             }));
         }
     }
+    for builtin in crate::agent_v2::builtin_openai_tools() {
+        out.push(builtin);
+    }
     out
 }
 
-fn dedup_non_empty(items: &[String]) -> Vec<String> {
+pub(crate) fn dedup_non_empty(items: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for item in items {
         let trimmed = item.trim();
@@ -3027,6 +3394,9 @@ pub fn resolve_active_granted_skills(
     for slug in &thread.pinned_skills {
         push_unique(slug);
     }
+    if thread.pinned_skill_slug != "auto" && !thread.pinned_skill_slug.trim().is_empty() {
+        push_unique(&thread.pinned_skill_slug);
+    }
     for slug in turn_skill_slugs {
         push_unique(slug);
     }
@@ -3046,11 +3416,15 @@ pub fn resolve_active_granted_skills(
 fn build_system_prompt(
     agent: &AppAgentConfig,
     thread: &AgentThread,
+    bridge_cfg: &BridgeConfigRow,
     workspace: Option<&AgentWorkspace>,
     active_skills: &[HubSkillSummary],
     pinned_notes: &[WhiteboardNote],
+    canon_memory: &[String],
     active_ctx: Option<&ActiveViewContext>,
     mode_instruction: &str,
+    chat_mode_override: Option<&str>,
+    persona_style_override: Option<&str>,
 ) -> String {
     let mut sections: Vec<String> = Vec::new();
     sections.push(format!(
@@ -3088,7 +3462,13 @@ fn build_system_prompt(
             sections.push(sk_block.trim_end().to_string());
         }
     }
-    let lang_rule = match agent.reply_language.as_str() {
+
+    let effective_lang = if agent.reply_language == "auto" || agent.reply_language.trim().is_empty() {
+        bridge_cfg.model_output_language.as_str()
+    } else {
+        agent.reply_language.as_str()
+    };
+    let lang_rule = match effective_lang {
         "vi" => "Reply in natural, analytical Vietnamese unless explicitly asked to translate.",
         "en" => "Reply in clear, analytical English unless explicitly asked otherwise.",
         _ => "Reply in the same language as the reader's latest message.",
@@ -3101,11 +3481,55 @@ fn build_system_prompt(
          - When citing declared tax deadlines or legal documents, preserve the legal/tax disclaimer (`Không phải tư vấn pháp lý/thuế. / Not legal or tax advice.`), state `verified` status honestly, and note that public holidays are not modelled."
     ));
 
+    let effective_chat_mode = chat_mode_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| thread.chat_mode.trim());
+    let effective_persona_style = persona_style_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| thread.persona_style.trim());
+    if !effective_chat_mode.is_empty() || !effective_persona_style.is_empty() {
+        let mut style_lines = vec![String::from("## Session Posture & Response Style")];
+        match effective_chat_mode {
+            "research" | "deep_research" => style_lines.push("- Mode: Deep research — verify sources, call Newsman/MCP read tools before concluding, and surface uncertainties.".into()),
+            "brief" => style_lines.push("- Mode: Executive brief — lead with bullet takeaways, impact, and key dates/metrics.".into()),
+            "cowriter" => style_lines.push("- Mode: Co-Writer — structure prose cleanly for editorial refinement and preserve factual citations.".into()),
+            other if !other.is_empty() => style_lines.push(format!("- Mode: `{other}`.")),
+            _ => {}
+        }
+        match effective_persona_style {
+            "concise" => style_lines.push("- Style: Concise — minimize filler, favor tight structured bullets.".into()),
+            "critical" | "skeptical" => style_lines.push("- Style: Critical — surface counter-arguments, missing evidence, and verification gaps.".into()),
+            "socratic" => style_lines.push("- Style: Socratic — test assumptions and offer clarifying follow-up questions via `ask_user` when needed.".into()),
+            other if !other.is_empty() => style_lines.push(format!("- Style: `{other}`.")),
+            _ => {}
+        }
+        if style_lines.len() > 1 {
+            sections.push(style_lines.join("\n"));
+        }
+    }
+
     if !mode_instruction.trim().is_empty() {
         sections.push(format!(
             "## Discussion Orchestration\n{}",
             mode_instruction.trim()
         ));
+    }
+
+    if !thread.scratchpad_md.trim().is_empty() {
+        sections.push(format!(
+            "## Thread Working Scratchpad (L1 Memory)\n{}",
+            thread.scratchpad_md.trim()
+        ));
+    }
+
+    if !canon_memory.is_empty() {
+        let mut mem_block = String::from("## Shared Canon & Personal Memory (L2/L3)\n");
+        for line in canon_memory {
+            mem_block.push_str(&format!("- {line}\n"));
+        }
+        sections.push(mem_block.trim_end().to_string());
     }
 
     if thread.article_id.is_some() || thread.report_id.is_some() {
@@ -3201,7 +3625,7 @@ async fn call_chat_completion_once(
     outcome_json(outcome)
 }
 
-async fn call_chat_completion_with_backup(
+pub(crate) async fn call_chat_completion_with_backup(
     fetcher: &Fetcher,
     endpoint: &LlmEndpoint,
     agent: &AppAgentConfig,
@@ -3353,7 +3777,7 @@ async fn execute_single_agent_seat(
         }),
     );
 
-    let (pinned_notes, workspace, active_skills) = {
+    let (pinned_notes, workspace, active_skills, canon_memory) = {
         let db = state.db.lock().expect("database lock poisoned");
         let notes = list_whiteboard_db(&db.conn, &thread.id)?
             .into_iter()
@@ -3371,18 +3795,24 @@ async fn execute_single_agent_seat(
             &thread,
             &options.skill_slugs,
         )?;
-        (notes, ws, skills)
+        let mem_lines = crate::agent_v2::load_relevant_memory_for_prompt(&db.conn, 8);
+        (notes, ws, skills, mem_lines)
     };
 
+    let cfg = state.agent_bridge.config();
     let rctx = effective_resource_ctx(workspace.as_ref(), &agent);
     let sys_prompt = build_system_prompt(
         &agent,
         &thread,
+        &cfg,
         workspace.as_ref(),
         &active_skills,
         &pinned_notes,
+        &canon_memory,
         active_ctx.as_ref(),
         &mode_instruction,
+        options.chat_mode_override.as_deref(),
+        options.persona_style_override.as_deref(),
     );
 
     let mut conv_messages: Vec<Value> = vec![json!({
@@ -3418,8 +3848,31 @@ async fn execute_single_agent_seat(
         }));
     }
 
-    let cfg = state.agent_bridge.config();
-    let Some(endpoint) = resolve_llm_endpoint(&state, &agent, &cfg) else {
+    let model_override = options
+        .model_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            thread
+                .model_override
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        });
+    let smart_fallback = resolve_smart_model(&cfg);
+    let effective_target_model = model_override
+        .as_deref()
+        .or_else(|| {
+            let pm = agent.primary_model.trim();
+            (!pm.is_empty()).then_some(pm)
+        })
+        .or_else(|| (!smart_fallback.is_empty()).then_some(smart_fallback.as_str()));
+    let Some(endpoint) =
+        resolve_llm_endpoint_for_model(&state, &agent, &cfg, effective_target_model)
+    else {
         let latest_user = history_snapshot
             .iter()
             .rev()
@@ -3506,25 +3959,17 @@ async fn execute_single_agent_seat(
 
     let fetcher = bridge_fetcher(&state, &cfg);
     let openai_tools = build_openai_tools(&agent);
-    let max_steps = agent.max_tool_steps.clamp(1, 24) as usize;
+    let max_steps = if agent.max_tool_steps != 8 {
+        agent.max_tool_steps
+    } else {
+        cfg.max_tool_rounds
+    }
+    .clamp(1, 24) as usize;
     let mut recorded_tools: Vec<MergedToolInvocation> = Vec::new();
+    let mut trace_steps: Vec<Value> = Vec::new();
+    let mut last_usage: Value = json!({});
     let mut accumulated_reasoning = String::new();
     let mut final_content = String::new();
-
-    let model_override = options
-        .model_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            thread
-                .model_override
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        });
 
     for step in 0..=max_steps {
         let tools_for_step: &[Value] = if step < max_steps { &openai_tools } else { &[] };
@@ -3532,7 +3977,7 @@ async fn execute_single_agent_seat(
             &fetcher,
             &endpoint,
             &agent,
-            &cfg.default_model,
+            &smart_fallback,
             model_override.as_deref(),
             &conv_messages,
             tools_for_step,
@@ -3567,6 +4012,10 @@ async fn execute_single_agent_seat(
                 return Err(err);
             }
         };
+
+        if let Some(u) = completion.get("usage").filter(|v| v.is_object()) {
+            last_usage = u.clone();
+        }
 
         let choice_msg = completion
             .pointer("/choices/0/message")
@@ -3630,6 +4079,7 @@ async fn execute_single_agent_seat(
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
                 let short_tool = normalize_tool_name(raw_fn_name).to_string();
+                let tool_origin = crate::agent_v2::classify_tool_origin(&short_tool);
                 let args_val = match tc.pointer("/function/arguments") {
                     Some(Value::String(s)) => {
                         serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({}))
@@ -3649,13 +4099,37 @@ async fn execute_single_agent_seat(
                         "merge_id": merge_id,
                         "call_id": call_id,
                         "tool": short_tool,
+                        "origin": tool_origin,
                         "arguments": args_val,
                         "resource_ctx": rctx,
                     }),
                 );
 
-                let (result_json, is_err, approval_meta) =
-                    execute_local_agent_tool(&state, &agent, &rctx, &short_tool, &args_val);
+                let t0 = std::time::Instant::now();
+                let (result_json, is_err, approval_meta, ask_user_prompt_opt) =
+                    if crate::agent_v2::is_builtin_tool(&short_tool) {
+                        crate::agent_v2::execute_builtin_tool(
+                            &state,
+                            &thread,
+                            &agent,
+                            &short_tool,
+                            &args_val,
+                        )
+                        .await
+                    } else {
+                        let (res, err, meta) =
+                            execute_local_agent_tool(&state, &agent, &rctx, &short_tool, &args_val);
+                        (res, err, meta, None)
+                    };
+                let elapsed_ms = t0.elapsed().as_millis() as u64;
+                if let Some(prompt_json) = ask_user_prompt_opt {
+                    state.agent_bridge.emit_event(
+                        &thread.id,
+                        "ask_user",
+                        &turn_id,
+                        prompt_json,
+                    );
+                }
                 let result_str =
                     serde_json::to_string(&result_json).unwrap_or_else(|_| "{}".into());
 
@@ -3678,6 +4152,8 @@ async fn execute_single_agent_seat(
                         "merge_id": merge_id,
                         "call_id": call_id,
                         "tool": short_tool,
+                        "origin": tool_origin,
+                        "duration_ms": elapsed_ms,
                         "result": result_json,
                         "is_error": is_err,
                         "approval_required": approval_meta,
@@ -3685,11 +4161,21 @@ async fn execute_single_agent_seat(
                     }),
                 );
 
+                trace_steps.push(json!({
+                    "step": step,
+                    "tool": short_tool,
+                    "origin": tool_origin,
+                    "status": pill_status,
+                    "duration_ms": elapsed_ms,
+                }));
+
                 recorded_tools.push(MergedToolInvocation {
                     merge_id,
                     call_id: Some(call_id.clone()),
                     tool: short_tool,
                     agent_slug: Some(agent.slug.clone()),
+                    origin: tool_origin.to_string(),
+                    duration_ms: Some(elapsed_ms),
                     arguments: Some(args_val),
                     status: pill_status.to_string(),
                     result_text: Some(result_str.clone()),
@@ -3761,7 +4247,7 @@ async fn execute_single_agent_seat(
     };
     let saved = {
         let db = state.db.lock().expect("database lock poisoned");
-        insert_message_db(
+        let mut msg = insert_message_db(
             &db.conn,
             &thread.id,
             "assistant",
@@ -3773,7 +4259,13 @@ async fn execute_single_agent_seat(
             Some(round_idx),
             None,
             &now_iso,
-        )?
+        )?;
+        if !trace_steps.is_empty() || last_usage.is_object() {
+            let _ = update_message_v2_meta_db(&db.conn, &msg.id, &trace_steps, &[], &last_usage);
+            msg.trace_steps = trace_steps;
+            msg.usage = last_usage;
+        }
+        msg
     };
 
     state.agent_bridge.emit_event(
@@ -3944,7 +4436,7 @@ async fn try_forward_turn_to_astraea(
     Some(persisted)
 }
 
-fn resolve_thread_agents(conn: &Connection, thread: &AgentThread) -> Result<Vec<AppAgentConfig>> {
+pub(crate) fn resolve_thread_agents(conn: &Connection, thread: &AgentThread) -> Result<Vec<AppAgentConfig>> {
     let all = list_agents_db(conn)?;
     let by_slug: HashMap<String, AppAgentConfig> =
         all.iter().map(|a| (a.slug.clone(), a.clone())).collect();
@@ -4012,13 +4504,17 @@ pub async fn execute_turn_orchestrator_with_options(
                 .conn
                 .query_row(
                     "SELECT seq_id, id, thread_id, role, sender_slug, content, reasoning, \
-                            tool_calls_json, context_json, round_idx, created_at \
+                            tool_calls_json, context_json, round_idx, created_at, \
+                            trace_steps_json, artifacts_json, usage_json \
                      FROM app_agent_messages WHERE thread_id = ?1 AND idempotency_key = ?2 LIMIT 1",
                     params![thread_id, idem],
                     |r| {
                         let seq: i64 = r.get(0)?;
                         let tools_raw: Option<String> = r.get(7)?;
                         let ctx_raw: Option<String> = r.get(8)?;
+                        let trace_raw: Option<String> = r.get(11)?;
+                        let artifacts_raw: Option<String> = r.get(12)?;
+                        let usage_raw: Option<String> = r.get(13)?;
                         Ok((
                             seq,
                             AgentMessage {
@@ -4037,6 +4533,18 @@ pub async fn execute_turn_orchestrator_with_options(
                                     .and_then(|s| serde_json::from_str(s).ok()),
                                 round_idx: r.get(9)?,
                                 created_at: r.get(10)?,
+                                trace_steps: trace_raw
+                                    .as_deref()
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_default(),
+                                artifacts: artifacts_raw
+                                    .as_deref()
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_default(),
+                                usage: usage_raw
+                                    .as_deref()
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_else(|| json!({})),
                             },
                         ))
                     },
@@ -4045,7 +4553,8 @@ pub async fn execute_turn_orchestrator_with_options(
             if let Some((user_seq, u_msg)) = existing_seq {
                 let mut st = db.conn.prepare(
                     "SELECT id, thread_id, role, sender_slug, content, reasoning, \
-                            tool_calls_json, context_json, round_idx, created_at \
+                            tool_calls_json, context_json, round_idx, created_at, \
+                            trace_steps_json, artifacts_json, usage_json \
                      FROM app_agent_messages WHERE thread_id = ?1 AND seq_id > ?2 AND role != 'user' \
                      ORDER BY seq_id ASC",
                 )?;
@@ -4071,21 +4580,50 @@ pub async fn execute_turn_orchestrator_with_options(
         let db = state.db.lock().expect("database lock poisoned");
         let thread = get_thread_db(&db.conn, thread_id)?
             .ok_or_else(|| anyhow!("thread not found: {thread_id}"))?;
-        let members = resolve_thread_agents(&db.conn, &thread)?;
+        let mut members = resolve_thread_agents(&db.conn, &thread)?;
+        if let Some(ref seat_slug) = options.retry_seat_slug {
+            members.retain(|m| m.slug == *seat_slug);
+            if members.is_empty() {
+                bail!("seat agent not found in thread: {seat_slug}");
+            }
+        }
         let now_iso = Utc::now().to_rfc3339();
-        let user_msg = insert_message_db(
-            &db.conn,
-            thread_id,
-            "user",
-            None,
-            text.trim(),
-            None,
-            &[],
-            active_view_context.as_ref(),
-            None,
-            idempotency_key.as_deref(),
-            &now_iso,
-        )?;
+        let user_msg = if options.skip_insert_user_message {
+            let existing = list_messages_db(&db.conn, thread_id)?;
+            existing
+                .into_iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .unwrap_or_else(|| AgentMessage {
+                    id: new_id("msg"),
+                    thread_id: thread_id.to_string(),
+                    role: "user".into(),
+                    sender_slug: None,
+                    content: text.trim().to_string(),
+                    reasoning: None,
+                    tool_calls: Vec::new(),
+                    context: active_view_context.clone(),
+                    round_idx: None,
+                    created_at: now_iso.clone(),
+                    trace_steps: Vec::new(),
+                    artifacts: Vec::new(),
+                    usage: json!({}),
+                })
+        } else {
+            insert_message_db(
+                &db.conn,
+                thread_id,
+                "user",
+                None,
+                text.trim(),
+                None,
+                &[],
+                active_view_context.as_ref(),
+                None,
+                idempotency_key.as_deref(),
+                &now_iso,
+            )?
+        };
         let history = list_messages_db(&db.conn, thread_id)?;
         (thread, members, user_msg, history)
     };
@@ -4116,7 +4654,9 @@ pub async fn execute_turn_orchestrator_with_options(
         });
     }
 
-    let mode = if thread.kind == "direct" && explicit_mentions.is_empty() {
+    let mode = if options.retry_seat_slug.is_some() {
+        "parallel_panel"
+    } else if thread.kind == "direct" && explicit_mentions.is_empty() {
         "mention_or_lead"
     } else {
         thread.discussion_mode.as_str()
@@ -4274,8 +4814,9 @@ pub async fn execute_turn_orchestrator_with_options(
                 }
             }
 
+            let max_hops = cfg.max_group_hops.clamp(1, 8) as usize;
             let mut running_notes: Vec<(String, String)> = Vec::new();
-            for hop in 0..=MAX_PEER_CONSULT_HOPS {
+            for hop in 0..=max_hops {
                 if target_slugs.is_empty() {
                     break;
                 }
@@ -4301,7 +4842,7 @@ pub async fn execute_turn_orchestrator_with_options(
                         )
                     } else {
                         format!(
-                            "Mode: `mention_or_lead` (Peer consult hop {hop} of {MAX_PEER_CONSULT_HOPS}). Add your specialist answer concisely."
+                            "Mode: `mention_or_lead` (Peer consult hop {hop} of {max_hops}). Add your specialist answer concisely."
                         )
                     };
                     match execute_single_agent_seat(
@@ -4331,7 +4872,7 @@ pub async fn execute_turn_orchestrator_with_options(
                     }
                 }
 
-                if hop == MAX_PEER_CONSULT_HOPS || hop_replies.is_empty() {
+                if hop == max_hops || hop_replies.is_empty() {
                     break;
                 }
                 let mut next_targets: Vec<String> = Vec::new();
@@ -4355,6 +4896,16 @@ pub async fn execute_turn_orchestrator_with_options(
     {
         return Err(err);
     }
+
+    crate::agent_v2::maybe_auto_title_thread(
+        &state,
+        &thread,
+        &history_snapshot,
+        &text,
+        &assistant_messages,
+        options.skip_insert_user_message,
+    )
+    .await;
 
     Ok(TurnOutcome {
         turn_id,
@@ -4644,13 +5195,16 @@ fn map_telegram_route_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TelegramRou
         thread_id: r.get(6)?,
         bot_name: r.get(7)?,
         enabled: r.get::<_, i64>(8)? != 0,
+        send_progress: r.get::<_, Option<i64>>(9)?.unwrap_or(1) != 0,
+        send_tool_hints: r.get::<_, Option<i64>>(10)?.unwrap_or(1) != 0,
     })
 }
 
-fn list_telegram_routes_db(conn: &Connection) -> Result<Vec<TelegramRouteConfig>> {
+pub(crate) fn list_telegram_routes_db(conn: &Connection) -> Result<Vec<TelegramRouteConfig>> {
     let mut st = conn.prepare(
         "SELECT id, transport_mode, policy, chat_id, message_thread_id, \
-                agent_slug, thread_id, bot_name, enabled \
+                agent_slug, thread_id, bot_name, enabled, \
+                COALESCE(send_progress, 1), COALESCE(send_tool_hints, 1) \
          FROM app_telegram_routes ORDER BY rowid DESC",
     )?;
     let rows = st.query_map([], map_telegram_route_row)?;
@@ -4889,7 +5443,7 @@ fn check_telegram_policy(
     }
 }
 
-fn ensure_telegram_route_thread_db(
+pub(crate) fn ensure_telegram_route_thread_db(
     conn: &Connection,
     route: &TelegramRouteConfig,
     inbound_topic: Option<i64>,
@@ -4926,7 +5480,7 @@ fn ensure_telegram_route_thread_db(
     Ok(tid)
 }
 
-async fn send_outbound_telegram_reply(
+pub(crate) async fn send_outbound_telegram_reply(
     state: &SharedState,
     cfg: &BridgeConfigRow,
     transport_mode: &str,
@@ -5027,6 +5581,12 @@ pub async fn process_inbound_telegram_event(
     inbound: InboundTelegramMessage,
 ) -> Result<Value> {
     let cfg = state.agent_bridge.config();
+    if let Some(link_res) =
+        crate::agent_v2::try_handle_telegram_link_command(&state, &cfg, transport_mode, &inbound)
+            .await
+    {
+        return Ok(link_res);
+    }
     let routes = {
         let db = state.db.lock().expect("database lock poisoned");
         list_telegram_routes_db(&db.conn)?
@@ -5295,7 +5855,7 @@ pub fn spawn_background_workers(state: SharedState) {
 // 9. Axum HTTP BFF & Webhook Handlers (`/api/app-agents/*`)
 // ---------------------------------------------------------------------------
 
-fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
+pub(crate) fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
     let relay_connected = state.agent_bridge.relay_connected.load(Ordering::Relaxed);
     let astraea_reachable = state.agent_bridge.astraea_reachable.load(Ordering::Relaxed);
     let mode = state.agent_bridge.status_mode(cfg);
@@ -5311,8 +5871,11 @@ fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
         || read_vault_secret(state, "llm-api-key").is_some();
     let has_telegram_token = !resolve_telegram_bot_token(state).is_empty();
     let has_cygnus_key = !resolve_cygnus_key(state).is_empty();
+    let smart_model = resolve_smart_model(cfg);
+    let fast_model = resolve_fast_model(cfg);
     json!({
         "ok": true,
+        "protocol_version": "2.0",
         "mode": mode,
         "relay_connected": relay_connected,
         "astraea_reachable": astraea_reachable,
@@ -5329,6 +5892,17 @@ fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow) -> Value {
         "astraea_url": cfg.astraea_url,
         "hub_url": cfg.hub_url,
         "default_model": cfg.default_model,
+        "default_smart_model": smart_model,
+        "fast_background_model": cfg.fast_background_model,
+        "resolved_fast_model": fast_model,
+        "interface_language": cfg.interface_language,
+        "model_output_language": cfg.model_output_language,
+        "send_key_mode": cfg.send_key_mode,
+        "max_tool_rounds": cfg.max_tool_rounds,
+        "max_group_hops": cfg.max_group_hops,
+        "default_temperature": cfg.default_temperature,
+        "write_gate_policy": cfg.write_gate_policy,
+        "composer_prefs": cfg.composer_prefs,
         "llm_base_url": cfg.llm_base_url,
         "allowed_hosts": cfg.allowed_hosts,
         "task_models": cfg.task_models,
@@ -5350,6 +5924,16 @@ pub(crate) struct BridgeConfigPatch {
     astraea_url: Option<String>,
     hub_url: Option<String>,
     default_model: Option<String>,
+    default_smart_model: Option<String>,
+    fast_background_model: Option<String>,
+    interface_language: Option<String>,
+    model_output_language: Option<String>,
+    send_key_mode: Option<String>,
+    max_tool_rounds: Option<u8>,
+    max_group_hops: Option<u8>,
+    default_temperature: Option<f64>,
+    write_gate_policy: Option<String>,
+    composer_prefs: Option<Value>,
     llm_base_url: Option<String>,
     allowed_hosts: Option<Vec<String>>,
     task_models: Option<TaskModelsConfig>,
@@ -5370,19 +5954,88 @@ pub(crate) async fn put_bridge_config(
 ) -> Response {
     let mut next = state.agent_bridge.config();
     if let Some(u) = patch.astraea_url {
-        next.astraea_url = u.trim().to_string();
+        let trimmed = u.trim().to_string();
+        if !trimmed.is_empty() && crate::fetch::parse_target(&trimmed).is_err() {
+            return bad_request("invalid astraea_url");
+        }
+        next.astraea_url = trimmed;
     }
     if let Some(u) = patch.hub_url {
-        next.hub_url = u.trim().to_string();
+        let trimmed = u.trim().to_string();
+        if !trimmed.is_empty() && crate::fetch::parse_target(&trimmed).is_err() {
+            return bad_request("invalid hub_url");
+        }
+        next.hub_url = trimmed;
+    }
+    let smart_was_set = patch.default_smart_model.is_some();
+    if let Some(m) = patch.default_smart_model {
+        let trimmed = m.trim();
+        if !trimmed.is_empty() {
+            next.default_smart_model = trimmed.to_string();
+            if patch.default_model.is_none() {
+                next.default_model = trimmed.to_string();
+            }
+        }
     }
     if let Some(m) = patch.default_model {
         let trimmed = m.trim();
         if !trimmed.is_empty() {
             next.default_model = trimmed.to_string();
+            if next.default_smart_model.trim().is_empty() || !smart_was_set {
+                next.default_smart_model = trimmed.to_string();
+            }
         }
     }
+    if let Some(f) = patch.fast_background_model {
+        next.fast_background_model = f.trim().to_string();
+    }
+    if let Some(lang) = patch.interface_language {
+        next.interface_language = match lang.trim() {
+            "vi" => "vi".to_string(),
+            _ => "en".to_string(),
+        };
+    }
+    if let Some(lang) = patch.model_output_language {
+        next.model_output_language = match lang.trim() {
+            "en" => "en".to_string(),
+            "auto" => "auto".to_string(),
+            _ => "vi".to_string(),
+        };
+    }
+    if let Some(k) = patch.send_key_mode {
+        next.send_key_mode = match k.trim() {
+            "ctrl_enter" => "ctrl_enter".to_string(),
+            _ => "enter".to_string(),
+        };
+    }
+    if let Some(r) = patch.max_tool_rounds {
+        next.max_tool_rounds = r.clamp(1, 24);
+    }
+    if let Some(h) = patch.max_group_hops {
+        next.max_group_hops = h.clamp(1, 12);
+    }
+    if let Some(t) = patch.default_temperature
+        && t.is_finite()
+    {
+        next.default_temperature = t.clamp(0.0, 2.0);
+    }
+    if let Some(p) = patch.write_gate_policy {
+        let t = p.trim();
+        if matches!(t, "write_gated" | "read_only" | "unrestricted") {
+            next.write_gate_policy = t.to_string();
+        }
+    }
+    if let Some(prefs) = patch.composer_prefs
+        && prefs.is_object()
+    {
+        next.composer_prefs = prefs;
+    }
     if let Some(u) = patch.llm_base_url {
-        next.llm_base_url = u.trim().to_string();
+        let trimmed = u.trim().to_string();
+        if !trimmed.is_empty() && crate::fetch::parse_target(&trimmed).is_err() {
+            return bad_request("invalid llm_base_url");
+        }
+        next.llm_base_url = trimmed;
     }
     if let Some(hosts) = patch.allowed_hosts {
         next.allowed_hosts = hosts
@@ -5435,6 +6088,22 @@ pub(crate) async fn put_bridge_config(
 
 pub(crate) async fn get_models(State(state): State<SharedState>) -> Response {
     let cfg = state.agent_bridge.config();
+    if let Some((has_rows, enabled_models)) = crate::agent_v2::catalog_models_for_state(&state)
+        && has_rows
+    {
+        return Json(json!({
+            "ok": true,
+            "source": "catalog",
+            "models": enabled_models,
+            "items": enabled_models,
+            "default_model": cfg.default_model,
+            "default_smart_model": resolve_smart_model(&cfg),
+            "fast_background_model": cfg.fast_background_model,
+            "resolved_fast_model": resolve_fast_model(&cfg),
+        }))
+        .into_response();
+    }
+
     let mut models: Vec<String> = Vec::new();
     let base = if !cfg.llm_base_url.trim().is_empty() {
         Some((cfg.llm_base_url.trim().to_string(), resolve_llm_key(&state)))
@@ -5452,11 +6121,10 @@ pub(crate) async fn get_models(State(state): State<SharedState>) -> Response {
         let url = models_list_url(&base_url);
         let fetcher = bridge_fetcher(&state, &cfg).with_timeout(Duration::from_secs(4));
         let auth_header = format!("Bearer {}", bearer.trim());
-        let headers: Vec<(&str, &str)> = if bearer.trim().is_empty() {
-            Vec::new()
-        } else {
-            vec![("Authorization", auth_header.as_str())]
-        };
+        let mut headers: Vec<(&str, &str)> = vec![("X-LNC-App-Id", APP_ID)];
+        if !bearer.trim().is_empty() {
+            headers.push(("Authorization", auth_header.as_str()));
+        }
         if let Ok(outcome) = fetcher.get_with_headers(&url, &headers).await
             && let Ok(val) = outcome_json(outcome)
             && let Some(arr) = val
@@ -5500,6 +6168,10 @@ pub(crate) async fn get_models(State(state): State<SharedState>) -> Response {
         "ok": true,
         "models": models,
         "items": models,
+        "default_model": cfg.default_model,
+        "default_smart_model": resolve_smart_model(&cfg),
+        "fast_background_model": cfg.fast_background_model,
+        "resolved_fast_model": resolve_fast_model(&cfg),
     }))
     .into_response()
 }
@@ -5854,6 +6526,12 @@ pub(crate) struct PatchThreadInput {
     workspace_id: Option<String>,
     pinned_skills: Option<Vec<String>>,
     model_override: Option<String>,
+    pinned: Option<bool>,
+    scratchpad_md: Option<String>,
+    chat_mode: Option<String>,
+    persona_style: Option<String>,
+    pinned_skill_slug: Option<String>,
+    apply_skill_every_turn: Option<bool>,
 }
 
 pub(crate) async fn patch_thread(
@@ -5914,6 +6592,38 @@ pub(crate) async fn patch_thread(
                 Some(trimmed.to_string())
             };
         }
+        if let Some(p) = patch.pinned {
+            cur.pinned = p;
+        }
+        if let Some(sp) = patch.scratchpad_md {
+            cur.scratchpad_md = sp;
+        }
+        if let Some(cm) = patch.chat_mode {
+            let trimmed = cm.trim();
+            if matches!(
+                trimmed,
+                "chat" | "co_writer" | "cowriter" | "research" | "deep_research" | "brief"
+            ) {
+                cur.chat_mode = trimmed.to_string();
+            }
+        }
+        if let Some(ps) = patch.persona_style {
+            let trimmed = ps.trim();
+            if !trimmed.is_empty() {
+                cur.persona_style = trimmed.to_string();
+            }
+        }
+        if let Some(pss) = patch.pinned_skill_slug {
+            let trimmed = pss.trim();
+            cur.pinned_skill_slug = if trimmed.is_empty() {
+                default_pinned_skill_slug()
+            } else {
+                trimmed.to_string()
+            };
+        }
+        if let Some(apply) = patch.apply_skill_every_turn {
+            cur.apply_skill_every_turn = apply;
+        }
         cur.updated_at = Utc::now().to_rfc3339();
         let members_json = match serde_json::to_string(&cur.member_slugs) {
             Ok(s) => s,
@@ -5926,8 +6636,10 @@ pub(crate) async fn patch_thread(
         if let Err(err) = db.conn.execute(
             "UPDATE app_agent_threads SET title = ?1, member_slugs_json = ?2, \
              discussion_mode = ?3, lead_slug = ?4, article_id = ?5, report_id = ?6, \
-             workspace_id = ?7, pinned_skills_json = ?8, model_override = ?9, updated_at = ?10 \
-             WHERE id = ?11",
+             workspace_id = ?7, pinned_skills_json = ?8, model_override = ?9, updated_at = ?10, \
+             pinned = ?11, scratchpad_md = ?12, chat_mode = ?13, persona_style = ?14, \
+             pinned_skill_slug = ?15, apply_skill_every_turn = ?16 \
+             WHERE id = ?17",
             params![
                 cur.title,
                 members_json,
@@ -5939,6 +6651,12 @@ pub(crate) async fn patch_thread(
                 pinned_skills_json,
                 cur.model_override,
                 cur.updated_at,
+                cur.pinned as i64,
+                cur.scratchpad_md,
+                cur.chat_mode,
+                cur.persona_style,
+                cur.pinned_skill_slug,
+                cur.apply_skill_every_turn as i64,
                 cur.id,
             ],
         ) {
@@ -5989,6 +6707,8 @@ pub(crate) struct PostTurnInput {
     #[serde(default)]
     skill_slugs: Vec<String>,
     model_override: Option<String>,
+    chat_mode: Option<String>,
+    persona_style: Option<String>,
 }
 
 pub(crate) async fn post_thread_turn(
@@ -6030,6 +6750,19 @@ pub(crate) async fn post_thread_turn(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        chat_mode_override: input
+            .chat_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        persona_style_override: input
+            .persona_style
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        ..Default::default()
     };
 
     match execute_turn_orchestrator_with_options(
@@ -6292,12 +7025,19 @@ pub(crate) async fn post_round_summary(
                 }),
             ];
             let fetcher = bridge_fetcher(&state, &cfg);
+            let fast_model = resolve_fast_model(&cfg);
+            let summary_override = cfg
+                .task_models
+                .round_summary
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(fast_model.as_str());
             if let Ok(val) = call_chat_completion_with_backup(
                 &fetcher,
                 &ep,
                 agent,
                 &cfg.default_model,
-                cfg.task_models.round_summary.as_deref(),
+                Some(summary_override),
                 &msgs,
                 &[],
             )
@@ -6692,6 +7432,10 @@ pub(crate) struct CreateTelegramRouteInput {
     bot_name: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default = "default_true")]
+    send_progress: bool,
+    #[serde(default = "default_true")]
+    send_tool_hints: bool,
 }
 
 pub(crate) async fn post_telegram_route(
@@ -6720,6 +7464,8 @@ pub(crate) async fn post_telegram_route(
         thread_id: value_to_string(input.thread_id.as_ref()),
         bot_name: input.bot_name.trim().trim_start_matches('@').to_string(),
         enabled: input.enabled,
+        send_progress: input.send_progress,
+        send_tool_hints: input.send_tool_hints,
     };
 
     let res = {
@@ -6727,8 +7473,8 @@ pub(crate) async fn post_telegram_route(
         db.conn.execute(
             "INSERT INTO app_telegram_routes (
                 id, transport_mode, policy, chat_id, message_thread_id,
-                agent_slug, thread_id, bot_name, enabled
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                agent_slug, thread_id, bot_name, enabled, send_progress, send_tool_hints
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 route.id,
                 route.transport_mode,
@@ -6739,6 +7485,8 @@ pub(crate) async fn post_telegram_route(
                 route.thread_id,
                 route.bot_name,
                 route.enabled as i64,
+                route.send_progress as i64,
+                route.send_tool_hints as i64,
             ],
         )
     };

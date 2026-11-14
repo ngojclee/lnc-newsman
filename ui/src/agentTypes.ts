@@ -66,6 +66,8 @@ export interface AppAgentConfig {
   updated_at?: string | null
 }
 
+export * from './agent-kit/agentTypesV2.ts'
+
 export interface AgentThread {
   id: number | string
   kind: 'direct' | 'group'
@@ -78,6 +80,14 @@ export interface AgentThread {
   workspace_id?: string | null
   pinned_skills?: string[]
   model_override?: string | null
+  parent_thread_id?: string | null
+  fork_from_message_id?: string | null
+  pinned?: boolean
+  scratchpad_md?: string
+  chat_mode?: string
+  persona_style?: string
+  pinned_skill_slug?: string
+  apply_skill_every_turn?: boolean
   created_at?: string
   updated_at?: string
 }
@@ -225,7 +235,17 @@ export interface ConnectionProbeReport {
   routing?: BridgeRoutingSummary
 }
 
-export type WorkspaceSurface = 'salon' | 'agents' | 'workspaces' | 'skills' | 'models'
+export type WorkspaceSurface =
+  | 'chat'
+  | 'cowriter'
+  | 'studio'
+  | 'memory'
+  | 'settings'
+  | 'salon'
+  | 'agents'
+  | 'workspaces'
+  | 'skills'
+  | 'models'
 
 export interface ApprovalRequiredMeta {
   action_type: string
@@ -238,6 +258,8 @@ export interface MergedToolInvocation {
   call_id?: string
   tool: string
   agent_slug?: string
+  origin?: string
+  duration_ms?: number | null
   arguments?: Record<string, unknown> | string
   status: 'running' | 'done' | 'error' | 'approval_required'
   result_text?: string
@@ -268,6 +290,9 @@ export interface AgentMessage {
   tool_calls?: MergedToolInvocation[]
   context?: ActiveViewContext | null
   round_idx?: number | null
+  trace_steps?: Array<Record<string, unknown>>
+  artifacts?: Array<Record<string, unknown>>
+  usage?: Record<string, unknown>
   created_at: string
 }
 
@@ -277,6 +302,9 @@ export type ThreadStreamEventKind =
   | 'reasoning'
   | 'tool'
   | 'tool_result'
+  | 'ask_user'
+  | 'ask_user_answered'
+  | 'thread_updated'
   | 'result'
   | 'error'
 
@@ -294,6 +322,15 @@ export interface ThreadStreamEvent {
   merge_id?: string
   call_id?: string
   tool?: string
+  origin?: string
+  duration_ms?: number
+  prompt_id?: string
+  question?: string
+  options?: string[]
+  allow_custom?: boolean
+  answer?: string
+  status?: string
+  title?: string
   arguments?: Record<string, unknown> | string
   result?: unknown
   is_error?: boolean
@@ -335,6 +372,8 @@ export interface TelegramRouteConfig {
   thread_id: number | string | null
   bot_name: string
   enabled: boolean
+  send_progress?: boolean
+  send_tool_hints?: boolean
 }
 
 export interface TelegramBridgeConfig {
@@ -359,6 +398,17 @@ export interface BridgeStatus {
   astraea_url?: string
   hub_url?: string
   default_model?: string
+  default_smart_model?: string
+  fast_background_model?: string
+  resolved_fast_model?: string
+  interface_language?: 'en' | 'vi'
+  model_output_language?: 'vi' | 'en' | 'auto'
+  send_key_mode?: 'enter' | 'ctrl_enter'
+  max_tool_rounds?: number
+  max_group_hops?: number
+  default_temperature?: number
+  write_gate_policy?: string
+  composer_prefs?: Record<string, unknown>
   llm_base_url?: string
   allowed_hosts?: string[]
   task_models?: TaskModelsConfig
@@ -811,6 +861,63 @@ export const AGENT_COPY = {
     settingsAgentsCardTitle: 'Bàn Trợ lý Đa tác tử, Mô hình & Kết nối Hub',
     settingsAgentsCardSub: 'Thiết lập kết nối LNC Agent Hub, cầu nối Astraea, mô hình cho từng tác vụ và kho kỹ năng chuyên đề.',
     settingsAgentsCardBtn: 'Mở Cấu hình Mô hình & Kết nối',
+    v2SurfaceChat: 'Trò chuyện',
+    v2SurfaceCowriter: 'Đồng biên tập',
+    v2SurfaceStudio: 'Xưởng trợ lý',
+    v2SurfaceMemory: 'Trí nhớ 3 tầng',
+    v2SurfaceSettings: 'Cài đặt AI',
+    v2ThreadsPinned: 'Đã ghim',
+    v2ThreadsRecent: 'Gần đây',
+    v2PinThreadBtn: 'Ghim',
+    v2UnpinThreadBtn: 'Bỏ ghim',
+    v2BranchBtn: 'Rẽ nhánh',
+    v2RetrySeatBtn: 'Thử lại',
+    v2CopyBtn: 'Chép',
+    v2ExecutionTrace: 'Nhật ký thực thi',
+    v2TraceBuiltin: 'builtin',
+    v2TraceApp: 'app',
+    v2TraceMcp: 'mcp',
+    v2ScopeBtn: '+ Phạm vi',
+    v2ModeBtn: 'Chế độ',
+    v2SkillsBtn: 'Kỹ năng',
+    v2McpBtn: 'MCP',
+    v2StyleBtn: 'Phong cách',
+    v2CustomizeBtn: 'Tùy biến',
+    v2TabHintPrompt: 'Nhấn Tab để chèn gợi ý',
+    v2DrawerActivity: 'Hoạt động',
+    v2DrawerNotes: 'Ghi chú',
+    v2L1ScratchpadLabel: 'Ghi chú nháp (L1)',
+    v2SaveNotesBtn: 'Lưu ghi chú',
+    v2AskUserSubmit: 'Trả lời',
+    v2AskUserCustomPlaceholder: 'Nhập câu trả lời tùy chọn...',
+    v2PalettePlaceholder: 'Tìm lệnh, luồng, trợ lý hoặc chuyển màn hình…',
+    v2CowriterTitle: 'Bàn Đồng biên tập & Đối chiếu Diff',
+    v2CowriterInstructionPlaceholder: 'Yêu cầu chỉnh sửa (vd: rút gọn phân tích tỷ giá, giữ nguồn gốc)…',
+    v2CowriterSuggestBtn: 'Gợi ý chỉnh sửa',
+    v2CowriterAcceptBtn: 'Chấp nhận',
+    v2CowriterRejectBtn: 'Từ chối',
+    v2MemoryAuditBtn: 'Kiểm định',
+    v2MemoryDedupBtn: 'Gộp trùng',
+    v2MemoryExportJson: 'Xuất JSON',
+    v2MemoryExportMd: 'Xuất Markdown',
+    v2MemoryAddNodeBtn: 'Thêm nút nhớ',
+    v2MemoryLayerL1: 'L1 Phiên (Scratchpad)',
+    v2MemoryLayerL2: 'L2 Quy chuẩn (Canon)',
+    v2MemoryLayerL3: 'L3 Cá nhân',
+    v2StudioPullHubBtn: 'Kéo từ Hub',
+    v2StudioPushDraftBtn: 'Đẩy nháp',
+    v2TelegramGenCodeBtn: 'Tạo mã liên kết',
+    v2SmartModelLabel: 'Mô hình Thông minh (Mặc định)',
+    v2FastModelLabel: 'Mô hình Nhanh (Nền)',
+    v2FastFollowSmart: 'Theo Mô hình Thông minh',
+    v2FetchCatalogBtn: 'Nạp danh mục',
+    v2SaveRolesBtn: 'Lưu vai trò',
+    v2SavePrefsBtn: 'Lưu tùy chọn',
+    v2AddProviderBtn: 'Thêm nhà cung cấp',
+    v2LangUiLabel: 'Ngôn ngữ giao diện',
+    v2LangModelLabel: 'Ngôn ngữ trả lời AI',
+    v2SendKeyLabel: 'Phím gửi tin',
+    v2QuickActionsLabel: 'Tác vụ nhanh',
   },
   en: {
     agents: 'Agent Desk',
@@ -1133,6 +1240,63 @@ export const AGENT_COPY = {
     settingsAgentsCardTitle: 'Multi-Agent Salon, Task Models & Hub Connections',
     settingsAgentsCardSub: 'Configure LNC Agent Hub, Astraea live relay, task-specific models, and topic skill packs.',
     settingsAgentsCardBtn: 'Open Model & Connection Settings',
+    v2SurfaceChat: 'Chat',
+    v2SurfaceCowriter: 'Co-Writer',
+    v2SurfaceStudio: 'Studio',
+    v2SurfaceMemory: 'Memory',
+    v2SurfaceSettings: 'Settings',
+    v2ThreadsPinned: 'Pinned',
+    v2ThreadsRecent: 'Recent',
+    v2PinThreadBtn: 'Pin',
+    v2UnpinThreadBtn: 'Unpin',
+    v2BranchBtn: 'Branch',
+    v2RetrySeatBtn: 'Retry',
+    v2CopyBtn: 'Copy',
+    v2ExecutionTrace: 'Execution Trace',
+    v2TraceBuiltin: 'builtin',
+    v2TraceApp: 'app',
+    v2TraceMcp: 'mcp',
+    v2ScopeBtn: '+ Scope',
+    v2ModeBtn: 'Mode',
+    v2SkillsBtn: 'Skills',
+    v2McpBtn: 'MCP',
+    v2StyleBtn: 'Style',
+    v2CustomizeBtn: 'Customize',
+    v2TabHintPrompt: 'Press Tab to accept hint',
+    v2DrawerActivity: 'Activity',
+    v2DrawerNotes: 'Notes',
+    v2L1ScratchpadLabel: 'Thread Notes (L1)',
+    v2SaveNotesBtn: 'Save Notes',
+    v2AskUserSubmit: 'Answer',
+    v2AskUserCustomPlaceholder: 'Enter custom response...',
+    v2PalettePlaceholder: 'Jump to thread, agent, command, or surface…',
+    v2CowriterTitle: 'Co-Writer Diff Workbench',
+    v2CowriterInstructionPlaceholder: 'Editorial instruction (e.g. tighten macro summary, keep sources)…',
+    v2CowriterSuggestBtn: 'Suggest Diff',
+    v2CowriterAcceptBtn: 'Accept',
+    v2CowriterRejectBtn: 'Reject',
+    v2MemoryAuditBtn: 'Audit',
+    v2MemoryDedupBtn: 'Dedup',
+    v2MemoryExportJson: 'Export JSON',
+    v2MemoryExportMd: 'Export MD',
+    v2MemoryAddNodeBtn: 'Add Node',
+    v2MemoryLayerL1: 'L1 Scratchpad',
+    v2MemoryLayerL2: 'L2 Canon',
+    v2MemoryLayerL3: 'L3 Personal',
+    v2StudioPullHubBtn: 'Pull Hub',
+    v2StudioPushDraftBtn: 'Push Draft',
+    v2TelegramGenCodeBtn: 'Link Code',
+    v2SmartModelLabel: 'Smart Model (Default)',
+    v2FastModelLabel: 'Fast Background Model',
+    v2FastFollowSmart: 'Follow Smart Model',
+    v2FetchCatalogBtn: 'Fetch Catalog',
+    v2SaveRolesBtn: 'Save Roles',
+    v2SavePrefsBtn: 'Save Prefs',
+    v2AddProviderBtn: 'Add Provider',
+    v2LangUiLabel: 'UI Language',
+    v2LangModelLabel: 'Model Output Language',
+    v2SendKeyLabel: 'Send Key',
+    v2QuickActionsLabel: 'Quick Actions',
   },
 } as const
 

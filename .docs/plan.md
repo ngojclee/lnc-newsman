@@ -456,6 +456,7 @@ Còn lại: đăng ký endpoint lên Agent Hub (cần khóa Hub của chủ dự
 | 4 | Region pack dạng thư mục; phát hiện ≠ kích hoạt | 11/11/2026 |
 | 5 | 6 connector nguồn theo `.docs/sources-candidates.md` mục 6 | 11/11/2026 |
 | 6 | Chấp nhận P1.5, P2 (107 test), P3 (124 test) ở mức nền tảng + test giả lập | 11/11/2026 |
+| 7 | Nâng cấp `lnc-app-agents` v2.0 (`v0.9.0`, Path B non-breaking: manifest v2, catalog/roles Smart+Fast, Business MCP namespaces, custom OpenAI providers qua `secrets.rs`, `ask_user`, thread branch/retry, Co-Writer diff, 3-layer memory graph, Telegram `/link NM-XXXX`, UI 5 surface + `AgentSplitLayout` + `AgentSelect`) | 14/11/2026 |
 
 ### Còn mở (cần chủ dự án quyết trước giai đoạn tương ứng)
 

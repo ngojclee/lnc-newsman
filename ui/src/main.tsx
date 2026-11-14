@@ -8,6 +8,7 @@ import { Select } from './Select'
 import { appLinks } from './appLinks'
 import { THEMES, ReaderMode, applyMode, isMode } from './themes'
 import './style.css'
+import './agent-kit/agent-kit-hygiene.css'
 
 type Lang = 'vi' | 'en'
 type Page = 'today' | 'topics' | 'regions' | 'market' | 'stories' | 'reports' | 'agents' | 'alerts' | 'timeline' | 'saved' | 'settings'
@@ -334,7 +335,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} onOpenAgents={() => setRoute('agents')} />}
         {page === 'agents' && <AgentsWorkspace lang={lang} onOpenArticle={setReadingId} onOpenRegions={() => setRoute('regions')} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
-        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} onOpenAgentsModels={() => { try { sessionStorage.setItem('lnc-newsman-agents-surface', 'models') } catch { /* ignore */ } setRoute('agents') }} regions={regions} dashboard={dashboard} />}
+        {page === 'settings' && <SettingsPage t={t} lang={lang} mode={mode} setMode={setMode} setLang={setLang} onCatalogChanged={onCatalogChanged} onRegionsChanged={onRegionsChanged} onOpenAgentsModels={() => { try { sessionStorage.setItem('lnc-newsman-agents-surface', 'settings') } catch { /* ignore */ } setRoute('agents') }} regions={regions} dashboard={dashboard} />}
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>

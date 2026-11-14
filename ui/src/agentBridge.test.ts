@@ -18,6 +18,7 @@ import {
   createInitialStreamTurnState,
   emptyHubEffectiveBundle,
   extractMentions,
+  filterSurfacesByManifest,
   intersectScopeLists,
   MAX_ACTIVE_VIEW_CONTEXT_BYTES,
   normalizeBridgeRouting,
@@ -25,6 +26,7 @@ import {
   parseComposerTrigger,
   parseSseFrame,
   parseSseStreamChunk,
+  resolveModelRoles,
   skillDisplayName,
   skillGroupDisplayName,
   stripSkillFrontmatter,
@@ -501,4 +503,104 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   assertEqual(sanitizedBridge.llm_base_url, '')
 }
 
-console.log('10/10 agentBridge tests passed')
+// 11. v2.0 contract tests: manifest surface gating, SSE v2 frames, Smart/Fast roles, AgentStudio hygiene
+{
+  const gate = filterSurfacesByManifest({
+    app_id: 'lnc-newsman',
+    display_name: 'LNC Newsman',
+    protocol_version: '2.0',
+    capabilities: {
+      voice_tts: false,
+      voice_stt: false,
+      image_gen: false,
+      co_writer: true,
+      group_rooms: true,
+      telegram: true,
+      memory_graph: true,
+    },
+    scope_kinds: ['region', 'series', 'topic'],
+    surfaces: ['chat', 'cowriter', 'studio', 'memory', 'settings'],
+  })
+  assertDeepEqual(gate.surfaces, ['chat', 'cowriter', 'studio', 'memory', 'settings'])
+  assertEqual(gate.showVoice, false)
+  assertEqual(gate.showImageGen, false)
+  assertEqual(gate.showCowriter, true)
+  assertEqual(gate.showMemoryGraph, true)
+
+  const minimalGate = filterSurfacesByManifest({
+    capabilities: {
+      co_writer: false,
+      group_rooms: true,
+      telegram: true,
+      memory_graph: false,
+      voice_tts: false,
+      voice_stt: false,
+      image_gen: false,
+    },
+  })
+  assertDeepEqual(minimalGate.surfaces, ['chat', 'studio', 'settings'])
+
+  const inheritRoles = resolveModelRoles({
+    default_smart_model: 'gpt-5.4',
+    default_model: 'gpt-5.4-mini',
+    fast_background_model: '',
+  })
+  assertEqual(inheritRoles.smartModel, 'gpt-5.4')
+  assertEqual(inheritRoles.fastModel, 'gpt-5.4')
+  assertEqual(inheritRoles.fastFollowsSmart, true)
+
+  const splitRoles = resolveModelRoles({
+    default_smart_model: 'gpt-5.4',
+    fast_background_model: 'gpt-5.4-mini',
+  })
+  assertEqual(splitRoles.smartModel, 'gpt-5.4')
+  assertEqual(splitRoles.fastModel, 'gpt-5.4-mini')
+  assertEqual(splitRoles.fastFollowsSmart, false)
+
+  let st = createInitialStreamTurnState()
+  const evTool = parseSseFrame(
+    'id: 1\nevent: tool\ndata: {"call_id":"c1","tool":"ask_user","agent_slug":"macro-argus","origin":"builtin","arguments":{"question":"Choose horizon?"}}',
+  )
+  assertOk(evTool, 'builtin tool SSE frame should parse')
+  st = applyStreamEvent(st, evTool)
+  assertEqual(st.toolPills[0].origin, 'builtin')
+
+  const evToolDone = parseSseFrame(
+    'id: 2\nevent: tool_result\ndata: {"call_id":"c1","tool":"ask_user","agent_slug":"macro-argus","origin":"builtin","duration_ms":42,"result":{"prompt_id":"ask-1"}}',
+  )
+  assertOk(evToolDone, 'tool_result with duration_ms should parse')
+  st = applyStreamEvent(st, evToolDone)
+  assertEqual(st.toolPills[0].duration_ms, 42)
+
+  const evAsk = parseSseFrame(
+    'id: 3\nevent: ask_user\ndata: {"prompt_id":"ask-1","thread_id":"th-1","agent_slug":"macro-argus","question":"Choose horizon?","options":["1M","1Y"],"allow_custom":true,"status":"pending"}',
+  )
+  assertOk(evAsk, 'ask_user SSE frame should parse')
+  st = applyStreamEvent(st, evAsk)
+  assertEqual(st.askUserPrompts.length, 1)
+  assertEqual(st.askUserPrompts[0].status, 'pending')
+
+  const evAnswered = parseSseFrame(
+    'id: 4\nevent: ask_user_answered\ndata: {"prompt_id":"ask-1","answer":"1Y","status":"answered"}',
+  )
+  assertOk(evAnswered, 'ask_user_answered SSE frame should parse')
+  st = applyStreamEvent(st, evAnswered)
+  assertEqual(st.askUserPrompts[0].status, 'answered')
+  assertEqual(st.askUserPrompts[0].answer, '1Y')
+
+  const evTitle = parseSseFrame(
+    'id: 5\nevent: thread_updated\ndata: {"thread_id":"th-1","title":"VN Macro Q4 Brief"}',
+  )
+  assertOk(evTitle, 'thread_updated SSE frame should parse')
+  st = applyStreamEvent(st, evTitle)
+  assertEqual(st.threadTitleUpdate, 'VN Macro Q4 Brief')
+
+  const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+    readFileSync: (p: URL | string, enc: string) => string
+  }
+  const studioPath = new URL('./AgentStudio.tsx', import.meta.url)
+  const studioCode = fsMod.readFileSync(studioPath, 'utf8')
+  assertEqual(studioCode.includes('shelf-tabs'), false, 'AgentStudio must not use .shelf-tabs')
+}
+
+console.log('11/11 agentBridge tests passed')

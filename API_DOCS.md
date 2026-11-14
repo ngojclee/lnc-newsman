@@ -345,6 +345,33 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `DELETE /api/app-agents/telegram/routes/{id}` | Session + CSRF | Delete a conversational Telegram route |
 | `POST /api/app-agents/telegram/webhook/direct` | `X-Telegram-Bot-Api-Secret-Token` | Receive inbound Telegram Bot API webhook updates (constant-time secret check; separate from `src/telegram.rs` alert outbox) |
 | `POST /api/app-agents/telegram/webhook/cygnus` | `x-gateway-key` | Receive inbound Cygnus gateway webhook envelopes (constant-time key check; preserves `message_thread_id`) |
+| `GET /api/app-agents/manifest` | Session | Read `lnc-app-agents` `protocol_version: "2.0"` manifest (`capabilities`, `scope_kinds: ["region", "series", "topic"]`, `ui_defaults`, `surfaces`, Newsroom `quick_actions`) |
+| `GET /api/app-agents/models/catalog` | Session | List persisted model catalog entries (`enabled`, `source`, `capabilities`, default roles) |
+| `PATCH /api/app-agents/models/catalog` | Session + CSRF | Toggle per-model `enabled` flags in the catalog |
+| `POST /api/app-agents/models/fetch` | Session + CSRF | Discover models from Hub `/v1/models` and enabled custom providers via `fetch::Fetcher` (auto-enabling newly imported Hub models if catalog had zero enabled rows) |
+| `PUT /api/app-agents/models/roles` | Session + CSRF | Save `default_smart_model` and `fast_background_model` (`""` inherits Smart Model) |
+| `GET /api/app-agents/mcp-namespaces` | Session | List Business MCP namespace toggles (`search`, `cortex`, `obsidian`, `library`, `notebooklm`, `cygnus`, `astraea`, `newsman`) |
+| `PUT /api/app-agents/mcp-namespaces` | Session + CSRF | Bulk update Business MCP namespace `enabled` states |
+| `GET /api/app-agents/custom-providers` | Session | List custom OpenAI-compatible providers (metadata + `has_secret`; keys stay sealed in `src/secrets.rs`) |
+| `POST /api/app-agents/custom-providers` | Session + CSRF | Create or update a custom provider after `fetch::parse_target` SSRF check; write-only `api_key` sealed via `src/secrets.rs` (`omitBlankSecrets`) |
+| `DELETE /api/app-agents/custom-providers/{id}` | Session + CSRF | Delete a custom provider and remove its sealed secret entry |
+| `POST /api/app-agents/agents/{slug}/pull-hub` | Session + CSRF | Pull latest blueprint override from Hub (graceful local fallback when offline) |
+| `POST /api/app-agents/agents/{slug}/push-draft` | Session + CSRF | Push local agent blueprint draft to Hub (graceful local persistence when offline) |
+| `POST /api/app-agents/threads/{id}/branch` | Session + CSRF | Fork a thread from an existing message (`parent_thread_id`, `fork_from_message_id`) and copy message history up to that point |
+| `POST /api/app-agents/threads/{id}/seats/{slug}/retry` | Session + CSRF | Re-run a single assistant seat on the latest turn without re-inserting the user message |
+| `GET /api/app-agents/threads/{id}/ask-user` | Session | List pending and answered `ask_user` prompts for a thread |
+| `POST /api/app-agents/threads/{id}/ask-user/{prompt_id}/answer` | Session + CSRF | Answer an `ask_user` clarifying prompt, emit SSE `ask_user_answered`, and optionally continue the turn |
+| `GET /api/app-agents/threads/{id}/activity` | Session | Read thread activity snapshot (`scratchpad_md`, `tool_events`, `ask_user_prompts`, `cowriter_drafts`) |
+| `POST /api/app-agents/composer/ghost-hint` | Session + CSRF | Generate a short composer ghost-hint continuation using the Fast Background Model |
+| `POST /api/app-agents/cowriter/suggest-diff` | Session + CSRF | Propose a Co-Writer diff (`before_text` -> `after_text`, `rationale`) while preserving source attribution and tax disclaimers |
+| `POST /api/app-agents/cowriter/drafts/{id}/decide` | Session + CSRF | Accept or reject a pending Co-Writer diff draft |
+| `GET /api/app-agents/memory/graph` | Session | Read the 3-layer memory graph (`L1` scratchpad + `L2` canon + `L3` personal nodes, edges, and counts) |
+| `POST /api/app-agents/memory/nodes` | Session + CSRF | Create or upsert a `MemoryNode` (with optional edge link) |
+| `DELETE /api/app-agents/memory/nodes/{id}` | Session + CSRF | Delete a memory node and cascade its edges |
+| `POST /api/app-agents/memory/update` | Session + CSRF | Update an existing memory node's layer, title, content, confidence, or `source_ref` |
+| `POST /api/app-agents/memory/audit` | Session + CSRF | Audit stored memory nodes using the Fast Background Model (with deterministic fallback) |
+| `POST /api/app-agents/memory/dedup` | Session + CSRF | Deduplicate near-identical memory nodes by normalized title/layer |
+| `POST /api/app-agents/telegram/link-code` | Session + CSRF | Mint a short-lived (`NM-XXXX`, 600 s TTL) pairing code; inbound `/link NM-XXXX` commands bind `chat_id`/`message_thread_id` before route matching |
 
 ## Security and deployment limitations
 

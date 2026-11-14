@@ -1,6 +1,7 @@
 mod agent_bridge;
 #[cfg(test)]
 mod agent_bridge_tests;
+mod agent_v2;
 mod alerts;
 mod auth;
 mod catalog;
@@ -449,6 +450,96 @@ fn router(state: SharedState) -> Router {
         .route(
             "/api/app-agents/telegram/routes/{id}",
             axum::routing::delete(agent_bridge::delete_telegram_route),
+        )
+        .route("/api/app-agents/manifest", get(agent_v2::get_manifest))
+        .route(
+            "/api/app-agents/models/catalog",
+            get(agent_v2::get_models_catalog).patch(agent_v2::patch_models_catalog),
+        )
+        .route("/api/app-agents/models/fetch", post(agent_v2::post_models_fetch))
+        .route(
+            "/api/app-agents/models/roles",
+            axum::routing::put(agent_v2::put_models_roles),
+        )
+        .route(
+            "/api/app-agents/mcp-namespaces",
+            get(agent_v2::get_mcp_namespaces).put(agent_v2::put_mcp_namespaces),
+        )
+        .route(
+            "/api/app-agents/custom-providers",
+            get(agent_v2::get_custom_providers).post(agent_v2::post_custom_provider),
+        )
+        .route(
+            "/api/app-agents/custom-providers/{id}",
+            axum::routing::delete(agent_v2::delete_custom_provider),
+        )
+        .route(
+            "/api/app-agents/agents/{slug}/pull-hub",
+            post(agent_v2::post_agent_pull_hub),
+        )
+        .route(
+            "/api/app-agents/agents/{slug}/push-draft",
+            post(agent_v2::post_agent_push_draft),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/branch",
+            post(agent_v2::post_thread_branch),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/seats/{slug}/retry",
+            post(agent_v2::post_seat_retry),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/ask-user",
+            get(agent_v2::get_thread_ask_user),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/ask-user/{prompt_id}/answer",
+            post(agent_v2::post_answer_ask_user),
+        )
+        .route(
+            "/api/app-agents/threads/{id}/activity",
+            get(agent_v2::get_thread_activity),
+        )
+        .route(
+            "/api/app-agents/composer/ghost-hint",
+            post(agent_v2::post_composer_ghost_hint),
+        )
+        .route(
+            "/api/app-agents/cowriter/suggest-diff",
+            post(agent_v2::post_cowriter_suggest_diff),
+        )
+        .route(
+            "/api/app-agents/cowriter/drafts/{id}/decide",
+            post(agent_v2::post_cowriter_decide),
+        )
+        .route(
+            "/api/app-agents/memory/graph",
+            get(agent_v2::get_memory_graph),
+        )
+        .route(
+            "/api/app-agents/memory/nodes",
+            post(agent_v2::post_memory_node),
+        )
+        .route(
+            "/api/app-agents/memory/nodes/{id}",
+            axum::routing::delete(agent_v2::delete_memory_node),
+        )
+        .route(
+            "/api/app-agents/memory/update",
+            post(agent_v2::post_memory_update),
+        )
+        .route(
+            "/api/app-agents/memory/audit",
+            post(agent_v2::post_memory_audit),
+        )
+        .route(
+            "/api/app-agents/memory/dedup",
+            post(agent_v2::post_memory_dedup),
+        )
+        .route(
+            "/api/app-agents/telegram/link-code",
+            post(agent_v2::post_telegram_link_code),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -9,16 +9,24 @@ import {
   type AgentThread,
   type AgentWorkspace,
   type AppAgentConfig,
+  type AppCapabilitiesManifest,
   type ApprovalRequiredMeta,
+  type AskUserPrompt,
   type BridgeRoutingSummary,
   type BridgeStatus,
+  type BusinessMcpNamespaceItem,
+  type CatalogModelItem,
   type ConnectionProbeReport,
+  type CoWriterDraftRow,
+  type CustomProviderItem,
   type DiscussionMode,
   type HubCapabilityBundleSummary,
   type HubEffectiveBundleCache,
   type HubMcpGroupSummary,
   type HubSkillGroupSummary,
   type HubSkillSummary,
+  type MemoryGraphNode,
+  type MemoryGraphPayload,
   type MergedToolInvocation,
   type ResourceCtx,
   type SkillAccessRequest,
@@ -46,6 +54,9 @@ const VALID_STREAM_KINDS: ReadonlySet<ThreadStreamEventKind> = new Set<ThreadStr
   'reasoning',
   'tool',
   'tool_result',
+  'ask_user',
+  'ask_user_answered',
+  'thread_updated',
   'result',
   'error',
 ])
@@ -307,6 +318,17 @@ export function parseSseFrame(rawBlock: string): ThreadStreamEvent | null {
     merge_id: mergeId,
     call_id: typeof parsed.call_id === 'string' ? parsed.call_id : mergeId,
     tool: typeof parsed.tool === 'string' ? parsed.tool : typeof parsed.name === 'string' ? parsed.name : undefined,
+    origin: typeof parsed.origin === 'string' ? parsed.origin : undefined,
+    duration_ms: typeof parsed.duration_ms === 'number' ? parsed.duration_ms : undefined,
+    prompt_id: typeof parsed.prompt_id === 'string' ? parsed.prompt_id : undefined,
+    question: typeof parsed.question === 'string' ? parsed.question : undefined,
+    options: Array.isArray(parsed.options)
+      ? parsed.options.map((x) => (typeof x === 'string' ? x : String((x as Record<string, unknown>)?.label ?? ''))).filter(Boolean)
+      : undefined,
+    allow_custom: typeof parsed.allow_custom === 'boolean' ? parsed.allow_custom : undefined,
+    answer: typeof parsed.answer === 'string' ? parsed.answer : undefined,
+    status: typeof parsed.status === 'string' ? parsed.status : undefined,
+    title: typeof parsed.title === 'string' ? parsed.title : undefined,
     arguments: (parsed.arguments as Record<string, unknown> | string | undefined) ?? undefined,
     result: resultText ?? parsed.result,
     is_error: Boolean(parsed.is_error),
@@ -343,7 +365,9 @@ export interface StreamTurnState {
   seatStates: Record<string, string>
   drafts: Record<string, AgentDraftState>
   toolPills: MergedToolInvocation[]
+  askUserPrompts: AskUserPrompt[]
   completedMessages: AgentMessage[]
+  threadTitleUpdate?: string | null
   lastError: string | null
 }
 
@@ -352,14 +376,16 @@ export function createInitialStreamTurnState(): StreamTurnState {
     seatStates: {},
     drafts: {},
     toolPills: [],
+    askUserPrompts: [],
     completedMessages: [],
+    threadTitleUpdate: null,
     lastError: null,
   }
 }
 
 /**
- * Reducer for the 7 SSE event kinds. Collapses matching `tool` + `tool_result`
- * events by `merge_id` into live `MergedToolInvocation` pills.
+ * Reducer for v1 + v2 SSE event kinds. Collapses matching `tool` + `tool_result`
+ * events by `merge_id` into live `MergedToolInvocation` pills and captures interactive `ask_user` prompts.
  */
 export function applyStreamEvent(state: StreamTurnState, event: ThreadStreamEvent): StreamTurnState {
   const slug = event.agent_slug || 'assistant'
@@ -423,6 +449,7 @@ export function applyStreamEvent(state: StreamTurnState, event: ThreadStreamEven
         call_id: event.call_id ?? mergeId,
         tool: event.tool ?? 'unknown_tool',
         agent_slug: slug,
+        ...(event.origin ? { origin: event.origin } : {}),
         arguments: event.arguments,
         status: 'running',
         resource_ctx: event.resource_ctx ?? null,
@@ -463,6 +490,8 @@ export function applyStreamEvent(state: StreamTurnState, event: ThreadStreamEven
           idx === existingIdx
             ? {
                 ...pill,
+                ...(event.origin ? { origin: event.origin } : {}),
+                ...(typeof event.duration_ms === 'number' ? { duration_ms: event.duration_ms } : {}),
                 status,
                 is_error: Boolean(event.is_error),
                 result_text: resultText ?? pill.result_text,
@@ -479,6 +508,8 @@ export function applyStreamEvent(state: StreamTurnState, event: ThreadStreamEven
             call_id: event.call_id ?? mergeId,
             tool: event.tool ?? 'tool',
             agent_slug: slug,
+            ...(event.origin ? { origin: event.origin } : {}),
+            ...(typeof event.duration_ms === 'number' ? { duration_ms: event.duration_ms } : {}),
             arguments: event.arguments,
             status,
             is_error: Boolean(event.is_error),
@@ -492,6 +523,52 @@ export function applyStreamEvent(state: StreamTurnState, event: ThreadStreamEven
       return {
         ...state,
         toolPills: nextPills,
+      }
+    }
+
+    case 'ask_user': {
+      const promptId = event.prompt_id || `ask_${Date.now()}`
+      const prompt: AskUserPrompt = {
+        prompt_id: promptId,
+        thread_id: String(event.thread_id ?? ''),
+        agent_slug: slug,
+        question: event.question ?? '',
+        options: Array.isArray(event.options) ? event.options : [],
+        allow_custom: event.allow_custom ?? true,
+        status: event.status === 'answered' ? 'answered' : 'pending',
+        answer: event.answer,
+      }
+      const exists = state.askUserPrompts.some((p) => p.prompt_id === promptId)
+      const nextPrompts = exists
+        ? state.askUserPrompts.map((p) => (p.prompt_id === promptId ? { ...p, ...prompt } : p))
+        : [prompt, ...state.askUserPrompts]
+      return {
+        ...state,
+        seatStates: {
+          ...state.seatStates,
+          [slug]: 'awaiting_user',
+        },
+        askUserPrompts: nextPrompts,
+      }
+    }
+
+    case 'ask_user_answered': {
+      const promptId = event.prompt_id
+      if (!promptId) return state
+      return {
+        ...state,
+        askUserPrompts: state.askUserPrompts.map((p) =>
+          p.prompt_id === promptId
+            ? { ...p, status: 'answered', answer: event.answer ?? p.answer }
+            : p,
+        ),
+      }
+    }
+
+    case 'thread_updated': {
+      return {
+        ...state,
+        threadTitleUpdate: event.title ?? state.threadTitleUpdate ?? null,
       }
     }
 
@@ -752,6 +829,23 @@ function normalizeThread(raw: Record<string, unknown>): AgentThread {
     pinned_skills: pinnedSkills,
     model_override:
       typeof raw.model_override === 'string' && raw.model_override ? raw.model_override : null,
+    parent_thread_id:
+      typeof raw.parent_thread_id === 'string' && raw.parent_thread_id ? raw.parent_thread_id : null,
+    fork_from_message_id:
+      typeof raw.fork_from_message_id === 'string' && raw.fork_from_message_id
+        ? raw.fork_from_message_id
+        : null,
+    pinned: Boolean(raw.pinned),
+    scratchpad_md: typeof raw.scratchpad_md === 'string' ? raw.scratchpad_md : '',
+    chat_mode: typeof raw.chat_mode === 'string' && raw.chat_mode ? raw.chat_mode : 'chat',
+    persona_style:
+      typeof raw.persona_style === 'string' && raw.persona_style ? raw.persona_style : 'default',
+    pinned_skill_slug:
+      typeof raw.pinned_skill_slug === 'string' && raw.pinned_skill_slug
+        ? raw.pinned_skill_slug
+        : 'auto',
+    apply_skill_every_turn:
+      raw.apply_skill_every_turn === undefined ? true : Boolean(raw.apply_skill_every_turn),
     created_at: typeof raw.created_at === 'string' ? raw.created_at : undefined,
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : undefined,
   }
@@ -784,6 +878,15 @@ function normalizeMessage(raw: Record<string, unknown>): AgentMessage {
     }
   }
 
+  const traceSteps = Array.isArray(raw.trace_steps)
+    ? (raw.trace_steps as Array<Record<string, unknown>>)
+    : []
+  const artifacts = Array.isArray(raw.artifacts)
+    ? (raw.artifacts as Array<Record<string, unknown>>)
+    : []
+  const usage =
+    raw.usage && typeof raw.usage === 'object' ? (raw.usage as Record<string, unknown>) : {}
+
   return {
     id: (raw.id as number | string) ?? `${Date.now()}-${Math.random()}`,
     thread_id: (raw.thread_id as number | string) ?? 0,
@@ -794,8 +897,45 @@ function normalizeMessage(raw: Record<string, unknown>): AgentMessage {
     tool_calls: toolCalls,
     context,
     round_idx: typeof raw.round_idx === 'number' ? raw.round_idx : null,
+    trace_steps: traceSteps,
+    artifacts,
+    usage,
     created_at: String(raw.created_at ?? new Date().toISOString()),
   }
+}
+
+export function resolveModelRoles(cfg: {
+  default_smart_model?: string | null
+  default_model?: string | null
+  fast_background_model?: string | null
+}): { smartModel: string; fastModel: string; fastFollowsSmart: boolean } {
+  const smartModel = String(cfg.default_smart_model ?? '').trim() || String(cfg.default_model ?? '').trim()
+  const rawFast = String(cfg.fast_background_model ?? '').trim()
+  return {
+    smartModel,
+    fastModel: rawFast || smartModel,
+    fastFollowsSmart: rawFast.length === 0,
+  }
+}
+
+export function filterSurfacesByManifest(manifest?: Partial<AppCapabilitiesManifest> | null): {
+  surfaces: Array<'chat' | 'cowriter' | 'studio' | 'memory' | 'settings'>
+  showVoice: boolean
+  showImageGen: boolean
+  showCowriter: boolean
+  showMemoryGraph: boolean
+} {
+  const caps = manifest?.capabilities ?? manifest?.features
+  const showVoice = Boolean(caps?.voice_tts || caps?.voice_stt)
+  const showImageGen = Boolean(caps?.image_gen)
+  const showCowriter = caps ? Boolean(caps.co_writer) : true
+  const showMemoryGraph = caps ? Boolean(caps.memory_graph) : true
+  const surfaces: Array<'chat' | 'cowriter' | 'studio' | 'memory' | 'settings'> = ['chat']
+  if (showCowriter) surfaces.push('cowriter')
+  surfaces.push('studio')
+  if (showMemoryGraph) surfaces.push('memory')
+  surfaces.push('settings')
+  return { surfaces, showVoice, showImageGen, showCowriter, showMemoryGraph }
 }
 
 export function emptyHubEffectiveBundle(): HubEffectiveBundleCache {
@@ -950,6 +1090,11 @@ export function useAppAgents() {
   const [probeReport, setProbeReport] = useState<ConnectionProbeReport | null>(null)
   const [probingConnections, setProbingConnections] = useState(false)
   const [syncingSkills, setSyncingSkills] = useState(false)
+  const [manifest, setManifest] = useState<AppCapabilitiesManifest | null>(null)
+  const [modelCatalog, setModelCatalog] = useState<CatalogModelItem[]>([])
+  const [mcpNamespaces, setMcpNamespaces] = useState<BusinessMcpNamespaceItem[]>([])
+  const [customProviders, setCustomProviders] = useState<CustomProviderItem[]>([])
+  const [memoryGraph, setMemoryGraph] = useState<MemoryGraphPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -976,6 +1121,25 @@ export function useAppAgents() {
         astraea_url: String(r.astraea_url ?? ''),
         hub_url: String(r.hub_url ?? ''),
         default_model: String(r.default_model ?? 'gpt-5.4-mini'),
+        default_smart_model: String(r.default_smart_model ?? r.default_model ?? 'gpt-5.4-mini'),
+        fast_background_model: String(r.fast_background_model ?? ''),
+        resolved_fast_model: String(
+          r.resolved_fast_model ?? r.fast_background_model ?? r.default_smart_model ?? r.default_model ?? 'gpt-5.4-mini',
+        ),
+        interface_language: r.interface_language === 'vi' ? 'vi' : 'en',
+        model_output_language:
+          r.model_output_language === 'en' || r.model_output_language === 'auto'
+            ? r.model_output_language
+            : 'vi',
+        send_key_mode: r.send_key_mode === 'ctrl_enter' ? 'ctrl_enter' : 'enter',
+        max_tool_rounds: typeof r.max_tool_rounds === 'number' ? r.max_tool_rounds : 8,
+        max_group_hops: typeof r.max_group_hops === 'number' ? r.max_group_hops : 3,
+        default_temperature: typeof r.default_temperature === 'number' ? r.default_temperature : 0.4,
+        write_gate_policy: String(r.write_gate_policy ?? 'write_gated'),
+        composer_prefs:
+          r.composer_prefs && typeof r.composer_prefs === 'object'
+            ? (r.composer_prefs as Record<string, unknown>)
+            : {},
         llm_base_url: String(r.llm_base_url ?? ''),
         allowed_hosts: Array.isArray(r.allowed_hosts) ? r.allowed_hosts.map(String) : [],
         task_models: (r.task_models && typeof r.task_models === 'object'
@@ -994,13 +1158,78 @@ export function useAppAgents() {
 
   const loadModels = useCallback(async () => {
     try {
-      const r = await appAgentsApi<{ models?: string[]; items?: string[] }>('/api/app-agents/models')
+      const r = await appAgentsApi<{ models?: unknown[]; items?: unknown[] }>('/api/app-agents/models')
       const list = r.models ?? r.items ?? []
       if (Array.isArray(list) && list.length > 0) {
-        setModels(list.map(String))
+        const ids = list
+          .map((item) =>
+            typeof item === 'string'
+              ? item.trim()
+              : item && typeof item === 'object'
+                ? String((item as Record<string, unknown>).id ?? (item as Record<string, unknown>).model_id ?? '').trim()
+                : '',
+          )
+          .filter(Boolean)
+        if (ids.length > 0) setModels(ids)
       }
     } catch {
       /* keep default model aliases */
+    }
+  }, [])
+
+  const loadManifest = useCallback(async () => {
+    try {
+      const res = await appAgentsApi<AppCapabilitiesManifest>('/api/app-agents/manifest')
+      setManifest(res)
+    } catch {
+      /* ignore when backend not reachable */
+    }
+  }, [])
+
+  const loadModelCatalog = useCallback(async () => {
+    try {
+      const res = await appAgentsApi<{ items?: CatalogModelItem[] }>('/api/app-agents/models/catalog')
+      if (Array.isArray(res.items)) setModelCatalog(res.items)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const loadMcpNamespaces = useCallback(async () => {
+    try {
+      const res = await appAgentsApi<{ items?: BusinessMcpNamespaceItem[] }>('/api/app-agents/mcp-namespaces')
+      if (Array.isArray(res.items)) setMcpNamespaces(res.items)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const loadCustomProviders = useCallback(async () => {
+    try {
+      const res = await appAgentsApi<{ items?: CustomProviderItem[] }>('/api/app-agents/custom-providers')
+      if (Array.isArray(res.items)) setCustomProviders(res.items)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const loadMemoryGraph = useCallback(async (threadId?: string | number | null, layer?: 'L1' | 'L2' | 'L3') => {
+    try {
+      const qs = new URLSearchParams()
+      if (threadId !== null && threadId !== undefined && String(threadId).trim()) {
+        qs.set('thread_id', String(threadId))
+      }
+      if (layer) qs.set('layer', layer)
+      const q = qs.toString()
+      const res = await appAgentsApi<MemoryGraphPayload>(`/api/app-agents/memory/graph${q ? `?${q}` : ''}`)
+      setMemoryGraph({
+        nodes: Array.isArray(res.nodes) ? res.nodes : [],
+        edges: Array.isArray(res.edges) ? res.edges : [],
+        l1_scratchpad: res.l1_scratchpad ?? null,
+        stats: res.stats ?? { total_nodes: 0, total_edges: 0, l1_count: 0, l2_count: 0, l3_count: 0 },
+      })
+    } catch {
+      /* ignore */
     }
   }, [])
 
@@ -1135,6 +1364,11 @@ export function useAppAgents() {
         loadAccessRequests(),
         loadSchedules(),
         loadTelegram(),
+        loadManifest(),
+        loadModelCatalog(),
+        loadMcpNamespaces(),
+        loadCustomProviders(),
+        loadMemoryGraph(),
       ])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load app agents')
@@ -1145,6 +1379,11 @@ export function useAppAgents() {
     loadAccessRequests,
     loadAgents,
     loadBridgeStatus,
+    loadCustomProviders,
+    loadManifest,
+    loadMcpNamespaces,
+    loadMemoryGraph,
+    loadModelCatalog,
     loadModels,
     loadSchedules,
     loadSkills,
@@ -1162,6 +1401,16 @@ export function useAppAgents() {
       astraea_url?: string
       hub_url?: string
       default_model?: string
+      default_smart_model?: string
+      fast_background_model?: string
+      interface_language?: 'en' | 'vi'
+      model_output_language?: 'vi' | 'en' | 'auto'
+      send_key_mode?: 'enter' | 'ctrl_enter'
+      max_tool_rounds?: number
+      max_group_hops?: number
+      default_temperature?: number
+      write_gate_policy?: string
+      composer_prefs?: Record<string, unknown>
       llm_base_url?: string
       allowed_hosts?: string[]
       task_models?: TaskModelsConfig
@@ -1174,9 +1423,16 @@ export function useAppAgents() {
         method: 'PUT',
         body: JSON.stringify(sanitized),
       })
-      await Promise.all([loadBridgeStatus(), loadModels(), loadSkills(), loadTelegram()])
+      await Promise.all([
+        loadBridgeStatus(),
+        loadModels(),
+        loadModelCatalog(),
+        loadSkills(),
+        loadTelegram(),
+        loadManifest(),
+      ])
     },
-    [loadBridgeStatus, loadModels, loadSkills, loadTelegram],
+    [loadBridgeStatus, loadManifest, loadModelCatalog, loadModels, loadSkills, loadTelegram],
   )
 
   const probeConnections = useCallback(async (): Promise<ConnectionProbeReport> => {
@@ -1264,7 +1520,19 @@ export function useAppAgents() {
       patch: Partial<
         Pick<
           AgentThread,
-          'title' | 'member_slugs' | 'discussion_mode' | 'lead_slug' | 'workspace_id' | 'pinned_skills' | 'model_override'
+          | 'title'
+          | 'member_slugs'
+          | 'discussion_mode'
+          | 'lead_slug'
+          | 'workspace_id'
+          | 'pinned_skills'
+          | 'model_override'
+          | 'pinned'
+          | 'scratchpad_md'
+          | 'chat_mode'
+          | 'persona_style'
+          | 'pinned_skill_slug'
+          | 'apply_skill_every_turn'
         >
       >,
     ) => {
@@ -1472,8 +1740,259 @@ export function useAppAgents() {
     [loadAccessRequests],
   )
 
+  const fetchModelCatalog = useCallback(async () => {
+    const res = await appAgentsApi<{
+      fetched_count?: number
+      auto_enabled?: boolean
+      warnings?: string[]
+      items?: CatalogModelItem[]
+    }>('/api/app-agents/models/fetch', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    if (Array.isArray(res.items)) setModelCatalog(res.items)
+    await loadModels()
+    return res
+  }, [loadModels])
+
+  const toggleCatalogModels = useCallback(
+    async (updates: Array<{ model_id: string; enabled: boolean }>) => {
+      const res = await appAgentsApi<{ items?: CatalogModelItem[] }>('/api/app-agents/models/catalog', {
+        method: 'PATCH',
+        body: JSON.stringify({ updates }),
+      })
+      if (Array.isArray(res.items)) setModelCatalog(res.items)
+      await loadModels()
+    },
+    [loadModels],
+  )
+
+  const saveModelRoles = useCallback(
+    async (roles: { default_smart_model?: string; fast_background_model?: string }) => {
+      await appAgentsApi('/api/app-agents/models/roles', {
+        method: 'PUT',
+        body: JSON.stringify(roles),
+      })
+      await Promise.all([loadBridgeStatus(), loadModelCatalog(), loadModels()])
+    },
+    [loadBridgeStatus, loadModelCatalog, loadModels],
+  )
+
+  const saveMcpNamespaces = useCallback(
+    async (items: Array<{ namespace: string; enabled: boolean }>) => {
+      const res = await appAgentsApi<{ items?: BusinessMcpNamespaceItem[] }>('/api/app-agents/mcp-namespaces', {
+        method: 'PUT',
+        body: JSON.stringify({ items }),
+      })
+      if (Array.isArray(res.items)) setMcpNamespaces(res.items)
+    },
+    [],
+  )
+
+  const createCustomProvider = useCallback(
+    async (input: {
+      id?: string
+      name: string
+      base_url: string
+      api_key?: string
+      capabilities?: string[]
+      enabled?: boolean
+    }) => {
+      const cleaned = omitBlankSecrets(input, ['api_key'])
+      const res = await appAgentsApi<{ provider?: CustomProviderItem; items?: CustomProviderItem[] }>(
+        '/api/app-agents/custom-providers',
+        {
+          method: 'POST',
+          body: JSON.stringify(cleaned),
+        },
+      )
+      if (Array.isArray(res.items)) setCustomProviders(res.items)
+      return res.provider ?? null
+    },
+    [],
+  )
+
+  const deleteCustomProvider = useCallback(async (id: string) => {
+    const res = await appAgentsApi<{ items?: CustomProviderItem[] }>(
+      `/api/app-agents/custom-providers/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    )
+    if (Array.isArray(res.items)) setCustomProviders(res.items)
+    await loadModelCatalog()
+  }, [loadModelCatalog])
+
+  const pullAgentFromHub = useCallback(async (slug: string) => {
+    const res = await appAgentsApi<{ source?: string; agent?: Record<string, unknown> }>(
+      `/api/app-agents/agents/${encodeURIComponent(slug)}/pull-hub`,
+      { method: 'POST', body: JSON.stringify({}) },
+    )
+    if (res.agent) {
+      const norm = normalizeAgent(res.agent)
+      setAgents((prev) => prev.map((a) => (a.slug === norm.slug ? norm : a)))
+    }
+    return res
+  }, [])
+
+  const pushAgentDraft = useCallback(async (slug: string, notes?: string) => {
+    return appAgentsApi<{ local_saved?: boolean; hub_synced?: boolean }>(
+      `/api/app-agents/agents/${encodeURIComponent(slug)}/push-draft`,
+      { method: 'POST', body: JSON.stringify({ notes: notes ?? '' }) },
+    )
+  }, [])
+
+  const branchThread = useCallback(
+    async (threadId: number | string, opts?: { from_message_id?: string; title?: string }) => {
+      const res = await appAgentsApi<{ thread?: Record<string, unknown>; messages?: Record<string, unknown>[] }>(
+        `/api/app-agents/threads/${encodeURIComponent(String(threadId))}/branch`,
+        {
+          method: 'POST',
+          body: JSON.stringify(opts ?? {}),
+        },
+      )
+      if (res.thread) {
+        const created = normalizeThread(res.thread)
+        setThreads((prev) => [created, ...prev])
+        return created
+      }
+      return null
+    },
+    [],
+  )
+
+  const suggestCowriterDiff = useCallback(
+    async (input: {
+      thread_id?: string | number | null
+      article_id?: number | null
+      report_id?: number | null
+      title?: string
+      before_text: string
+      instruction: string
+      agent_slug?: string
+    }): Promise<CoWriterDraftRow | null> => {
+      const res = await appAgentsApi<{ draft?: CoWriterDraftRow }>('/api/app-agents/cowriter/suggest-diff', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+      return res.draft ?? null
+    },
+    [],
+  )
+
+  const decideCowriterDraft = useCallback(
+    async (draftId: string, decision: 'accept' | 'reject'): Promise<CoWriterDraftRow | null> => {
+      const res = await appAgentsApi<{ draft?: CoWriterDraftRow }>(
+        `/api/app-agents/cowriter/drafts/${encodeURIComponent(draftId)}/decide`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ decision }),
+        },
+      )
+      return res.draft ?? null
+    },
+    [],
+  )
+
+  const saveMemoryNode = useCallback(
+    async (input: {
+      id?: string
+      layer: 'L1' | 'L2' | 'L3'
+      node_kind?: string
+      title: string
+      content: string
+      agent_slug?: string
+      thread_id?: string | null
+      confidence?: number
+      source_ref?: string
+      connect_to_id?: string
+      relation?: string
+    }) => {
+      const res = await appAgentsApi<{ node?: MemoryGraphNode }>('/api/app-agents/memory/nodes', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+      await loadMemoryGraph(input.thread_id ?? null)
+      return res.node ?? null
+    },
+    [loadMemoryGraph],
+  )
+
+  const updateMemoryNode = useCallback(
+    async (input: {
+      id: string
+      layer?: 'L1' | 'L2' | 'L3'
+      title?: string
+      content?: string
+      confidence?: number
+      source_ref?: string
+    }) => {
+      const res = await appAgentsApi<{ node?: MemoryGraphNode }>('/api/app-agents/memory/update', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+      await loadMemoryGraph()
+      return res.node ?? null
+    },
+    [loadMemoryGraph],
+  )
+
+  const deleteMemoryNode = useCallback(
+    async (id: string) => {
+      await appAgentsApi(`/api/app-agents/memory/nodes/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      })
+      await loadMemoryGraph()
+    },
+    [loadMemoryGraph],
+  )
+
+  const auditMemory = useCallback(async () => {
+    return appAgentsApi<{
+      model_used?: string
+      total_checked?: number
+      findings?: Array<Record<string, unknown>>
+      stale_ids?: string[]
+      ai_summary?: string
+    }>('/api/app-agents/memory/audit', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  }, [])
+
+  const dedupMemory = useCallback(async () => {
+    const res = await appAgentsApi<{ removed_count?: number; remaining_count?: number }>(
+      '/api/app-agents/memory/dedup',
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      },
+    )
+    await loadMemoryGraph()
+    return res
+  }, [loadMemoryGraph])
+
+  const generateTelegramLinkCode = useCallback(
+    async (input?: { agent_slug?: string; thread_id?: string | null }) => {
+      return appAgentsApi<{
+        code: string
+        command: string
+        agent_slug: string
+        ttl_seconds: number
+        expires_at: string
+      }>('/api/app-agents/telegram/link-code', {
+        method: 'POST',
+        body: JSON.stringify(input ?? {}),
+      })
+    },
+    [],
+  )
+
   return {
     bridgeStatus,
+    manifest,
+    modelCatalog,
+    mcpNamespaces,
+    customProviders,
+    memoryGraph,
     agents,
     models,
     threads,
@@ -1498,22 +2017,43 @@ export function useAppAgents() {
     loading,
     error,
     refreshAll,
+    loadManifest,
+    loadModelCatalog,
+    loadMcpNamespaces,
+    loadCustomProviders,
+    loadMemoryGraph,
     loadThreads,
     loadWorkspaces,
     loadSkills,
     loadAccessRequests,
     saveBridgeConfig,
     probeConnections,
+    fetchModelCatalog,
+    toggleCatalogModels,
+    saveModelRoles,
+    saveMcpNamespaces,
+    createCustomProvider,
+    deleteCustomProvider,
     saveAgent,
     deleteAgent,
+    pullAgentFromHub,
+    pushAgentDraft,
     createThread,
     updateThread,
     deleteThread,
+    branchThread,
     saveWorkspace,
     deleteWorkspace,
     syncSkills,
     toggleSkillEnabled,
     requestSkillAccess,
+    suggestCowriterDiff,
+    decideCowriterDraft,
+    saveMemoryNode,
+    updateMemoryNode,
+    deleteMemoryNode,
+    auditMemory,
+    dedupMemory,
     createSchedule,
     updateSchedule,
     deleteSchedule,
@@ -1521,12 +2061,14 @@ export function useAppAgents() {
     saveTelegramConfig,
     createTelegramRoute,
     deleteTelegramRoute,
+    generateTelegramLinkCode,
   }
 }
 
 export function useThreadStream(threadId: number | string | null) {
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [whiteboard, setWhiteboard] = useState<WhiteboardNote[]>([])
+  const [askUserPrompts, setAskUserPrompts] = useState<AskUserPrompt[]>([])
   const [streamState, setStreamState] = useState<StreamTurnState>(() => createInitialStreamTurnState())
   const [streamConnected, setStreamConnected] = useState(false)
   const [sending, setSending] = useState(false)
@@ -1556,6 +2098,28 @@ export function useThreadStream(threadId: number | string | null) {
     }
   }, [])
 
+  const reloadAskUser = useCallback(async (id: number | string) => {
+    try {
+      const r = await appAgentsApi<{ items?: AskUserPrompt[] }>(
+        `/api/app-agents/threads/${encodeURIComponent(String(id))}/ask-user`,
+      )
+      if (Array.isArray(r.items)) setAskUserPrompts(r.items)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (streamState.askUserPrompts.length === 0) return
+    setAskUserPrompts((prev) => {
+      const map = new Map(prev.map((p) => [p.prompt_id, p]))
+      for (const p of streamState.askUserPrompts) {
+        map.set(p.prompt_id, { ...(map.get(p.prompt_id) ?? p), ...p })
+      }
+      return Array.from(map.values())
+    })
+  }, [streamState.askUserPrompts])
+
   useEffect(() => {
     if (streamState.completedMessages.length === 0) return
     setMessages((prev) => {
@@ -1575,11 +2139,13 @@ export function useThreadStream(threadId: number | string | null) {
     if (threadId === null || threadId === '') {
       setMessages([])
       setWhiteboard([])
+      setAskUserPrompts([])
       return
     }
 
     void reloadMessages(threadId)
     void reloadWhiteboard(threadId)
+    void reloadAskUser(threadId)
 
     let cancelled = false
     let retryTimer: number | undefined
@@ -1636,7 +2202,7 @@ export function useThreadStream(threadId: number | string | null) {
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       controller.abort()
     }
-  }, [threadId, reloadMessages, reloadWhiteboard])
+  }, [threadId, reloadMessages, reloadWhiteboard, reloadAskUser])
 
   const sendTurn = useCallback(
     async (
@@ -1646,6 +2212,8 @@ export function useThreadStream(threadId: number | string | null) {
         activeViewContext?: ActiveViewContext | null
         skillSlugs?: string[]
         modelOverride?: string | null
+        chatMode?: string | null
+        personaStyle?: string | null
       },
     ) => {
       const trimmed = text.trim()
@@ -1674,6 +2242,10 @@ export function useThreadStream(threadId: number | string | null) {
             ...(opts?.modelOverride && opts.modelOverride.trim()
               ? { model_override: opts.modelOverride.trim() }
               : {}),
+            ...(opts?.chatMode && opts.chatMode.trim() ? { chat_mode: opts.chatMode.trim() } : {}),
+            ...(opts?.personaStyle && opts.personaStyle.trim()
+              ? { persona_style: opts.personaStyle.trim() }
+              : {}),
             ...(boundedCtx ? { active_view_context: boundedCtx } : {}),
           }),
         })
@@ -1696,6 +2268,116 @@ export function useThreadStream(threadId: number | string | null) {
       }
     },
     [reloadMessages, sending, threadId],
+  )
+
+  const answerAskUser = useCallback(
+    async (promptId: string, answer: string, autoContinue = true) => {
+      if (threadId === null || threadId === '' || !answer.trim()) return null
+      setError(null)
+      const res = await appAgentsApi<{
+        prompt?: AskUserPrompt
+        follow_up?: { turn_id?: string; messages?: Record<string, unknown>[] } | null
+      }>(
+        `/api/app-agents/threads/${encodeURIComponent(String(threadId))}/ask-user/${encodeURIComponent(promptId)}/answer`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ answer: answer.trim(), auto_continue: autoContinue }),
+        },
+      )
+      setAskUserPrompts((prev) =>
+        prev.map((p) =>
+          p.prompt_id === promptId
+            ? res.prompt ?? { ...p, status: 'answered', answer: answer.trim() }
+            : p,
+        ),
+      )
+      if (Array.isArray(res.follow_up?.messages) && res.follow_up.messages.length > 0) {
+        const normalized = res.follow_up.messages.map(normalizeMessage)
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => String(m.id)))
+          const fresh = normalized.filter((m) => !seen.has(String(m.id)))
+          return [...prev, ...fresh]
+        })
+      } else if (autoContinue) {
+        await reloadMessages(threadId)
+      }
+      return res.prompt ?? null
+    },
+    [reloadMessages, threadId],
+  )
+
+  const retrySeat = useCallback(
+    async (slug: string, modelOverride?: string | null) => {
+      if (threadId === null || threadId === '' || !slug.trim() || sending) return
+      setSending(true)
+      setError(null)
+      setStreamState((prev) => ({ ...prev, toolPills: [], lastError: null }))
+      try {
+        const res = await appAgentsApi<{ messages?: Record<string, unknown>[] }>(
+          `/api/app-agents/threads/${encodeURIComponent(String(threadId))}/seats/${encodeURIComponent(slug)}/retry`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              ...(modelOverride && modelOverride.trim() ? { model_override: modelOverride.trim() } : {}),
+            }),
+          },
+        )
+        if (Array.isArray(res.messages) && res.messages.length > 0) {
+          const normalized = res.messages.map(normalizeMessage)
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => String(m.id)))
+            const fresh = normalized.filter((m) => !seen.has(String(m.id)))
+            return [...prev, ...fresh]
+          })
+        } else {
+          await reloadMessages(threadId)
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to retry seat'
+        setError(msg)
+        throw err
+      } finally {
+        setSending(false)
+      }
+    },
+    [reloadMessages, sending, threadId],
+  )
+
+  const requestGhostHint = useCallback(
+    async (draft: string, activeViewContext?: ActiveViewContext | null): Promise<string> => {
+      if (!draft.trim()) return ''
+      const boundedCtx = activeViewContext
+        ? boundActiveViewContext(activeViewContext, MAX_ACTIVE_VIEW_CONTEXT_BYTES)
+        : undefined
+      try {
+        const res = await appAgentsApi<{ hint?: string }>('/api/app-agents/composer/ghost-hint', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(threadId !== null && threadId !== '' ? { thread_id: String(threadId) } : {}),
+            draft,
+            ...(boundedCtx ? { active_view_context: boundedCtx } : {}),
+          }),
+        })
+        return typeof res.hint === 'string' ? res.hint : ''
+      } catch {
+        return ''
+      }
+    },
+    [threadId],
+  )
+
+  const loadActivity = useCallback(
+    async (targetId?: number | string) => {
+      const id = targetId ?? threadId
+      if (id === null || id === '') return null
+      return appAgentsApi<{
+        scratchpad_md?: string
+        tool_events?: Record<string, unknown>[]
+        ask_user_prompts?: AskUserPrompt[]
+        cowriter_drafts?: CoWriterDraftRow[]
+      }>(`/api/app-agents/threads/${encodeURIComponent(String(id))}/activity`)
+    },
+    [threadId],
   )
 
   const addWhiteboardNote = useCallback(
@@ -1755,13 +2437,19 @@ export function useThreadStream(threadId: number | string | null) {
   return {
     messages,
     whiteboard,
+    askUserPrompts,
     streamState,
     streamConnected,
     sending,
     error,
     reloadMessages,
     reloadWhiteboard,
+    reloadAskUser,
+    loadActivity,
     sendTurn,
+    answerAskUser,
+    retrySeat,
+    requestGhostHint,
     addWhiteboardNote,
     deleteWhiteboardNote,
     summarizeRound,
