@@ -61,15 +61,15 @@ export function AgentSelect({
     }
     const r = el.getBoundingClientRect();
     const estHeight = Math.min(280, Math.max(1, options.length) * 34 + 12);
-    const shouldFlip =
-      window.innerHeight - r.bottom < estHeight + 16 && r.top > window.innerHeight - r.bottom;
+    const below = window.innerHeight - r.bottom - 36;
+    const shouldFlip = below < estHeight && r.top > below;
     const minWidth = Math.max(r.width, 180);
     const maxLeft = Math.max(8, window.innerWidth - minWidth - 8);
     setRect({
       left: Math.min(Math.max(8, r.left), maxLeft),
       top: shouldFlip ? undefined : r.bottom + 6,
       bottom: shouldFlip ? Math.max(32, window.innerHeight - r.top + 6) : undefined,
-      maxHeight: Math.max(120, Math.min(280, shouldFlip ? r.top - 38 : window.innerHeight - r.bottom - 16)),
+      maxHeight: Math.max(96, Math.min(280, shouldFlip ? r.top - 18 : Math.max(96, below))),
       minWidth,
       above: shouldFlip,
     });
@@ -93,13 +93,18 @@ export function AgentSelect({
       if (triggerRef.current?.contains(t) || panelRef.current?.contains(t)) return;
       setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     document.addEventListener("mousedown", onOutside);
+    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("scroll", sync, true);
       window.removeEventListener("resize", sync);
       window.removeEventListener("hashchange", onRouteOrHash);
       window.removeEventListener("popstate", onRouteOrHash);
       document.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("keydown", onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -110,10 +115,7 @@ export function AgentSelect({
     triggerRef.current?.focus();
   };
 
-  const portalHost =
-    typeof document !== "undefined"
-      ? (document.querySelector(".app-shell, .reader-shell, .reader, .login-page") ?? document.body)
-      : null;
+  const portalHost = typeof document !== "undefined" ? document.body : null;
 
   return (
     <>

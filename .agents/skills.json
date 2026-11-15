@@ -18,7 +18,8 @@
         "lnm-ui-ux",
         "lnc-ln-ui-engine",
         "lnc-icon",
-        "lnc-app-agents"
+        "lnc-app-agents",
+        "lnc-keycloak"
       ]
     }
   ]

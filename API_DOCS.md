@@ -399,6 +399,19 @@ Authentication supports **Keycloak Confidential OIDC `PKCE S256`** (`OIDC_ISSUER
 | POST | `/api/admin/mgmt/rotate` | Rotate `MANAGEMENT_KEY` (Argon2id + `session_epoch + 1`), keeping caller active and invalidating prior sessions |
 | POST | `/api/admin/sessions/revoke-all` | Increment `session_epoch` and delete all active sessions immediately |
 | GET | `/api/admin/audit-events` | Read recent authentication and secret lifecycle audit events (`Cache-Control: no-store`) |
+| GET | `/api/admin/audit` | Alias for `GET /api/admin/audit-events` (`Cache-Control: no-store`) |
+| GET | `/api/admin/oidc` | Read masked `cfg_or_env` Keycloak Confidential OIDC `PKCE S256` settings (`Cache-Control: no-store`) |
+| PUT | `/api/admin/oidc` | Save & live hot-reload Keycloak OIDC settings (`omitBlankSecrets`, `$enc:1:` vault secret, SSRF + wildcard checks) |
+| POST | `/api/admin/oidc/test` | Probe OIDC discovery & JWKS endpoints via SSRF-safe `Fetcher` |
+| POST | `/api/admin/oidc/reset` | Reset runtime OIDC overrides back to bootstrap environment defaults |
+| GET | `/api/oidc` | Alias for `GET /api/admin/oidc` |
+| PUT | `/api/oidc` | Alias for `PUT /api/admin/oidc` |
+| POST | `/api/oidc/test` | Alias for `POST /api/admin/oidc/test` |
+| POST | `/api/oidc/reset` | Alias for `POST /api/admin/oidc/reset` |
+| GET | `/v1/app-connectors/lnc-newsman/health` | Rule T2 `LNC-Agent-Hub` Contract A health probe (`no-store`) |
+| GET | `/v1/app-connectors/lnc-newsman/healthz` | Rule T2 `LNC-Agent-Hub` Contract A healthz alias (`no-store`) |
+| GET | `/v1/app-connectors/lnc-newsman/mcp/health` | Rule T2 `LNC-Agent-Hub` Contract A MCP health probe (`no-store`) |
+| POST | `/v1/app-connectors/lnc-newsman/mcp` | Rule T2 `LNC-Agent-Hub` Contract A single-lane MCP JSON-RPC endpoint (`Authorization: Bearer` + `X-Lnc-V4s-Grant`) |
 | GET | `/api/admin/providers` | List unified LLM providers (`lnc-agents-hub` + custom OpenAI-compat providers) and global role bindings (`no-store`) |
 | POST | `/api/admin/providers` | Register a custom OpenAI-compatible provider after SSRF validation (`secret_enc` sealed via `LNC_MASTER_KEY`) |
 | PUT | `/api/admin/providers/{id}` | Update provider URL/name/secret (`omitBlankSecrets` preserves blank or `"********"` secrets) |

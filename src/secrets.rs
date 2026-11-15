@@ -34,7 +34,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const LEGACY_NONCE_BYTES: usize = 24;
 const GCM_NONCE_BYTES: usize = 12;
-const GCM_PREFIX: &str = "aesgcm:v1:";
+pub const ENC_V1_PREFIX: &str = "$enc:1:";
+const LEGACY_GCM_PREFIX: &str = "aesgcm:v1:";
 const HKDF_SALT: &[u8] = b"lnc-v1";
 const KEY_BYTES: usize = 32;
 const MAX_SECRET_BYTES: usize = 8 * 1024;
@@ -130,17 +131,18 @@ pub fn seal_with_key(
     let mut blob = Vec::with_capacity(GCM_NONCE_BYTES + sealed.len());
     blob.extend_from_slice(&nonce_bytes);
     blob.extend_from_slice(&sealed);
-    Ok(format!("{GCM_PREFIX}{}", URL_SAFE_NO_PAD.encode(blob)))
+    Ok(format!("{ENC_V1_PREFIX}{}", URL_SAFE_NO_PAD.encode(blob)))
 }
 
-/// Decrypt bytes sealed by `seal_with_key` verifying record AAD.
+/// Decrypt bytes sealed by `seal_with_key` (`$enc:1:` or legacy `aesgcm:v1:`) verifying record AAD.
 pub fn open_with_key(
     key: &[u8; KEY_BYTES],
     aad: &[u8],
     encoded: &str,
 ) -> Result<Vec<u8>, SecretError> {
     let rest = encoded
-        .strip_prefix(GCM_PREFIX)
+        .strip_prefix(ENC_V1_PREFIX)
+        .or_else(|| encoded.strip_prefix(LEGACY_GCM_PREFIX))
         .ok_or(SecretError::Undecryptable)?;
     let blob = URL_SAFE_NO_PAD
         .decode(rest)
@@ -199,13 +201,18 @@ impl SecretBox {
         let current = parse_key(&std::env::var("LNC_MASTER_KEY").ok()?)?;
         let previous = std::env::var("LNC_MASTER_KEY_OLD")
             .ok()
-            .and_then(|value| parse_key(&value));
+            .and_then(|value| parse_key(&value))
+            .or_else(|| {
+                std::env::var("LNC_PREVIOUS_MASTER_KEY")
+                    .ok()
+                    .and_then(|value| parse_key(&value))
+            });
         Some(Self { current, previous })
     }
 
     /// Explicit key material, for tests and for the connector framework tests.
     /// Production code uses [`SecretBox::from_env`].
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn from_bytes(current: [u8; KEY_BYTES], previous: Option<[u8; KEY_BYTES]>) -> Self {
         Self { current, previous }
     }
@@ -267,7 +274,7 @@ impl SecretBox {
     }
 
     fn open(&self, name: &str, encoded: &str) -> Result<String, SecretError> {
-        if encoded.starts_with(GCM_PREFIX) {
+        if encoded.starts_with(ENC_V1_PREFIX) || encoded.starts_with(LEGACY_GCM_PREFIX) {
             let aad_v2 = format!("secret:{name}");
             let curr = self.derived_current();
             for aad in [aad_v2.as_bytes(), name.as_bytes()] {
@@ -312,15 +319,14 @@ impl SecretBox {
         Err(SecretError::Undecryptable)
     }
 
-    /// Startup self-verification over stored `aesgcm:v1:` records across vault tables.
+    /// Startup self-verification over stored `$enc:1:` / `aesgcm:v1:` records across vault tables.
     /// Reports how many records verified cleanly; logs errors without revealing secrets.
     pub fn verify_gcm_records(&self, db: &db::Database) -> usize {
         let mut checked = 0usize;
-        if let Ok(mut stmt) = db
-            .conn
-            .prepare("SELECT name, ciphertext FROM secrets WHERE ciphertext LIKE 'aesgcm:v1:%'")
-            && let Ok(rows) =
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        if let Ok(mut stmt) = db.conn.prepare(
+            "SELECT name, ciphertext FROM secrets WHERE ciphertext LIKE '$enc:1:%' OR ciphertext LIKE 'aesgcm:v1:%'",
+        ) && let Ok(rows) =
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         {
             for row in rows.flatten() {
                 checked += 1;
@@ -330,9 +336,18 @@ impl SecretBox {
             }
         }
         for (sql, prefix) in [
-            ("SELECT id, secret_enc FROM api_keys WHERE secret_enc LIKE 'aesgcm:v1:%'", "api_key"),
-            ("SELECT id, secret_enc FROM ai_providers WHERE secret_enc LIKE 'aesgcm:v1:%'", "provider"),
-            ("SELECT id, secret_enc FROM mcp_connectors WHERE secret_enc LIKE 'aesgcm:v1:%'", "mcp_connector"),
+            (
+                "SELECT id, secret_enc FROM api_keys WHERE secret_enc LIKE '$enc:1:%' OR secret_enc LIKE 'aesgcm:v1:%'",
+                "api_key",
+            ),
+            (
+                "SELECT id, secret_enc FROM ai_providers WHERE secret_enc LIKE '$enc:1:%' OR secret_enc LIKE 'aesgcm:v1:%'",
+                "provider",
+            ),
+            (
+                "SELECT id, secret_enc FROM mcp_connectors WHERE secret_enc LIKE '$enc:1:%' OR secret_enc LIKE 'aesgcm:v1:%'",
+                "mcp_connector",
+            ),
         ] {
             if let Ok(mut stmt) = db.conn.prepare(sql)
                 && let Ok(rows) =
@@ -348,6 +363,17 @@ impl SecretBox {
             }
         }
         checked
+    }
+
+    fn is_current_v1_envelope(&self, aad: &str, encoded: &str) -> bool {
+        encoded.starts_with(ENC_V1_PREFIX)
+            && open_with_key(&self.derived_current().vault_kek, aad.as_bytes(), encoded).is_ok()
+    }
+
+    fn is_current_v1_secret(&self, name: &str, encoded: &str) -> bool {
+        let aad = format!("secret:{name}");
+        encoded.starts_with(ENC_V1_PREFIX)
+            && open_with_key(&self.derived_current().vault_kek, aad.as_bytes(), encoded).is_ok()
     }
 
     /// A short, non-reversible fingerprint so an operator can tell two keys apart
@@ -444,7 +470,165 @@ pub fn rewrap(db: &mut db::Database, vault: &SecretBox) -> anyhow::Result<usize>
         )?;
     }
     tx.commit()?;
-    Ok(rewrapped.len())
+    let extra = rotate_envelope_tables(db, vault, true)?;
+    Ok(rewrapped.len() + extra)
+}
+
+/// Eagerly upgrades legacy (`XChaCha20`, `aesgcm:v1:`) or `LNC_MASTER_KEY_OLD`-sealed
+/// records across `secrets`, `api_keys` (including `key_hash_hmac` re-peppering),
+/// `ai_providers`, `mcp_connectors`, and `settings(oidc_client_secret_enc)` to canonical
+/// `$enc:1:` under the current `LNC_MASTER_KEY`.
+pub fn boot_rotate_vault_and_keys(db: &db::Database, vault: &SecretBox) -> anyhow::Result<usize> {
+    let mut rotated = 0usize;
+    let secret_rows: Vec<(String, String)> = {
+        let mut stmt = db
+            .conn
+            .prepare("SELECT name, ciphertext FROM secrets ORDER BY name")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (name, ct) in secret_rows {
+        if vault.is_current_v1_secret(&name, &ct) {
+            continue;
+        }
+        match vault
+            .open(&name, &ct)
+            .and_then(|plain| vault.seal(&name, plain.as_bytes()))
+        {
+            Ok(new_ct) => {
+                db.conn.execute(
+                    "UPDATE secrets SET ciphertext=?2, key_version=?3, updated_at=CURRENT_TIMESTAMP WHERE name=?1",
+                    params![name, new_ct, CURRENT_KEY_VERSION],
+                )?;
+                rotated += 1;
+            }
+            Err(_) => {
+                tracing::warn!(secret = %name, "skipping undecryptable secret during boot rotation");
+            }
+        }
+    }
+    rotated += rotate_envelope_tables(db, vault, false)?;
+    Ok(rotated)
+}
+
+fn rotate_envelope_tables(
+    db: &db::Database,
+    vault: &SecretBox,
+    strict: bool,
+) -> anyhow::Result<usize> {
+    let mut rotated = 0usize;
+
+    // 1. api_keys: re-seal secret_enc ($enc:1:) AND re-pepper key_hash_hmac under current key
+    if let Ok(mut stmt) = db
+        .conn
+        .prepare("SELECT id, secret_enc, key_hash_hmac FROM api_keys WHERE secret_enc != ''")
+    {
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, enc, old_hmac) in rows {
+            let aad = format!("api_key:{id}");
+            match vault.open_envelope(&aad, &enc) {
+                Ok(raw_token) => {
+                    let raw = Zeroizing::new(raw_token);
+                    let new_hmac = vault.hmac_api_key(&raw);
+                    if !vault.is_current_v1_envelope(&aad, &enc) || new_hmac != old_hmac {
+                        let new_enc = vault
+                            .seal_envelope(&aad, &raw)
+                            .map_err(|e| anyhow::anyhow!("api_key seal failed: {e}"))?;
+                        db.conn.execute(
+                            "UPDATE api_keys SET secret_enc = ?2, key_hash_hmac = ?3 WHERE id = ?1",
+                            params![id, new_enc, new_hmac],
+                        )?;
+                        rotated += 1;
+                    }
+                }
+                Err(e) if strict => {
+                    return Err(anyhow::anyhow!("api_key {id} cannot be opened: {e}"));
+                }
+                Err(_) => {
+                    tracing::warn!(api_key_id = %id, "skipping undecryptable api_key during boot rotation");
+                }
+            }
+        }
+    }
+
+    // 2. ai_providers & mcp_connectors
+    for (select_sql, update_sql, prefix) in [
+        (
+            "SELECT id, secret_enc FROM ai_providers WHERE secret_enc != ''",
+            "UPDATE ai_providers SET secret_enc = ?2 WHERE id = ?1",
+            "provider",
+        ),
+        (
+            "SELECT id, secret_enc FROM mcp_connectors WHERE secret_enc != ''",
+            "UPDATE mcp_connectors SET secret_enc = ?2 WHERE id = ?1",
+            "mcp_connector",
+        ),
+    ] {
+        if let Ok(mut stmt) = db.conn.prepare(select_sql) {
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, enc) in rows {
+                let aad = format!("{prefix}:{id}");
+                if vault.is_current_v1_envelope(&aad, &enc) {
+                    continue;
+                }
+                match vault.open_envelope(&aad, &enc) {
+                    Ok(plain) => {
+                        let z = Zeroizing::new(plain);
+                        let new_enc = vault
+                            .seal_envelope(&aad, &z)
+                            .map_err(|e| anyhow::anyhow!("{prefix} seal failed: {e}"))?;
+                        db.conn.execute(update_sql, params![id, new_enc])?;
+                        rotated += 1;
+                    }
+                    Err(e) if strict => {
+                        return Err(anyhow::anyhow!("{prefix} {id} cannot be opened: {e}"));
+                    }
+                    Err(_) => {
+                        tracing::warn!(record = %aad, "skipping undecryptable record during boot rotation");
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. settings('oidc_client_secret_enc')
+    if let Ok(Some(enc)) = db
+        .conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'oidc_client_secret_enc'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        && !enc.is_empty()
+        && !vault.is_current_v1_envelope("oidc:client_secret", &enc)
+    {
+        match vault.open_envelope("oidc:client_secret", &enc) {
+            Ok(plain) => {
+                let z = Zeroizing::new(plain);
+                let new_enc = vault
+                    .seal_envelope("oidc:client_secret", &z)
+                    .map_err(|e| anyhow::anyhow!("oidc secret seal failed: {e}"))?;
+                db.conn.execute(
+                    "UPDATE settings SET value = ?1 WHERE key = 'oidc_client_secret_enc'",
+                    params![new_enc],
+                )?;
+                rotated += 1;
+            }
+            Err(e) if strict => {
+                return Err(anyhow::anyhow!("oidc_client_secret_enc cannot be opened: {e}"));
+            }
+            Err(_) => {
+                tracing::warn!("skipping undecryptable oidc_client_secret_enc during boot rotation");
+            }
+        }
+    }
+
+    Ok(rotated)
 }
 
 // ---------- admin endpoints (metadata only) ----------

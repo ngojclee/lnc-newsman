@@ -12,7 +12,7 @@
   --ak-ink: var(--ink, #23211d);
   --ak-surface: var(--ak-card);
   --ak-surface-soft: var(--ak-soft);
-  --ak-surface-elevated: var(--ak-card);
+  --ak-surface-elevated: var(--ak-soft);
   --ak-input: var(--ak-bg);
   --ak-hover: rgba(127, 127, 127, 0.09);
   --ak-border: var(--line, #e3dfd7);

@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Select } from './Select'
 
 export type AdminApiFn = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -25,11 +26,27 @@ export interface ApiKeyRow {
 export interface MgmtStateInfo {
   configured: boolean
   source: string
-  hash_algo: string
-  session_epoch: number
   oidc_enabled: boolean
   vault_configured: boolean
   env_pinned: boolean
+}
+
+export interface OidcAdminView {
+  ok: boolean
+  enabled: boolean
+  active: boolean
+  source: string
+  env_managed: boolean
+  issuer_url: string
+  client_id: string
+  has_client_secret: boolean
+  client_secret_masked: string
+  redirect_uri: string
+  default_redirect_uri: string
+  scopes: string
+  allowed_users: string[]
+  allowed_groups: string[]
+  allowed_hosts: string[]
 }
 
 export interface AuditEventRow {
@@ -126,6 +143,19 @@ interface AgentAnalysisRow {
   source_article_ids: number[]
 }
 
+interface BridgeConfigSnap {
+  astraea_url?: string
+  has_astraea_token?: boolean
+}
+
+interface TelegramConfigSnap {
+  mode?: string
+  cygnus_url?: string
+  has_bot_token?: boolean
+  has_webhook_secret?: boolean
+  has_cygnus_key?: boolean
+}
+
 const MASK_SENTINEL = '********'
 
 export async function copyText(
@@ -164,10 +194,17 @@ export async function copyText(
 
 function omitBlankOrMasked(raw: string): string | undefined {
   const trimmed = raw.trim()
-  if (!trimmed || trimmed === MASK_SENTINEL || /^[•*]{6,}$/.test(trimmed)) {
+  if (!trimmed || trimmed === MASK_SENTINEL || /^[•*]{4,}$/.test(trimmed)) {
     return undefined
   }
   return trimmed
+}
+
+function parseCommaList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 function formatTs(lang: Lang, sec: number): string {
@@ -178,6 +215,134 @@ function formatTs(lang: Lang, sec: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(sec * 1000))
+}
+
+export function FloatingToast({
+  notice,
+  error,
+  onDismissNotice,
+  onDismissError,
+}: {
+  notice?: string
+  error?: string
+  onDismissNotice?: () => void
+  onDismissError?: () => void
+}) {
+  useEffect(() => {
+    if (!notice || !onDismissNotice) return
+    const timer = window.setTimeout(onDismissNotice, 4500)
+    return () => window.clearTimeout(timer)
+  }, [notice, onDismissNotice])
+
+  if (!notice && !error) return null
+  if (typeof document === 'undefined') return null
+
+  return createPortal(
+    <div className="bp-toast-stack" aria-live="polite">
+      {error && (
+        <div className="bp-toast bp-toast--error" role="alert">
+          <span>{error}</span>
+          {onDismissError && (
+            <button type="button" className="bp-toast-close" onClick={onDismissError} aria-label="Dismiss">
+              ×
+            </button>
+          )}
+        </div>
+      )}
+      {notice && (
+        <div className="bp-toast bp-toast--ok" role="status">
+          <span>✓ {notice}</span>
+          {onDismissNotice && (
+            <button type="button" className="bp-toast-close" onClick={onDismissNotice} aria-label="Dismiss">
+              ×
+            </button>
+          )}
+        </div>
+      )}
+    </div>,
+    document.body,
+  )
+}
+
+function SecretCopySlot({
+  lang,
+  item,
+  onDismiss,
+  onCopied,
+}: {
+  lang: Lang
+  item: { label: string; secret: string } | null
+  onDismiss: () => void
+  onCopied: (msg: string) => void
+}) {
+  const [revealPlain, setRevealPlain] = useState(false)
+
+  useEffect(() => {
+    setRevealPlain(false)
+  }, [item?.secret])
+
+  return (
+    <div
+      id="secret-copy-slot"
+      className={item ? 'secret-copy-slot is-populated' : 'secret-copy-slot'}
+      role="status"
+      aria-live="polite"
+    >
+      {item ? (
+        <div className="secret-copy-slot-inner">
+          <div className="secret-copy-slot-meta">
+            <strong>{item.label}:</strong>
+            <code className="secret-copy-code">
+              {revealPlain
+                ? item.secret
+                : item.secret.length > 14
+                  ? `${item.secret.slice(0, 8)}••••••••${item.secret.slice(-4)}`
+                  : '••••••••••••'}
+            </code>
+          </div>
+          <div className="bp-row-actions">
+            <button
+              type="button"
+              className="btn secondary bp-action-btn"
+              onClick={() => setRevealPlain((v) => !v)}
+            >
+              {revealPlain ? (lang === 'vi' ? 'Ẩn' : 'Hide') : lang === 'vi' ? 'Hiện' : 'Reveal'}
+            </button>
+            <button
+              type="button"
+              className="btn primary bp-action-btn"
+              onClick={() =>
+                void copyText(item.secret, () => setRevealPlain(true)).then((ok) => {
+                  onCopied(
+                    ok
+                      ? lang === 'vi'
+                        ? 'Đã sao chép vào clipboard.'
+                        : 'Copied secret to clipboard.'
+                      : lang === 'vi'
+                        ? 'Đã hiển thị khóa để sao chép thủ công.'
+                        : 'Revealed secret for manual copy.',
+                  )
+                })
+              }
+            >
+              {lang === 'vi' ? 'Sao chép' : 'Copy'}
+            </button>
+            <button type="button" className="btn secondary bp-action-btn" onClick={onDismiss}>
+              {lang === 'vi' ? 'Đóng' : 'Clear'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="secret-copy-slot-idle">
+          <span>
+            {lang === 'vi'
+              ? 'Vùng sao chép bảo mật sẵn sàng — bấm Tạo mới, Xoay vòng hoặc Sao chép trên từng dòng để nhận khóa.'
+              : 'Secure copy slot ready — Create, Rotate, or click Copy on any credential row to populate.'}
+          </span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ConfirmRemoveModal({
@@ -288,7 +453,6 @@ function ActionBar({
           rotate: 'Xoay vòng',
           revoke: isRevoked ? 'Kích hoạt lại' : 'Thu hồi',
           remove: 'Xóa',
-          envTip: 'Khóa từ biến môi trường (chỉ đọc)',
           rotateToCopy: 'Xoay vòng để bật Sao chép',
         }
       : {
@@ -296,22 +460,17 @@ function ActionBar({
           rotate: 'Rotate',
           revoke: isRevoked ? 'Reactivate' : 'Revoke',
           remove: 'Remove',
-          envTip: 'Env-managed (read-only)',
           rotateToCopy: 'Rotate to enable Copy',
         }
 
-  const copyTitle = envManaged
-    ? labels.envTip
-    : copyAvailable
-      ? labels.copy
-      : labels.rotateToCopy
+  const copyTitle = copyAvailable ? labels.copy : labels.rotateToCopy
 
   return (
     <div className="bp-row-actions">
       <button
         type="button"
         className="btn secondary bp-action-btn"
-        disabled={busy || envManaged || !copyAvailable}
+        disabled={busy || envManaged || isRevoked || !copyAvailable}
         title={copyTitle}
         onClick={onCopy}
       >
@@ -321,7 +480,7 @@ function ActionBar({
         type="button"
         className="btn secondary bp-action-btn"
         disabled={busy || envManaged}
-        title={envManaged ? labels.envTip : labels.rotate}
+        title={labels.rotate}
         onClick={onRotate}
       >
         {labels.rotate}
@@ -331,7 +490,7 @@ function ActionBar({
           type="button"
           className="btn secondary bp-action-btn"
           disabled={busy || envManaged}
-          title={envManaged ? labels.envTip : labels.revoke}
+          title={labels.revoke}
           onClick={onRevoke}
         >
           {labels.revoke}
@@ -341,7 +500,7 @@ function ActionBar({
         type="button"
         className="btn secondary bp-action-btn bp-action-danger"
         disabled={busy || envManaged || removeDisabled}
-        title={removeTooltip || (envManaged ? labels.envTip : labels.remove)}
+        title={removeTooltip || labels.remove}
         onClick={onRemove}
       >
         {labels.remove}
@@ -350,55 +509,78 @@ function ActionBar({
   )
 }
 
-function SecretBanner({
+export function AuditActivityCard({
   lang,
-  label,
-  secret,
-  onDismiss,
-  onCopied,
+  api,
+  initialEvents,
 }: {
   lang: Lang
-  label: string
-  secret: string
-  onDismiss: () => void
-  onCopied: (msg: string) => void
+  api: AdminApiFn
+  initialEvents?: AuditEventRow[]
 }) {
-  const [revealFallback, setRevealFallback] = useState(false)
-  if (!secret) return null
+  const [events, setEvents] = useState<AuditEventRow[]>(initialEvents ?? [])
+
+  useEffect(() => {
+    if (initialEvents) {
+      setEvents(initialEvents)
+      return
+    }
+    api<{ ok: boolean; items: AuditEventRow[] }>('/api/admin/audit')
+      .then((res) => setEvents(res.items ?? []))
+      .catch(() => setEvents([]))
+  }, [api, initialEvents])
+
   return (
-    <div className="bp-card" style={{ borderColor: 'var(--accent)' }} role="status">
+    <section className="bp-card">
       <div className="bp-card-head">
         <div>
-          <strong>{label}</strong>
-          <p className="bp-card-sub">
-            {lang === 'vi'
-              ? 'Giá trị khóa được niêm phong trên máy chủ; sao chép ngay hoặc đóng thông báo này.'
-              : 'Sealed on the server with AES-256-GCM; copy now or dismiss this notice.'}
-          </p>
-        </div>
-        <div className="bp-row-actions">
-          <button
-            type="button"
-            className="btn primary bp-action-btn"
-            onClick={() =>
-              void copyText(secret, () => setRevealFallback(true)).then((ok) => {
-                if (ok) {
-                  onCopied(lang === 'vi' ? 'Đã sao chép khóa vào clipboard.' : 'Copied secret to clipboard.')
-                }
-              })
-            }
-          >
-            {lang === 'vi' ? 'Sao chép khóa' : 'Copy secret'}
-          </button>
-          <button type="button" className="btn secondary bp-action-btn" onClick={onDismiss}>
-            {lang === 'vi' ? 'Đóng' : 'Dismiss'}
-          </button>
+          <span className="eyebrow">{lang === 'vi' ? 'Nhật ký hoạt động' : 'Audit Trail'}</span>
+          <h3 className="bp-card-title" style={{ fontSize: 18 }}>
+            {lang === 'vi' ? 'Hoạt động quản trị gần đây' : 'Recent Activity Log'}
+          </h3>
         </div>
       </div>
-      <code style={{ wordBreak: 'break-all', fontSize: 12.5 }}>
-        {revealFallback ? secret : `${secret.slice(0, 10)}••••••••${secret.slice(-4)}`}
-      </code>
-    </div>
+      <div className="bp-table-wrap">
+        <table className="bp-table" id="audit-activity-table">
+          <thead>
+            <tr>
+              <th>{lang === 'vi' ? 'Thời gian' : 'Time'}</th>
+              <th>{lang === 'vi' ? 'Tác nhân' : 'Actor'}</th>
+              <th>{lang === 'vi' ? 'Hành động' : 'Action'}</th>
+              <th>{lang === 'vi' ? 'Mục tiêu' : 'Target'}</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="muted">
+                  {lang === 'vi' ? 'Chưa có sự kiện nào.' : 'No activity recorded yet.'}
+                </td>
+              </tr>
+            ) : (
+              events.slice(0, 20).map((ev) => (
+                <tr key={ev.id}>
+                  <td>{formatTs(lang, ev.at)}</td>
+                  <td>
+                    <strong>{ev.actor}</strong> <small className="muted">({ev.auth_method})</small>
+                  </td>
+                  <td>
+                    <code>{ev.action}</code>
+                  </td>
+                  <td>
+                    {ev.target_type}:{ev.target_id}
+                  </td>
+                  <td>
+                    <code>{ev.client_ip}</code>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 
@@ -412,6 +594,18 @@ export function ApiKeysPanel({
   const [items, setItems] = useState<ApiKeyRow[] | null>(null)
   const [mgmt, setMgmt] = useState<MgmtStateInfo | null>(null)
   const [events, setEvents] = useState<AuditEventRow[]>([])
+  const [oidc, setOidc] = useState<OidcAdminView | null>(null)
+  const [oidcEnabled, setOidcEnabled] = useState(false)
+  const [oidcIssuer, setOidcIssuer] = useState('')
+  const [oidcClientId, setOidcClientId] = useState('')
+  const [oidcSecret, setOidcSecret] = useState('')
+  const [oidcRedirect, setOidcRedirect] = useState('')
+  const [oidcScopes, setOidcScopes] = useState('openid profile email')
+  const [oidcUsers, setOidcUsers] = useState('')
+  const [oidcGroups, setOidcGroups] = useState('')
+  const [oidcHosts, setOidcHosts] = useState('')
+  const [oidcProbeStatus, setOidcProbeStatus] = useState('')
+
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -424,24 +618,127 @@ export function ApiKeysPanel({
   const [removeTarget, setRemoveTarget] = useState<ApiKeyRow | null>(null)
   const [revokeAllOpen, setRevokeAllOpen] = useState(false)
 
+  const syncOidcForm = useCallback((view: OidcAdminView) => {
+    setOidc(view)
+    setOidcEnabled(Boolean(view.enabled))
+    setOidcIssuer(view.issuer_url || '')
+    setOidcClientId(view.client_id || '')
+    setOidcSecret('')
+    setOidcRedirect(view.redirect_uri || view.default_redirect_uri || '')
+    setOidcScopes(view.scopes || 'openid profile email')
+    setOidcUsers((view.allowed_users ?? []).join(', '))
+    setOidcGroups((view.allowed_groups ?? []).join(', '))
+    setOidcHosts((view.allowed_hosts ?? []).join(', '))
+  }, [])
+
   const load = useCallback(async () => {
     try {
-      const [keysRes, auditRes] = await Promise.all([
+      const [keysRes, auditRes, oidcRes] = await Promise.all([
         api<{ ok: boolean; items: ApiKeyRow[]; mgmt: MgmtStateInfo }>('/api/admin/api-keys'),
-        api<{ ok: boolean; items: AuditEventRow[] }>('/api/admin/audit-events'),
+        api<{ ok: boolean; items: AuditEventRow[] }>('/api/admin/audit'),
+        api<OidcAdminView>('/api/admin/oidc'),
       ])
       setItems(keysRes.items ?? [])
       setMgmt(keysRes.mgmt ?? null)
       setEvents(auditRes.items ?? [])
+      if (oidcRes) syncOidcForm(oidcRes)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load API keys')
       setItems([])
     }
-  }, [api])
+  }, [api, syncOidcForm])
 
   useEffect(() => {
     void load()
   }, [load])
+
+  const saveOidc = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const cleanedSecret = omitBlankOrMasked(oidcSecret)
+      const res = await api<OidcAdminView>('/api/admin/oidc', {
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: oidcEnabled,
+          issuer_url: oidcIssuer.trim(),
+          client_id: oidcClientId.trim(),
+          client_secret: cleanedSecret ?? MASK_SENTINEL,
+          redirect_uri: oidcRedirect.trim(),
+          scopes: oidcScopes.trim() || 'openid profile email',
+          allowed_users: parseCommaList(oidcUsers),
+          allowed_groups: parseCommaList(oidcGroups),
+          allowed_hosts: parseCommaList(oidcHosts),
+        }),
+      })
+      syncOidcForm(res)
+      setNotice(
+        lang === 'vi'
+          ? 'Đã lưu & áp dụng cấu hình Keycloak SSO trực tiếp.'
+          : 'Saved and hot-reloaded Keycloak SSO configuration.',
+      )
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save SSO configuration')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const testOidcDiscovery = async () => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api<{ ok: boolean; issuer: string; jwks_keys: number }>(
+        '/api/admin/oidc/test',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            issuer_url: oidcIssuer.trim(),
+            allowed_hosts: parseCommaList(oidcHosts),
+          }),
+        },
+      )
+      const summary = `${res.issuer} · ${res.jwks_keys} JWKS key(s)`
+      setOidcProbeStatus(summary)
+      setNotice(
+        lang === 'vi'
+          ? `Kết nối OIDC thành công (${summary}).`
+          : `OIDC discovery verified (${summary}).`,
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'OIDC discovery test failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const resetOidc = async () => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api<OidcAdminView>('/api/admin/oidc/reset', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      syncOidcForm(res)
+      setOidcProbeStatus('')
+      setNotice(
+        lang === 'vi'
+          ? 'Đã khôi phục cấu hình SSO mặc định.'
+          : 'Reset SSO settings to default.',
+      )
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reset failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const createKey = async (e: FormEvent) => {
     e.preventDefault()
@@ -462,10 +759,14 @@ export function ApiKeysPanel({
           ...(customSecret.trim() ? { custom_secret: customSecret.trim() } : {}),
         }),
       })
+      const createdLabel = newLabel.trim()
       setNewLabel('')
       setCustomSecret('')
       const sec = res.secret ?? res.key ?? ''
-      if (sec) setRevealed({ label: lang === 'vi' ? 'API Key mới' : 'New API Key', secret: sec })
+      if (sec) {
+        setRevealed({ label: createdLabel, secret: sec })
+        void copyText(sec)
+      }
       setNotice(lang === 'vi' ? 'Đã tạo API key.' : 'API key created.')
       await load()
     } catch (err) {
@@ -484,8 +785,17 @@ export function ApiKeysPanel({
         `/api/admin/api-keys/${encodeURIComponent(row.id)}/copy`,
         { method: 'POST' },
       )
-      await copyText(res.secret, () => setRevealed({ label: row.label, secret: res.secret }))
-      setNotice(lang === 'vi' ? `Đã sao chép khóa ${row.label}.` : `Copied ${row.label} to clipboard.`)
+      setRevealed({ label: row.label, secret: res.secret })
+      const ok = await copyText(res.secret)
+      setNotice(
+        ok
+          ? lang === 'vi'
+            ? `Đã sao chép khóa ${row.label}.`
+            : `Copied ${row.label} to clipboard.`
+          : lang === 'vi'
+            ? `Đã nạp khóa ${row.label} vào vùng sao chép bảo mật.`
+            : `Loaded ${row.label} into the secure copy slot.`,
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Copy failed')
     } finally {
@@ -503,6 +813,7 @@ export function ApiKeysPanel({
         { method: 'POST', body: JSON.stringify({}) },
       )
       setRevealed({ label: `${row.label} (rotated)`, secret: res.secret })
+      void copyText(res.secret)
       setNotice(lang === 'vi' ? `Đã xoay vòng ${row.label}.` : `Rotated ${row.label}.`)
       await load()
     } catch (err) {
@@ -560,7 +871,7 @@ export function ApiKeysPanel({
     setError('')
     setNotice('')
     try {
-      const res = await api<{ ok: boolean; secret: string; session_epoch: number }>(
+      const res = await api<{ ok: boolean; secret: string }>(
         '/api/admin/mgmt/rotate',
         {
           method: 'POST',
@@ -568,15 +879,19 @@ export function ApiKeysPanel({
         },
       )
       setCustomMgmtKey('')
-      setRevealed({ label: 'MANAGEMENT_KEY (Argon2id)', secret: res.secret })
+      setRevealed({
+        label: lang === 'vi' ? 'Khóa quản trị khẩn cấp' : 'Break-Glass Admin Key',
+        secret: res.secret,
+      })
+      void copyText(res.secret)
       setNotice(
         lang === 'vi'
-          ? `Đã xoay vòng MANAGEMENT_KEY (epoch ${res.session_epoch}).`
-          : `Rotated MANAGEMENT_KEY (epoch ${res.session_epoch}).`,
+          ? 'Đã xoay vòng khóa quản trị khẩn cấp.'
+          : 'Rotated break-glass admin key.',
       )
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Rotate management key failed')
+      setError(err instanceof Error ? err.message : 'Rotate admin key failed')
     } finally {
       setBusy(false)
     }
@@ -597,28 +912,218 @@ export function ApiKeysPanel({
 
   return (
     <div className="bp-panel-grid">
-      <section className="bp-card">
+      <FloatingToast
+        notice={notice}
+        error={error}
+        onDismissNotice={() => setNotice('')}
+        onDismissError={() => setError('')}
+      />
+
+      <SecretCopySlot
+        lang={lang}
+        item={revealed}
+        onDismiss={() => setRevealed(null)}
+        onCopied={setNotice}
+      />
+
+      <section className="bp-card" id="oidc-sso-card">
         <div className="bp-card-head">
           <div>
-            <span className="eyebrow">{lang === 'vi' ? 'Bảo mật & SSO' : 'Auth & Break-Glass'}</span>
+            <span className="eyebrow">Single Sign-On · Keycloak OIDC</span>
             <h2 className="bp-card-title">
-              {lang === 'vi' ? 'Phiên đăng nhập & MANAGEMENT_KEY' : 'Sessions & MANAGEMENT_KEY'}
+              {lang === 'vi' ? 'Đăng nhập một lần Keycloak SSO' : 'Keycloak Single Sign-On (OIDC)'}
             </h2>
             <p className="bp-card-sub">
               {lang === 'vi'
-                ? 'Khóa quản trị được băm bằng Argon2id. Xoay vòng khóa hoặc nâng session_epoch sẽ vô hiệu hóa tức thì các phiên cũ.'
-                : 'Break-glass MANAGEMENT_KEY is hashed with Argon2id. Rotating or bumping session_epoch immediately invalidates prior sessions.'}
+                ? 'Cấu hình đăng nhập SSO trực tiếp không cần khởi động lại. Bỏ trống Client Secret khi lưu để giữ nguyên bí mật đã lưu.'
+                : 'Configure live Keycloak SSO sign-in without restarting. Leave Client Secret blank when saving to keep the stored secret.'}
+            </p>
+          </div>
+          <div className="chip-row">
+            <span className={oidc?.active ? 'bp-chip ok' : 'bp-chip muted'}>
+              {oidc?.active ? 'SSO Active' : 'SSO Disabled'}
+            </span>
+            {oidc?.source && <span className="bp-chip">{oidc.source}</span>}
+            {oidcProbeStatus && <span className="bp-chip ok">{oidcProbeStatus}</span>}
+          </div>
+        </div>
+
+        <form className="bp-form-grid" onSubmit={saveOidc} autoComplete="off">
+          <div className="switch-row" style={{ gridColumn: '1 / -1' }}>
+            <div>
+              <strong>
+                {oidcEnabled
+                  ? lang === 'vi'
+                    ? 'Bật đăng nhập qua Keycloak SSO'
+                    : 'Enable Keycloak SSO Sign-In'
+                  : lang === 'vi'
+                    ? 'Tắt đăng nhập qua Keycloak SSO'
+                    : 'Keycloak SSO Sign-In Disabled'}
+              </strong>
+              <span>
+                {lang === 'vi'
+                  ? 'Yêu cầu ít nhất một người dùng hoặc nhóm được phép truy cập (không chấp nhận ký tự đại diện *).'
+                  : 'Requires at least one explicit allowed user or group (wildcards are rejected).'}
+              </span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              className="switch"
+              aria-checked={oidcEnabled}
+              aria-label="Enable Keycloak SSO"
+              disabled={busy}
+              onClick={() => setOidcEnabled((v) => !v)}
+            />
+          </div>
+
+          <label className="field">
+            <span>Issuer URL</span>
+            <input
+              value={oidcIssuer}
+              placeholder="https://sso.lengoc.me/realms/lengoc"
+              onChange={(e) => setOidcIssuer(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Client ID</span>
+            <input
+              value={oidcClientId}
+              placeholder="lnc-newsman"
+              onChange={(e) => setOidcClientId(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>
+              {lang === 'vi'
+                ? 'Client Secret (bỏ trống để giữ khóa cũ)'
+                : 'Client Secret (blank keeps stored secret)'}
+            </span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={oidcSecret}
+              placeholder={
+                oidc?.has_client_secret
+                  ? `${MASK_SENTINEL} (${lang === 'vi' ? 'đã lưu' : 'saved'})`
+                  : lang === 'vi'
+                    ? 'Nhập Client Secret'
+                    : 'Enter client secret'
+              }
+              onChange={(e) => setOidcSecret(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>Redirect URI</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                style={{ flex: 1, minWidth: 0 }}
+                value={oidcRedirect}
+                placeholder={oidc?.default_redirect_uri || 'https://newsman.lengoc.me/api/auth/oidc/callback'}
+                onChange={(e) => setOidcRedirect(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn secondary bp-action-btn"
+                onClick={() =>
+                  void copyText(oidcRedirect || oidc?.default_redirect_uri || '').then((ok) => {
+                    if (ok) {
+                      setNotice(
+                        lang === 'vi' ? 'Đã chép Redirect URI.' : 'Copied Redirect URI.',
+                      )
+                    }
+                  })
+                }
+              >
+                {lang === 'vi' ? 'Chép' : 'Copy'}
+              </button>
+            </div>
+          </label>
+
+          <label className="field">
+            <span>Scopes</span>
+            <input
+              value={oidcScopes}
+              placeholder="openid profile email"
+              onChange={(e) => setOidcScopes(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>{lang === 'vi' ? 'Người dùng cho phép (phẩy)' : 'Allowed Users (comma-separated)'}</span>
+            <input
+              value={oidcUsers}
+              placeholder="louis, admin@lengoc.me"
+              onChange={(e) => setOidcUsers(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>{lang === 'vi' ? 'Nhóm / Role cho phép (tuỳ chọn)' : 'Allowed Groups / Roles (optional)'}</span>
+            <input
+              value={oidcGroups}
+              placeholder="lnc-admins"
+              onChange={(e) => setOidcGroups(e.target.value)}
+            />
+          </label>
+
+          <label className="field">
+            <span>{lang === 'vi' ? 'Host nội bộ tin cậy (tuỳ chọn)' : 'Trusted Internal IdP Hosts (optional)'}</span>
+            <input
+              value={oidcHosts}
+              placeholder="sso.lengoc.me"
+              onChange={(e) => setOidcHosts(e.target.value)}
+            />
+          </label>
+
+          <div className="btn-row" style={{ gridColumn: '1 / -1', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={busy || !oidcIssuer.trim()}
+              onClick={() => void testOidcDiscovery()}
+            >
+              {lang === 'vi' ? 'Kiểm tra kết nối' : 'Test Discovery'}
+            </button>
+            <button
+              type="button"
+              className="btn secondary"
+              disabled={busy}
+              onClick={() => void resetOidc()}
+            >
+              {lang === 'vi' ? 'Đặt lại' : 'Reset'}
+            </button>
+            <button type="submit" className="btn primary" disabled={busy}>
+              {lang === 'vi' ? 'Lưu SSO' : 'Save SSO'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="bp-card">
+        <div className="bp-card-head">
+          <div>
+            <span className="eyebrow">{lang === 'vi' ? 'Truy cập khẩn cấp' : 'Break-Glass Access'}</span>
+            <h2 className="bp-card-title">
+              {lang === 'vi' ? 'Phiên đăng nhập & Khóa quản trị' : 'Active Sessions & Break-Glass Admin Key'}
+            </h2>
+            <p className="bp-card-sub">
+              {lang === 'vi'
+                ? 'Xoay vòng khóa quản trị hoặc thu hồi toàn bộ phiên sẽ đăng xuất tức thì mọi trình duyệt cũ.'
+                : 'Rotating the break-glass admin key or revoking sessions immediately signs out prior browser sessions.'}
             </p>
           </div>
           {mgmt && (
             <div className="chip-row">
               <span className={mgmt.oidc_enabled ? 'bp-chip ok' : 'bp-chip muted'}>
-                SSO OIDC: {mgmt.oidc_enabled ? 'ON' : 'OFF'}
+                SSO: {mgmt.oidc_enabled ? 'ON' : 'OFF'}
               </span>
               <span className={mgmt.configured ? 'bp-chip ok' : 'bp-chip warn'}>
-                {mgmt.hash_algo.toUpperCase()} · {mgmt.source}
+                {mgmt.source}
               </span>
-              <span className="bp-chip">epoch #{mgmt.session_epoch}</span>
             </div>
           )}
         </div>
@@ -630,7 +1135,7 @@ export function ApiKeysPanel({
               type="password"
               autoComplete="new-password"
               value={customMgmtKey}
-              placeholder={lang === 'vi' ? 'Bỏ trống để tự sinh nm_mgmt_…' : 'Leave blank to generate nm_mgmt_…'}
+              placeholder={lang === 'vi' ? 'Bỏ trống để tự sinh khóa mới…' : 'Leave blank to auto-generate…'}
               onChange={(e) => setCustomMgmtKey(e.target.value)}
             />
           </label>
@@ -641,7 +1146,7 @@ export function ApiKeysPanel({
               disabled={busy}
               onClick={() => void rotateMgmtKey()}
             >
-              {lang === 'vi' ? 'Xoay vòng MANAGEMENT_KEY' : 'Rotate MANAGEMENT_KEY'}
+              {lang === 'vi' ? 'Xoay vòng khóa quản trị' : 'Rotate Admin Key'}
             </button>
             <button
               type="button"
@@ -655,27 +1160,15 @@ export function ApiKeysPanel({
         </div>
       </section>
 
-      {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && <div className="save-state" role="status">✓ {notice}</div>}
-      {revealed && (
-        <SecretBanner
-          lang={lang}
-          label={revealed.label}
-          secret={revealed.secret}
-          onDismiss={() => setRevealed(null)}
-          onCopied={setNotice}
-        />
-      )}
-
       <section className="bp-card">
         <div className="bp-card-head">
           <div>
-            <span className="eyebrow">Bearer / HMAC-SHA256 + AES-256-GCM</span>
+            <span className="eyebrow">Scoped Bearer Credentials</span>
             <h2 className="bp-card-title">{lang === 'vi' ? 'Khóa API truy cập' : 'Inbound API Keys'}</h2>
             <p className="bp-card-sub">
               {lang === 'vi'
-                ? 'Khóa API dùng để đọc/ghi qua /api/v1/*. Mọi thao tác Copy đều được ghi nhật ký kiểm toán và giới hạn tốc độ.'
-                : 'API keys grant scoped Bearer access to /api/v1/*. Copy actions are rate-limited and recorded in the audit log.'}
+                ? 'Khóa API dùng để đọc/ghi qua /api/v1/*. Mọi thao tác Sao chép đều được ghi nhật ký và giới hạn tốc độ.'
+                : 'API keys grant scoped Bearer access to /api/v1/*. Copy actions are rate-limited and recorded in the activity log.'}
             </p>
           </div>
         </div>
@@ -697,7 +1190,7 @@ export function ApiKeysPanel({
               type="password"
               autoComplete="new-password"
               value={customSecret}
-              placeholder={lang === 'vi' ? 'Tự sinh nm_key_ nếu để trống' : 'Auto-generated nm_key_ if blank'}
+              placeholder={lang === 'vi' ? 'Tự sinh nếu để trống' : 'Auto-generated if blank'}
               onChange={(e) => setCustomSecret(e.target.value)}
             />
           </label>
@@ -752,13 +1245,6 @@ export function ApiKeysPanel({
                   <tr key={row.id}>
                     <td>
                       <strong>{row.label}</strong>
-                      {row.env_managed && (
-                        <div>
-                          <span className="bp-chip muted" title="Env-managed (read-only)">
-                            🔒 Env-managed
-                          </span>
-                        </div>
-                      )}
                     </td>
                     <td>
                       <code>{row.prefix}…{row.last4}</code>
@@ -797,50 +1283,7 @@ export function ApiKeysPanel({
         </div>
       </section>
 
-      <section className="bp-card">
-        <div className="bp-card-head">
-          <div>
-            <span className="eyebrow">Audit Log</span>
-            <h3 className="bp-card-title" style={{ fontSize: 18 }}>
-              {lang === 'vi' ? 'Nhật ký bảo mật gần đây' : 'Recent Security Audit Events'}
-            </h3>
-          </div>
-        </div>
-        <div className="bp-table-wrap">
-          <table className="bp-table">
-            <thead>
-              <tr>
-                <th>{lang === 'vi' ? 'Thời gian' : 'Time'}</th>
-                <th>{lang === 'vi' ? 'Tác nhân' : 'Actor'}</th>
-                <th>{lang === 'vi' ? 'Hành động' : 'Action'}</th>
-                <th>{lang === 'vi' ? 'Mục tiêu' : 'Target'}</th>
-                <th>IP</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    {lang === 'vi' ? 'Chưa có sự kiện nào.' : 'No security events yet.'}
-                  </td>
-                </tr>
-              ) : (
-                events.slice(0, 20).map((ev) => (
-                  <tr key={ev.id}>
-                    <td>{formatTs(lang, ev.at)}</td>
-                    <td>
-                      <strong>{ev.actor}</strong> <small className="muted">({ev.auth_method})</small>
-                    </td>
-                    <td><code>{ev.action}</code></td>
-                    <td>{ev.target_type}:{ev.target_id}</td>
-                    <td><code>{ev.client_ip}</code></td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <AuditActivityCard lang={lang} api={api} initialEvents={events} />
 
       <ConfirmRemoveModal
         open={Boolean(removeTarget)}
@@ -869,8 +1312,8 @@ export function ApiKeysPanel({
         title={lang === 'vi' ? 'Thu hồi toàn bộ phiên đăng nhập' : 'Revoke All Active Sessions'}
         message={
           lang === 'vi'
-            ? 'Tăng session_epoch và đăng xuất mọi trình duyệt hiện đang mở Newsman, bao gồm cả phiên hiện tại.'
-            : 'Bump session_epoch and sign out every active Newsman browser session, including this one.'
+            ? 'Đăng xuất ngay lập tức mọi trình duyệt hiện đang mở Newsman, bao gồm cả phiên hiện tại.'
+            : 'Immediately sign out every active Newsman browser session, including this one.'
         }
         confirmLabel={lang === 'vi' ? 'Thu hồi ngay' : 'Revoke all sessions'}
         cancelLabel={lang === 'vi' ? 'Hủy' : 'Cancel'}
@@ -1043,8 +1486,17 @@ export function ProvidersPanel({
         `/api/admin/providers/${encodeURIComponent(prov.id)}/copy`,
         { method: 'POST' },
       )
-      await copyText(res.secret, () => setRevealed({ label: prov.name, secret: res.secret }))
-      setNotice(lang === 'vi' ? `Đã sao chép API key của ${prov.name}.` : `Copied key for ${prov.name}.`)
+      setRevealed({ label: prov.name, secret: res.secret })
+      const ok = await copyText(res.secret)
+      setNotice(
+        ok
+          ? lang === 'vi'
+            ? `Đã sao chép API key của ${prov.name}.`
+            : `Copied key for ${prov.name}.`
+          : lang === 'vi'
+            ? `Đã nạp khóa ${prov.name} vào vùng sao chép bảo mật.`
+            : `Loaded ${prov.name} key into secure copy slot.`,
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Copy failed')
     } finally {
@@ -1062,6 +1514,7 @@ export function ProvidersPanel({
         { method: 'POST', body: JSON.stringify({}) },
       )
       setRevealed({ label: `${prov.name} (rotated)`, secret: res.secret })
+      void copyText(res.secret)
       setNotice(lang === 'vi' ? `Đã xoay vòng khóa ${prov.name}.` : `Rotated key for ${prov.name}.`)
       await load()
     } catch (err) {
@@ -1154,17 +1607,19 @@ export function ProvidersPanel({
 
   return (
     <div className="bp-panel-grid">
-      {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && <div className="save-state" role="status">✓ {notice}</div>}
-      {revealed && (
-        <SecretBanner
-          lang={lang}
-          label={revealed.label}
-          secret={revealed.secret}
-          onDismiss={() => setRevealed(null)}
-          onCopied={setNotice}
-        />
-      )}
+      <FloatingToast
+        notice={notice}
+        error={error}
+        onDismissNotice={() => setNotice('')}
+        onDismissError={() => setError('')}
+      />
+
+      <SecretCopySlot
+        lang={lang}
+        item={revealed}
+        onDismiss={() => setRevealed(null)}
+        onCopied={setNotice}
+      />
 
       {hubProvider && (
         <section className="bp-card">
@@ -1174,8 +1629,8 @@ export function ProvidersPanel({
               <h2 className="bp-card-title">⚡ {hubProvider.name}</h2>
               <p className="bp-card-sub">
                 {lang === 'vi'
-                  ? 'Nhà cung cấp AI mặc định cho tóm tắt tin, phân loại, Agent Salon và Companion. Bỏ trống trường khóa khi sửa để giữ nguyên bí mật cũ.'
-                  : 'Primary AI provider for Newsman brief synthesis, classification, Agent Salon, and Companion. Leave the secret blank on edit to preserve the stored key.'}
+                  ? 'Nhà cung cấp AI hợp nhất cho tóm tắt tin, phân loại, Agent Salon và Companion. Bỏ trống trường khóa khi sửa để giữ nguyên bí mật cũ.'
+                  : 'Unified AI & Agent Hub gateway for Newsman synthesis, classification, Agent Salon, and Companion. Leave the secret blank on edit to preserve the stored key.'}
               </p>
             </div>
             <div className="chip-row">
@@ -1183,7 +1638,6 @@ export function ProvidersPanel({
                 {hubProvider.status}
               </span>
               <span className="bp-chip">{hubProvider.model_count} models</span>
-              {hubProvider.env_managed && <span className="bp-chip muted">🔒 Env-managed</span>}
             </div>
           </div>
 
@@ -1376,7 +1830,7 @@ export function ProvidersPanel({
                           disabled={busy}
                           onClick={() => void fetchModels(prov)}
                         >
-                          {lang === 'vi' ? 'Nạp Model' : 'Fetch'}
+                          {lang === 'vi' ? 'Nạp' : 'Fetch'}
                         </button>
                         <ActionBar
                           lang={lang}
@@ -1482,8 +1936,8 @@ export function ProvidersPanel({
         warning={
           removeTarget
             ? lang === 'vi'
-              ? `Tác động dây chuyền: ${removeTarget.model_count} model trong danh mục sẽ bị xóa theo (CASCADE) và ${removeTarget.consumer_refs} cấu hình gán model sẽ chuyển về mặc định (SET NULL).`
-              : `Blast radius: ${removeTarget.model_count} catalog model(s) will be cascade-deleted and ${removeTarget.consumer_refs} consumer binding(s) will fall back to default (SET NULL).`
+              ? `Tác động dây chuyền: ${removeTarget.model_count} model trong danh mục sẽ bị xóa theo và ${removeTarget.consumer_refs} cấu hình gán model sẽ chuyển về mặc định.`
+              : `Blast radius: ${removeTarget.model_count} catalog model(s) will be removed and ${removeTarget.consumer_refs} consumer binding(s) will fall back to default.`
             : ''
         }
         confirmLabel={lang === 'vi' ? 'Xóa Provider' : 'Remove Provider'}
@@ -1506,6 +1960,15 @@ export function McpConnectorsPanel({
   const [connectors, setConnectors] = useState<McpConnectorRow[] | null>(null)
   const [writes, setWrites] = useState<AgentWriteRow[]>([])
   const [analyses, setAnalyses] = useState<AgentAnalysisRow[]>([])
+  const [bridgeSnap, setBridgeSnap] = useState<BridgeConfigSnap>({})
+  const [tgSnap, setTgSnap] = useState<TelegramConfigSnap>({})
+  const [astraeaUrl, setAstraeaUrl] = useState('')
+  const [astraeaToken, setAstraeaToken] = useState('')
+  const [tgBotToken, setTgBotToken] = useState('')
+  const [tgWebhookSecret, setTgWebhookSecret] = useState('')
+  const [tgCygnusUrl, setTgCygnusUrl] = useState('')
+  const [tgCygnusKey, setTgCygnusKey] = useState('')
+
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -1525,10 +1988,12 @@ export function McpConnectorsPanel({
 
   const load = useCallback(async () => {
     try {
-      const [connRes, wRes, aRes] = await Promise.all([
+      const [connRes, wRes, aRes, bRes, tRes] = await Promise.all([
         api<{ ok: boolean; items: McpConnectorRow[] }>('/api/admin/mcp-connectors'),
         api<{ data: AgentWriteRow[] }>('/api/admin/connector/writes'),
         api<{ data: AgentAnalysisRow[] }>('/api/admin/connector/analyses'),
+        api<BridgeConfigSnap>('/api/app-agents/bridge-config').catch(() => ({} as BridgeConfigSnap)),
+        api<TelegramConfigSnap>('/api/app-agents/telegram/config').catch(() => ({} as TelegramConfigSnap)),
       ])
       const rows = connRes.items ?? []
       setConnectors(rows)
@@ -1540,6 +2005,10 @@ export function McpConnectorsPanel({
       }
       setWrites(wRes.data ?? [])
       setAnalyses(aRes.data ?? [])
+      setBridgeSnap(bRes)
+      setAstraeaUrl(bRes.astraea_url || '')
+      setTgSnap(tRes)
+      setTgCygnusUrl(tRes.cygnus_url || '')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load MCP connectors')
       setConnectors([])
@@ -1574,7 +2043,7 @@ export function McpConnectorsPanel({
         method: 'PUT',
         body: JSON.stringify({ audience: audience.trim(), scopes }),
       })
-      setNotice(lang === 'vi' ? 'Đã lưu cấu hình Inbound /mcp.' : 'Inbound /mcp settings saved.')
+      setNotice(lang === 'vi' ? 'Đã lưu cấu hình cổng MCP.' : 'Inbound MCP settings saved.')
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -1593,13 +2062,16 @@ export function McpConnectorsPanel({
         `/api/admin/mcp-connectors/${encodeURIComponent(inbound.id)}/copy?field=${field}`,
         { method: 'POST' },
       )
-      await copyText(res.secret, () =>
-        setRevealed({ label: `Inbound /mcp (${field})`, secret: res.secret }),
-      )
+      setRevealed({ label: `Inbound MCP (${field})`, secret: res.secret })
+      const ok = await copyText(res.secret)
       setNotice(
-        lang === 'vi'
-          ? `Đã sao chép khóa ${field} của /mcp.`
-          : `Copied Inbound /mcp ${field} secret.`,
+        ok
+          ? lang === 'vi'
+            ? `Đã sao chép khóa ${field} của cổng MCP.`
+            : `Copied Inbound MCP ${field} secret.`
+          : lang === 'vi'
+            ? `Đã nạp khóa ${field} vào vùng sao chép bảo mật.`
+            : `Loaded ${field} secret into secure copy slot.`,
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Copy failed')
@@ -1618,9 +2090,10 @@ export function McpConnectorsPanel({
         `/api/admin/mcp-connectors/${encodeURIComponent(inbound.id)}/rotate`,
         { method: 'POST', body: JSON.stringify({ field }) },
       )
-      setRevealed({ label: `Inbound /mcp (${field} rotated)`, secret: res.secret })
+      setRevealed({ label: `Inbound MCP (${field} rotated)`, secret: res.secret })
+      void copyText(res.secret)
       setNotice(
-        lang === 'vi' ? `Đã xoay vòng khóa ${field} /mcp.` : `Rotated Inbound /mcp ${field}.`,
+        lang === 'vi' ? `Đã xoay vòng khóa ${field}.` : `Rotated Inbound MCP ${field}.`,
       )
       await load()
     } catch (err) {
@@ -1717,8 +2190,17 @@ export function McpConnectorsPanel({
         `/api/admin/mcp-connectors/${encodeURIComponent(row.id)}/copy`,
         { method: 'POST' },
       )
-      await copyText(res.secret, () => setRevealed({ label: row.name, secret: res.secret }))
-      setNotice(lang === 'vi' ? `Đã sao chép khóa ${row.name}.` : `Copied secret for ${row.name}.`)
+      setRevealed({ label: row.name, secret: res.secret })
+      const ok = await copyText(res.secret)
+      setNotice(
+        ok
+          ? lang === 'vi'
+            ? `Đã sao chép khóa ${row.name}.`
+            : `Copied secret for ${row.name}.`
+          : lang === 'vi'
+            ? `Đã nạp khóa ${row.name} vào vùng sao chép bảo mật.`
+            : `Loaded ${row.name} secret into secure copy slot.`,
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Copy failed')
     } finally {
@@ -1735,10 +2217,54 @@ export function McpConnectorsPanel({
         { method: 'POST', body: JSON.stringify({}) },
       )
       setRevealed({ label: `${row.name} (rotated)`, secret: res.secret })
+      void copyText(res.secret)
       setNotice(lang === 'vi' ? `Đã xoay vòng ${row.name}.` : `Rotated ${row.name}.`)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rotate failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveChannelCredentials = async (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const cleanAstTok = omitBlankOrMasked(astraeaToken)
+      await api('/api/app-agents/bridge-config', {
+        method: 'PUT',
+        body: JSON.stringify({
+          astraea_url: astraeaUrl.trim(),
+          ...(cleanAstTok !== undefined ? { astraea_token: cleanAstTok } : {}),
+        }),
+      })
+      const cleanBot = omitBlankOrMasked(tgBotToken)
+      const cleanWh = omitBlankOrMasked(tgWebhookSecret)
+      const cleanCyg = omitBlankOrMasked(tgCygnusKey)
+      await api('/api/app-agents/telegram/config', {
+        method: 'PUT',
+        body: JSON.stringify({
+          cygnus_url: tgCygnusUrl.trim(),
+          ...(cleanBot !== undefined ? { bot_token: cleanBot } : {}),
+          ...(cleanWh !== undefined ? { webhook_secret: cleanWh } : {}),
+          ...(cleanCyg !== undefined ? { cygnus_key: cleanCyg } : {}),
+        }),
+      })
+      setAstraeaToken('')
+      setTgBotToken('')
+      setTgWebhookSecret('')
+      setTgCygnusKey('')
+      setNotice(
+        lang === 'vi'
+          ? 'Đã lưu thông tin xác thực Relay & Telegram.'
+          : 'Saved relay and channel credentials.',
+      )
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save channel credentials')
     } finally {
       setBusy(false)
     }
@@ -1755,8 +2281,8 @@ export function McpConnectorsPanel({
       setNotice(
         removeTarget.inbound
           ? lang === 'vi'
-            ? 'Đã xóa cặp khóa quản trị của /mcp.'
-            : 'Cleared runtime /mcp secrets.'
+            ? 'Đã xóa cặp khóa quản trị của cổng MCP.'
+            : 'Cleared runtime MCP pairing secrets.'
           : lang === 'vi'
             ? `Đã xóa connector ${removeTarget.name}.`
             : `Removed connector ${removeTarget.name}.`,
@@ -1772,28 +2298,30 @@ export function McpConnectorsPanel({
 
   return (
     <div className="bp-panel-grid">
-      {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && <div className="save-state" role="status">✓ {notice}</div>}
-      {revealed && (
-        <SecretBanner
-          lang={lang}
-          label={revealed.label}
-          secret={revealed.secret}
-          onDismiss={() => setRevealed(null)}
-          onCopied={setNotice}
-        />
-      )}
+      <FloatingToast
+        notice={notice}
+        error={error}
+        onDismissNotice={() => setNotice('')}
+        onDismissError={() => setError('')}
+      />
+
+      <SecretCopySlot
+        lang={lang}
+        item={revealed}
+        onDismiss={() => setRevealed(null)}
+        onCopied={setNotice}
+      />
 
       {inbound && (
         <section className="bp-card">
           <div className="bp-card-head">
             <div>
-              <span className="eyebrow">Inbound Business MCP</span>
+              <span className="eyebrow">Single-Lane App Connector · LNC-Agent-Hub</span>
               <h2 className="bp-card-title">{inbound.name}</h2>
               <p className="bp-card-sub">
                 {lang === 'vi'
-                  ? 'Cổng MCP của Newsman nhận kết nối từ Business MCP Hub bằng connector-bearer và delegation-secret (HMAC HS256).'
-                  : 'Newsman /mcp server endpoint authenticated via connector-bearer and HS256 delegation-secret.'}
+                  ? 'Cổng kết nối chuẩn cho LNC-Agent-Hub (/v1/app-connectors/lnc-newsman/mcp) và /mcp kèm giấy ủy quyền có phạm vi.'
+                  : 'Unified LNC-Agent-Hub app connector (/v1/app-connectors/lnc-newsman/mcp) and backward-compatible /mcp endpoint with scoped capability grants.'}
               </p>
             </div>
             <div className="chip-row">
@@ -1801,20 +2329,19 @@ export function McpConnectorsPanel({
                 {inbound.status}
               </span>
               <span className="bp-chip">{inbound.tool_count ?? 0} tools</span>
-              {inbound.env_managed && <span className="bp-chip muted">🔒 Env-managed</span>}
             </div>
           </div>
 
           <div className="bp-split-two" style={{ alignItems: 'center' }}>
             <div>
-              <small className="muted">Endpoint URL ({lang === 'vi' ? 'bấm để chép' : 'click to copy'})</small>
+              <small className="muted">Connector Endpoint ({lang === 'vi' ? 'bấm để chép' : 'click to copy'})</small>
               <div>
                 <button
                   type="button"
                   className="bp-copy-chip"
                   onClick={() =>
                     void copyText(inbound.endpoint_url).then((ok) => {
-                      if (ok) setNotice(lang === 'vi' ? 'Đã chép URL /mcp.' : 'Copied /mcp URL.')
+                      if (ok) setNotice(lang === 'vi' ? 'Đã chép URL connector.' : 'Copied connector URL.')
                     })
                   }
                 >
@@ -1829,7 +2356,7 @@ export function McpConnectorsPanel({
                 disabled={busy}
                 onClick={() => void testConnector(inbound)}
               >
-                {lang === 'vi' ? 'Kiểm tra /mcp' : 'Test /mcp'}
+                {lang === 'vi' ? 'Kiểm tra MCP' : 'Test MCP'}
               </button>
               <button
                 type="button"
@@ -1842,8 +2369,8 @@ export function McpConnectorsPanel({
                     ? 'Kích hoạt lại'
                     : 'Reactivate'
                   : lang === 'vi'
-                    ? 'Thu hồi cổng /mcp'
-                    : 'Revoke /mcp'}
+                    ? 'Thu hồi cổng MCP'
+                    : 'Revoke MCP'}
               </button>
             </div>
           </div>
@@ -1891,9 +2418,7 @@ export function McpConnectorsPanel({
                 <tr>
                   <td><code>connector-bearer</code></td>
                   <td>
-                    <span className={inbound.bearer_source === 'env' ? 'bp-chip muted' : 'bp-chip'}>
-                      {inbound.bearer_source === 'env' ? '🔒 Env-managed' : inbound.bearer_source ?? 'unset'}
-                    </span>
+                    <span className="bp-chip">{inbound.bearer_source ?? 'unset'}</span>
                   </td>
                   <td>
                     <span className={inbound.bearer_configured ? 'bp-chip ok' : 'bp-chip warn'}>
@@ -1904,7 +2429,7 @@ export function McpConnectorsPanel({
                     <ActionBar
                       lang={lang}
                       copyAvailable={Boolean(inbound.bearer_copy_available)}
-                      envManaged={inbound.bearer_source === 'env'}
+                      envManaged={false}
                       showRevoke={false}
                       busy={busy}
                       onCopy={() => void copyInboundField('bearer')}
@@ -1918,11 +2443,7 @@ export function McpConnectorsPanel({
                 <tr>
                   <td><code>delegation-secret</code></td>
                   <td>
-                    <span className={inbound.delegation_source === 'env' ? 'bp-chip muted' : 'bp-chip'}>
-                      {inbound.delegation_source === 'env'
-                        ? '🔒 Env-managed'
-                        : inbound.delegation_source ?? 'unset'}
-                    </span>
+                    <span className="bp-chip">{inbound.delegation_source ?? 'unset'}</span>
                   </td>
                   <td>
                     <span className={inbound.delegation_configured ? 'bp-chip ok' : 'bp-chip warn'}>
@@ -1933,7 +2454,7 @@ export function McpConnectorsPanel({
                     <ActionBar
                       lang={lang}
                       copyAvailable={Boolean(inbound.delegation_copy_available)}
-                      envManaged={inbound.delegation_source === 'env'}
+                      envManaged={false}
                       showRevoke={false}
                       busy={busy}
                       onCopy={() => void copyInboundField('delegation')}
@@ -1989,7 +2510,7 @@ export function McpConnectorsPanel({
               type="password"
               autoComplete="new-password"
               value={outSecret}
-              placeholder="••••••••"
+              placeholder={MASK_SENTINEL}
               onChange={(e) => setOutSecret(e.target.value)}
             />
           </label>
@@ -2081,10 +2602,98 @@ export function McpConnectorsPanel({
         </div>
       </section>
 
+      <section className="bp-card">
+        <div className="bp-card-head">
+          <div>
+            <span className="eyebrow">Relay & Messaging Credentials</span>
+            <h2 className="bp-card-title">
+              {lang === 'vi' ? 'Kết nối Astraea Relay & Telegram' : 'Astraea Relay & Telegram Credentials'}
+            </h2>
+            <p className="bp-card-sub">
+              {lang === 'vi'
+                ? 'Quản lý tập trung khóa relay và bot kênh nhắn tin (bỏ trống trường khóa để giữ nguyên bí mật đã lưu).'
+                : 'Centralized relay and messaging channel credentials (leave secret fields blank to keep stored values).'}
+            </p>
+          </div>
+          <div className="chip-row">
+            <span className={bridgeSnap.has_astraea_token ? 'bp-chip ok' : 'bp-chip muted'}>
+              Astraea: {bridgeSnap.has_astraea_token ? 'configured' : 'unset'}
+            </span>
+            <span className={tgSnap.has_bot_token || tgSnap.has_cygnus_key ? 'bp-chip ok' : 'bp-chip muted'}>
+              Telegram: {tgSnap.has_bot_token || tgSnap.has_cygnus_key ? 'configured' : 'unset'}
+            </span>
+          </div>
+        </div>
+
+        <form className="bp-form-grid" onSubmit={saveChannelCredentials} autoComplete="off">
+          <label className="field">
+            <span>Astraea Relay URL</span>
+            <input
+              value={astraeaUrl}
+              placeholder="https://astraea.lengoc.me"
+              onChange={(e) => setAstraeaUrl(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Astraea Relay Token</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={astraeaToken}
+              placeholder={bridgeSnap.has_astraea_token ? `${MASK_SENTINEL} (saved)` : 'ast_bridge_…'}
+              onChange={(e) => setAstraeaToken(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Telegram Cygnus Relay URL</span>
+            <input
+              value={tgCygnusUrl}
+              placeholder="https://telegram.lengoc.me"
+              onChange={(e) => setTgCygnusUrl(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Telegram Cygnus Relay Key</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={tgCygnusKey}
+              placeholder={tgSnap.has_cygnus_key ? `${MASK_SENTINEL} (saved)` : 'cyg_…'}
+              onChange={(e) => setTgCygnusKey(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Telegram Direct Bot Token</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={tgBotToken}
+              placeholder={tgSnap.has_bot_token ? `${MASK_SENTINEL} (saved)` : '123456:ABC…'}
+              onChange={(e) => setTgBotToken(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Telegram Webhook Secret</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={tgWebhookSecret}
+              placeholder={tgSnap.has_webhook_secret ? `${MASK_SENTINEL} (saved)` : 'tg_wh_…'}
+              onChange={(e) => setTgWebhookSecret(e.target.value)}
+            />
+          </label>
+          <div className="btn-row" style={{ gridColumn: '1 / -1', justifyContent: 'flex-end' }}>
+            <button type="submit" className="btn primary" disabled={busy}>
+              {lang === 'vi' ? 'Lưu thông tin xác thực' : 'Save Channel Credentials'}
+            </button>
+          </div>
+        </form>
+      </section>
+
       <div className="bp-split-two">
         <section className="bp-card">
           <h3 className="bp-card-title" style={{ fontSize: 18 }}>
-            {lang === 'vi' ? 'Bản ghi từ MCP gần đây' : 'Recent /mcp Writes'}
+            {lang === 'vi' ? 'Bản ghi từ MCP gần đây' : 'Recent MCP Writes'}
           </h3>
           {writes.length === 0 ? (
             <p className="muted">{lang === 'vi' ? 'Chưa có lượt ghi nào.' : 'No agent writes yet.'}</p>
@@ -2147,8 +2756,8 @@ export function McpConnectorsPanel({
         message={
           removeTarget?.inbound
             ? lang === 'vi'
-              ? 'Xóa cặp khóa ghép nối runtime của cổng /mcp? Business MCP Hub sẽ không gọi được /mcp cho tới khi lưu khóa mới.'
-              : 'Clear runtime pairing secrets on /mcp? Business MCP Hub will receive 401 until new secrets are provisioned.'
+              ? 'Xóa cặp khóa ghép nối runtime của cổng MCP? Các kết nối bên ngoài sẽ không gọi được MCP cho tới khi lưu khóa mới.'
+              : 'Clear runtime pairing secrets on MCP? External Hub callers will receive 401 until new secrets are provisioned.'
             : removeTarget
               ? lang === 'vi'
                 ? `Xóa vĩnh viễn MCP Connector "${removeTarget.name}"?`

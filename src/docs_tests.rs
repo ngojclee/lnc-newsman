@@ -40,7 +40,10 @@ fn documented_paths() -> Vec<String> {
         let offset = token.find('/')?;
         let path = &token[offset..];
         let path = path.split('?').next().unwrap_or("");
-        let api = path.starts_with("/api/") || path == "/mcp" || path == "/health";
+        let api = path.starts_with("/api/")
+            || path.starts_with("/v1/app-connectors/")
+            || path == "/mcp"
+            || path == "/health";
         (api && path.len() > 1).then(|| path.to_string())
     })
     .collect()

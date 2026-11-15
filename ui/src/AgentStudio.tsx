@@ -555,56 +555,22 @@ export function AgentStudio({
 
       {bridgeFormOpen && (
         <section className="settings-card studio-bridge-drawer">
-          <div className="catalog-form-row">
-            <label className="field">
-              <span>{c.bridgeAstraeaUrl}</span>
-              <input
-                value={bridgeForm.astraea_url}
-                placeholder="https://astraea.lengoc.me"
-                onChange={(e) => setBridgeForm({ ...bridgeForm, astraea_url: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>{c.bridgeAstraeaToken}</span>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={bridgeForm.astraea_token}
-                placeholder={bridgeStatus.has_astraea_token ? '••••••••' : 'ast_bridge_…'}
-                onChange={(e) => setBridgeForm({ ...bridgeForm, astraea_token: e.target.value })}
-              />
-              {bridgeStatus.has_astraea_token && <small>{c.bridgeTokenSaved}</small>}
-            </label>
+          <div className="chip-row" style={{ marginBottom: 8 }}>
+            <span className={bridgeStatus.has_astraea_token ? 'bp-chip ok' : 'bp-chip muted'}>
+              Astraea: {bridgeStatus.has_astraea_token ? c.bridgeTokenSaved : 'unset'}
+            </span>
           </div>
           <p className="muted-sub" style={{ margin: '6px 0 10px' }}>
             {lang === 'vi'
-              ? 'Cấu hình LNC Agents Hub, các nhà cung cấp AI và Smart/Fast Model toàn cục hiện nằm thống nhất trong mục Nhà cung cấp AI.'
-              : 'LNC Agents Hub URL/token, AI providers, and global Smart/Fast model roles are managed cleanly under LLM Providers.'}
+              ? 'Cấu hình URL/khóa của LNC Agents Hub, Astraea Relay và các nhà cung cấp AI nằm thống nhất tại Nhà cung cấp AI và Trình kết nối MCP.'
+              : 'LNC Agents Hub, Astraea relay credentials, and AI providers are managed centrally in LLM Providers and MCP Connectors.'}
           </p>
           <div className="btn-row">
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true)
-                void onSaveBridgeConfig({
-                  astraea_url: bridgeForm.astraea_url,
-                  ...(bridgeForm.astraea_token ? { astraea_token: bridgeForm.astraea_token } : {}),
-                })
-                  .then(() => {
-                    setBridgeForm((f) => ({ ...f, astraea_token: '' }))
-                    setStatusMsg(
-                      lang === 'vi' ? 'Đã lưu cấu hình Astraea Relay.' : 'Astraea relay settings saved.',
-                    )
-                  })
-                  .finally(() => setBusy(false))
-              }}
-            >
-              {lang === 'vi' ? 'Lưu kết nối' : 'Save Connection'}
-            </button>
             <a className="btn secondary" href="#llm-providers">
               {lang === 'vi' ? 'Mở Nhà cung cấp AI ↗' : 'Open LLM Providers ↗'}
+            </a>
+            <a className="btn secondary" href="#mcp-connectors">
+              {lang === 'vi' ? 'Mở Trình kết nối MCP ↗' : 'Open MCP Connectors ↗'}
             </a>
           </div>
         </section>
@@ -1198,56 +1164,25 @@ export function AgentStudio({
                 />
               </div>
 
-              {isDirectTg ? (
-                <div className="catalog-form-row">
-                  <label className="field">
-                    <span>{c.studioTelegramBotToken}</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={tgForm.bot_token}
-                      placeholder={telegramConfig.has_bot_token ? '••••••••' : '123456:ABC-DEF…'}
-                      onChange={(e) => setTgForm({ ...tgForm, bot_token: e.target.value })}
-                    />
-                    {telegramConfig.has_bot_token && <small>{c.bridgeTokenSaved}</small>}
-                  </label>
-                  <label className="field">
-                    <span>{c.studioTelegramWebhookSecret}</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={tgForm.webhook_secret}
-                      placeholder={
-                        telegramConfig.has_webhook_secret ? '••••••••' : 'tg_wh_secret_…'
-                      }
-                      onChange={(e) => setTgForm({ ...tgForm, webhook_secret: e.target.value })}
-                    />
-                  </label>
-                </div>
-              ) : (
-                <div className="catalog-form-row">
-                  <label className="field">
-                    <span>{c.studioTelegramCygnusUrl}</span>
-                    <input
-                      value={tgForm.cygnus_url}
-                      placeholder={c.routeViaHubCygnus}
-                      onChange={(e) => setTgForm({ ...tgForm, cygnus_url: e.target.value })}
-                    />
-                    <small className="muted-sub">{c.studioTelegramHubBrokerNote}</small>
-                  </label>
-                  <label className="field">
-                    <span>{c.studioTelegramCygnusKey}</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      value={tgForm.cygnus_key}
-                      placeholder={telegramConfig.has_cygnus_key ? '••••••••' : 'cyg_…'}
-                      onChange={(e) => setTgForm({ ...tgForm, cygnus_key: e.target.value })}
-                    />
-                    {telegramConfig.has_cygnus_key && <small>{c.bridgeTokenSaved}</small>}
-                  </label>
-                </div>
-              )}
+              <div className="chip-row" style={{ margin: '6px 0' }}>
+                {isDirectTg ? (
+                  <>
+                    <span className={telegramConfig.has_bot_token ? 'bp-chip ok' : 'bp-chip muted'}>
+                      Bot Token: {telegramConfig.has_bot_token ? 'configured' : 'unset'}
+                    </span>
+                    <span className={telegramConfig.has_webhook_secret ? 'bp-chip ok' : 'bp-chip muted'}>
+                      Webhook Secret: {telegramConfig.has_webhook_secret ? 'configured' : 'unset'}
+                    </span>
+                  </>
+                ) : (
+                  <span className={telegramConfig.has_cygnus_key ? 'bp-chip ok' : 'bp-chip muted'}>
+                    Cygnus Relay Key: {telegramConfig.has_cygnus_key ? 'configured' : 'unset'}
+                  </span>
+                )}
+                <a className="btn secondary btn-sm" href="#mcp-connectors">
+                  {lang === 'vi' ? 'Quản lý khóa tại Trình kết nối MCP ↗' : 'Manage credentials in MCP Connectors ↗'}
+                </a>
+              </div>
 
               <div className="btn-row">
                 <button

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ApiKeysPanel, McpConnectorsPanel, ProvidersPanel } from './AdminPanels.tsx'
+import { ApiKeysPanel, AuditActivityCard, FloatingToast, McpConnectorsPanel, ProvidersPanel } from './AdminPanels.tsx'
 import { AgentsWorkspace } from './AgentsWorkspace.tsx'
 import { AGENT_COPY } from './agentTypes.ts'
 import { CatalogManager } from './CatalogManager'
@@ -39,7 +39,6 @@ type SeriesRow = { code: string; provider: string; region: string; label_vi: str
 type Observation = { observed_at: number; as_of: number; revision: number; value: number; quality: string; source_url: string | null }
 type SeriesPayload = { data: SeriesRow[]; effective: string[] }
 type ObservationsPayload = { data: Observation[]; series: SeriesRow }
-type SecretMeta = { name: string; key_version: number; updated_at: string }
 type DocRow = { provider: string; region: string; doc_type: string; agency: string; number: string; title: string; effective_on: string | null; published_on: string | null; url: string; summary: string | null; topic: string; disclaimer: string }
 type DocsPayload = { data: DocRow[]; effective: string[] }
 type TaxDeadline = { code: string; region: string; name_vi: string; name_en: string; cadence: string; source_code: string; url: string; note: string; verified: boolean; lead_days: number; due_on: string; days_until: number; due_soon: boolean; nominal_on: string; weekend_rule: string }
@@ -58,14 +57,14 @@ type Filter = { topic: string | null; source: string | null; q?: string }
 const copy = {
   vi: {
     today: 'Hôm nay', topics: 'Chủ đề', stories: 'Câu chuyện', reports: 'Báo cáo', alerts: 'Cảnh báo', timeline: 'Dòng thời gian', saved: 'Đã lưu', 'api-keys': 'Khóa API', 'llm-providers': 'Nhà cung cấp AI', 'mcp-connectors': 'Trình kết nối MCP', settings: 'Cài đặt',
-    subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Dùng khóa MANAGEMENT_KEY được cấu hình cho ứng dụng.', ssoPrimary: 'Đăng nhập qua LNC SSO', breakGlassSummary: 'Đăng nhập khẩn cấp (Khóa quản trị)', ssoHint: 'Đăng nhập qua Keycloak SSO, hoặc mở khối khẩn cấp bên dưới khi cần.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa cấu hình MANAGEMENT_KEY trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
+    subtitle: 'Không gian đọc và nghiên cứu tin', signIn: 'Đăng nhập quản trị', key: 'Khóa quản trị', keyHint: 'Nhập khóa quản trị khẩn cấp được cấp cho ứng dụng.', ssoPrimary: 'Đăng nhập qua LNC SSO', breakGlassSummary: 'Đăng nhập khẩn cấp (Khóa quản trị)', ssoHint: 'Đăng nhập qua Keycloak SSO, hoặc mở khối khẩn cấp bên dưới khi cần.', enter: 'Vào Newsman', invalid: 'Không đăng nhập được. Hãy kiểm tra khóa và thử lại.', limited: 'Tạm khóa đăng nhập do thử quá nhiều lần. Hãy thử lại sau 5 phút.', missing: 'Chưa bật khóa đăng nhập khẩn cấp trên máy chủ.', welcome: 'Chào mừng trở lại.', checking: 'Đang kiểm tra…',
     briefing: 'Một nơi để đọc sâu hơn', briefingSub: 'Tin mới từ các nguồn đang bật — lưu sẵn tóm tắt và toàn văn sạch để đọc ngay trong ứng dụng, tìm kiếm toàn văn hoặc cho Agent phân tích sâu.', noStories: 'Chưa có tin', noStoriesSub: 'Hãy thêm nguồn RSS/Atom, bật nguồn và bật thu thập tự động trong Cài đặt, hoặc bấm “Quét ngay” ở từng nguồn.', nextPhase: 'Thu thập & Lưu trữ nội dung',
     latest: 'Tin mới nhất', articles24h: 'Tin trong 24 giờ', articlesTotal: 'Tổng số tin', sourcesEnabled: 'Nguồn đang bật', sourcesPaused: 'Nguồn tạm dừng do lỗi', allTopics: 'Tất cả', loadMore: 'Xem thêm', loading: 'Đang tải…', loadFailed: 'Không tải thêm được — thử lại', fetchedAt: 'Lấy về', noDate: 'Không rõ ngày đăng',
     collectorOn: 'Đang bật thu thập tự động', collectorOff: 'Thu thập tự động đang tắt', collectorHelp: 'Khi bật, hệ thống quét các nguồn đang bật theo khoảng quét đã đặt, cách nhau ít nhất 5 giây cho mỗi máy chủ. Nguồn lỗi 5 lần liên tiếp sẽ tự tạm dừng.', collectorToggle: 'Bật hoặc tắt thu thập tự động', topicArticles: 'tin',
     alertsTitle: 'Cảnh báo', alertsSub: 'Thông báo trong ứng dụng khi có tin mới khớp luật; luật có thể gửi thêm vào Telegram nếu kênh đó đang bật.', alertsEmpty: 'Chưa có cảnh báo nào', alertsEmptySub: 'Bật một luật cảnh báo trong Cài đặt; thông báo sẽ xuất hiện khi có tin mới khớp.', alertsUnread: 'chưa đọc', markRead: 'Đã đọc', markAllRead: 'Đánh dấu đã đọc', alertsSweep: 'Chạy quét ngay', alertsSwept: (n: number) => `Đã tạo ${n} thông báo`, alertsRules: 'Luật cảnh báo', alertsRulesSub: 'Mỗi luật khớp một chủ đề, vùng, thực thể hoặc từ khóa. Một sự kiện chỉ báo đúng một lần; cooldown và giờ yên lặng có hiệu lực.', alertCooldown: 'Cooldown (giây)', alertQuiet: 'Giờ yên lặng', alertLevel: 'Mức', alertMatch: 'Khớp', alertOff: 'Đang tắt', alertChannelGap: 'Kênh trong ứng dụng luôn hoạt động. Telegram chỉ nhận thông báo khi đã bật và cấu hình xong ở khối bên dưới; email/webhook thuộc bước sau.', entities: 'Thực thể',
     changeTheme: 'Đổi nền đọc', refresh: 'Làm mới', topicsTracked: 'Chủ đề đang bật', pendingAlerts: 'Cảnh báo', upcoming: 'Chưa triển khai',
     settingsTitle: 'Cài đặt hiển thị', settingsSub: 'Đặt mặc định cho lần đầu mở ứng dụng. Thiết lập trên trình duyệt hiện tại sẽ được ưu tiên.', language: 'Ngôn ngữ mặc định', readerMode: 'Nền đọc mặc định', save: 'Lưu mặc định', saving: 'Đang lưu…', savedToast: 'Đã lưu cài đặt', admin: 'Quản trị', signOut: 'Đăng xuất',
-    emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', tgTitle: 'Kênh Telegram', tgSub: 'Nhận cảnh báo qua Telegram của fleet hoặc bot riêng. App không lưu token hiển thị lại được — chỉ ghi đè.', tgMode: 'Đường gửi', tgRelay: 'Qua relay telegram.lengoc.me', tgDirect: 'Bot API trực tiếp', tgOff: 'Tắt', tgChatId: 'Chat / group id', tgTopic: 'Topic riêng cho cảnh báo (tuỳ chọn)', tgSave: 'Lưu cấu hình', tgReady: 'Sẵn sàng gửi', tgNotReady: 'Chưa gửi được', tgEnvOverride: 'Đang bị ghi đè bởi biến môi trường TELEGRAM_MODE', tgRelayToken: 'Đã có relay token', tgBotToken: 'Đã có bot token', tgQueue: 'Hàng đợi', tgPending: 'chờ', tgSent: 'đã gửi', tgFailed: 'lỗi', tgFlushNow: 'Gửi ngay', tgFlushed: (n: number) => `Đã gửi ${n} cảnh báo`, settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
+    emptyTitle: 'Tính năng đang được chuẩn bị', emptySub: 'Báo cáo, cảnh báo, dòng thời gian và mục đã lưu sẽ có ở các giai đoạn sau.', sampleTopics: 'Các chủ đề đang bật', sampleTopicsSub: 'Chọn một chủ đề để xem tin của chủ đề đó và các chủ đề con. Quản lý chủ đề trong phần Cài đặt.', tgTitle: 'Kênh Telegram', tgSub: 'Nhận cảnh báo qua Telegram của fleet hoặc bot riêng. Quản lý thông tin xác thực trong mục Trình kết nối MCP.', tgMode: 'Đường gửi', tgRelay: 'Qua relay telegram.lengoc.me', tgDirect: 'Bot API trực tiếp', tgOff: 'Tắt', tgChatId: 'Chat / group id', tgTopic: 'Topic riêng cho cảnh báo (tuỳ chọn)', tgSave: 'Lưu cấu hình', tgReady: 'Sẵn sàng gửi', tgNotReady: 'Chưa gửi được', tgEnvOverride: 'Chế độ gửi Telegram đang áp dụng theo thiết lập mặc định của hệ thống.', tgRelayToken: 'Đã có relay token', tgBotToken: 'Đã có bot token', tgQueue: 'Hàng đợi', tgPending: 'chờ', tgSent: 'đã gửi', tgFailed: 'lỗi', tgFlushNow: 'Gửi ngay', tgFlushed: (n: number) => `Đã gửi ${n} cảnh báo`, settingsError: 'Không tải hoặc lưu được cài đặt. Hãy thử lại.', loadError: 'Không tải được dữ liệu. Hãy thử làm mới.', dismiss: 'Đóng', failedLogout: 'Không đăng xuất được; hãy thử lại.', changeLanguage: 'Chuyển ngôn ngữ',
     region: 'Vùng', allRegions: 'Mọi vùng đang bật', regionsTitle: 'Vùng và region pack', regionsSub: 'Bật vùng để job quét và trang đọc dùng vùng đó cùng các vùng cha. Vùng mới phát hiện từ thư mục pack luôn ở trạng thái tắt.',
     reloadRegions: 'Nạp lại vùng', reloading: 'Đang nạp…', packIssues: 'Lỗi pack', packClean: 'Không có lỗi pack.', packSummary: (r: number, s: number) => `${r} vùng, ${s} nguồn từ pack`, packNever: 'Chưa nạp pack', packLast: 'Lần nạp gần nhất',
     regionTree: 'Cây vùng', regionEnable: 'Bật hoặc tắt vùng', regionInherit: 'gồm vùng cha', noRegions: 'Chưa có vùng nào.', regionError: 'Không đổi được vùng. Kiểm tra vùng cha trước.',
@@ -74,8 +73,8 @@ const copy = {
     dueIn: (n: number) => n === 0 ? 'hôm nay' : `còn ${n} ngày`, dueSoon: 'Sắp tới hạn', unverified: 'Chưa xác minh với cơ quan thuế', verified: 'Đã xác minh', taxNotice: 'Không phải tư vấn pháp lý/thuế. Hạn nộp do region pack khai báo, chưa gọi mạng; hãy kiểm tra lại với cơ quan thuế.', holidaysNote: 'Chưa tính ngày lễ công cộng; chỉ dời theo cuối tuần khi pack khai báo.', docSummary: 'Tóm tắt tự viết', docNoSummary: 'Chưa có tóm tắt tự viết cho văn bản này.', effectiveOn: 'Hiệu lực', publishedOn: 'Ban hành', searchDocs: 'Tìm văn bản', searchHint: 'Gõ không dấu cũng tìm được (vd: thue).', allTopicsDoc: 'Tất cả chủ đề',
     market: 'Thị trường', marketTitle: 'Chuỗi số liệu', marketSub: 'Dữ liệu số theo vùng. Chưa kết nối nhà cung cấp nào: danh sách này chỉ có khi một connector thật được duyệt và chạy.', noSeries: 'Chưa có chuỗi số liệu', noSeriesSub: 'P2 mới có kho chuỗi và khung connector. Dữ liệu thật cần chọn nhà cung cấp (plan mục 8).',
     seriesPoints: (n: number) => `${n} điểm`, observing: 'Lấy dữ liệu', latestValue: 'Giá trị mới nhất', asOf: 'Ghi nhận lúc', observedAt: 'Kỳ dữ liệu', revision: (n: number) => `bản ${n}`, noAttribution: 'Chưa có dòng ghi nguồn cho chuỗi này.',
-    hubTitle: 'LNC Agent Hub', hubSub: 'Kết nối Hub cho phân loại, tóm tắt và nghiên cứu. Khóa chỉ ghi, không hiện lại. Cấu hình địa chỉ do máy chủ quyết định (biến môi trường), không nhập ở đây.', hubKeyName: 'hub-api-key', hubKeyHint: 'Khóa riêng của Newsman trên Hub. Dán vào đây; giá trị không bao giờ được trả lại.', hubCheck: 'Kiểm tra kết nối', hubChecking: 'Đang kiểm tra…', hubCheckOk: (n: number) => `Kết nối được, thấy ${n} model. Chỉ liệt kê model, chưa sinh nội dung, chưa tốn token.`, hubCheckFail: 'Không kết nối được Hub. Kiểm tra địa chỉ, allowlist host và khóa.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model theo tác vụ', hubClassify: 'Phân loại', hubSummarise: 'Tóm tắt', hubAnalyse: 'Phân tích', hubAgent: 'Agent', hubBudget: 'Token hôm nay', hubSecret: 'Khóa', hubSaved: 'Đã lưu khóa Hub.', hubHasKey: 'đã có khóa', hubNoKey: 'chưa có khóa', hubNotConfigured: 'Máy chủ chưa đặt HUB_BASE_URL hoặc host chưa nằm trong HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Chỉ ghi, không bao giờ hiển thị lại. Cần LNC_MASTER_KEY hợp lệ trên máy chủ.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Máy chủ chưa cấu hình LNC_MASTER_KEY nên kho khóa đang đóng.', mcpWrites: 'Ghi qua connector', mcpWritesSub: 'Mỗi lần agent ghi đều có nhãn nguồn. Nhãn là client id do Hub cấp, không phải thứ agent tự đặt.', mcpNoWrites: 'Chưa có agent nào ghi.', mcpAnalyses: 'Brief đã lưu', mcpSources: 'bài nguồn', mcpNoAnalyses: 'Chưa có brief nào.', mcpOwner: 'chủ dự án', mcpTitle: 'Kết nối Business MCP Hub', mcpSub: 'Hub gọi vào /mcp bằng khóa riêng của connector kèm chữ ký ủy quyền từng agent (newsman:read để truy vấn, newsman:write để lưu brief, ghi chú phản hồi & đồng bộ hai chiều với Obsidian).', mcpReady: 'Đã ghép nối', mcpNotReady: 'Chưa ghép nối', mcpBearer: 'Khóa connector', mcpSecret: 'Khóa ủy quyền', mcpAudience: 'Audience', mcpScopes: 'Phạm vi tối đa', mcpFromEnv: 'biến môi trường', mcpFromAdmin: 'nhập ở đây', mcpUnset: 'chưa đặt', mcpSet: 'đã đặt', mcpSave: 'Lưu', mcpSaved: 'Đã lưu cấu hình connector.', mcpStoreClosed: 'Máy chủ chưa có LNC_MASTER_KEY nên chưa lưu được khóa connector.', mcpHint: 'Hai khóa nằm ở mục "Khóa nhà cung cấp" bên dưới, tên `connector-bearer` và `delegation-secret`. Chúng là bí mật nên chỉ ghi, không hiện lại.', legalTitle: 'Nguồn văn bản pháp luật', legalSub: 'Mỗi nguồn kèm điều khoản sử dụng đã đọc và ngày kiểm. Nguồn chưa đọc được điều khoản thì không bật được.', legalBlocked: 'Chưa được bật', legalBlockedUnverified: 'Chưa kiểm điều khoản', legalBlockedProhibited: 'Không được phép', legalTurnsOn: 'Bật theo dõi', legalTurnsOff: 'Tắt theo dõi', legalTerms: 'Điều khoản', legalChecked: 'Kiểm ngày', legalStale: 'Điều khoản đã kiểm quá lâu, cần đọc lại', legalNoChannel: 'Chưa có kênh truy cập chính thức', legalReasonUnverified: 'Chưa đọc được điều khoản sử dụng của trang nên chưa theo dõi.', legalReasonProhibited: 'Điều khoản của trang không cho phép lấy tự động.', valid_terms_unverified: 'Chưa đọc được điều khoản sử dụng nên không bật được nguồn này.', valid_terms_prohibit_polling: 'Điều khoản của trang không cho phép lấy tự động.', valid_no_documented_channel: 'Nguồn chưa có kênh truy cập chính thức.', valid_region_disabled: 'Vùng của nguồn này đang tắt.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
+    hubTitle: 'LNC Agent Hub', hubSub: 'Kết nối Hub cho phân loại, tóm tắt và nghiên cứu thông qua mục Nhà cung cấp AI.', hubKeyName: 'hub-api-key', hubKeyHint: 'Quản lý khóa kết nối Hub trong mục Nhà cung cấp AI.', hubCheck: 'Kiểm tra kết nối', hubChecking: 'Đang kiểm tra…', hubCheckOk: (n: number) => `Kết nối được, thấy ${n} model. Chỉ liệt kê model, chưa sinh nội dung, chưa tốn token.`, hubCheckFail: 'Không kết nối được Hub. Kiểm tra địa chỉ, allowlist host và khóa.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model theo tác vụ', hubClassify: 'Phân loại', hubSummarise: 'Tóm tắt', hubAnalyse: 'Phân tích', hubAgent: 'Agent', hubBudget: 'Token hôm nay', hubSecret: 'Khóa', hubSaved: 'Đã lưu khóa Hub.', hubHasKey: 'đã có khóa', hubNoKey: 'chưa có khóa', hubNotConfigured: 'Chưa hoàn tất cấu hình địa chỉ LNC Agent Hub trong mục Nhà cung cấp AI.',
+    secretsTitle: 'Khóa nhà cung cấp', secretsSub: 'Quản lý tập trung tại mục Nhà cung cấp AI và Trình kết nối MCP.', secretName: 'Tên khóa', secretValue: 'Giá trị', saveSecret: 'Lưu khóa', deleting: 'Đang xóa…', removeSecret: 'Xóa', secretSaved: 'Đã lưu khóa.', notConfigured: 'Kho lưu trữ bí mật hiện chưa sẵn sàng.', mcpWrites: 'Ghi qua connector', mcpWritesSub: 'Mỗi lần agent ghi đều có nhãn nguồn. Nhãn là client id do Hub cấp, không phải thứ agent tự đặt.', mcpNoWrites: 'Chưa có agent nào ghi.', mcpAnalyses: 'Brief đã lưu', mcpSources: 'bài nguồn', mcpNoAnalyses: 'Chưa có brief nào.', mcpOwner: 'chủ dự án', mcpTitle: 'Kết nối Business MCP Hub', mcpSub: 'Hub gọi vào /mcp bằng khóa riêng của connector kèm chữ ký ủy quyền từng agent (newsman:read để truy vấn, newsman:write để lưu brief, ghi chú phản hồi & đồng bộ hai chiều với Obsidian).', mcpReady: 'Đã ghép nối', mcpNotReady: 'Chưa ghép nối', mcpBearer: 'Khóa connector', mcpSecret: 'Khóa ủy quyền', mcpAudience: 'Audience', mcpScopes: 'Phạm vi tối đa', mcpFromEnv: 'mặc định', mcpFromAdmin: 'nhập ở đây', mcpUnset: 'chưa đặt', mcpSet: 'đã đặt', mcpSave: 'Lưu', mcpSaved: 'Đã lưu cấu hình connector.', mcpStoreClosed: 'Kho lưu trữ khóa connector hiện chưa sẵn sàng.', mcpHint: 'Quản lý khóa kết nối MCP tại mục Trình kết nối MCP.', legalTitle: 'Nguồn văn bản pháp luật', legalSub: 'Mỗi nguồn kèm điều khoản sử dụng đã đọc và ngày kiểm. Nguồn chưa đọc được điều khoản thì không bật được.', legalBlocked: 'Chưa được bật', legalBlockedUnverified: 'Chưa kiểm điều khoản', legalBlockedProhibited: 'Không được phép', legalTurnsOn: 'Bật theo dõi', legalTurnsOff: 'Tắt theo dõi', legalTerms: 'Điều khoản', legalChecked: 'Kiểm ngày', legalStale: 'Điều khoản đã kiểm quá lâu, cần đọc lại', legalNoChannel: 'Chưa có kênh truy cập chính thức', legalReasonUnverified: 'Chưa đọc được điều khoản sử dụng của trang nên chưa theo dõi.', legalReasonProhibited: 'Điều khoản của trang không cho phép lấy tự động.', valid_terms_unverified: 'Chưa đọc được điều khoản sử dụng nên không bật được nguồn này.', valid_terms_prohibit_polling: 'Điều khoản của trang không cho phép lấy tự động.', valid_no_documented_channel: 'Nguồn chưa có kênh truy cập chính thức.', valid_region_disabled: 'Vùng của nguồn này đang tắt.', connectors: 'Connector', connectorHealth: 'Sức khỏe', quota: 'Hạn mức hôm nay', needsSecret: 'cần khóa', neverRan: 'Chưa chạy',
     // --- browse sidebar, rails and the filter chip (W1/W2 in the shared UI plan)
     browse: 'Duyệt', browseAll: 'Mọi tin đang đọc', byTopic: 'Chủ đề', byRegion: 'Vùng', bySource: 'Nguồn', quickFilter: 'Lọc nhanh', filterPlaceholder: 'Tên chủ đề hoặc nguồn…', clearFilter: 'Bỏ lọc', showing: 'Đang xem', noMatch: 'Không có mục nào khớp', railLatest: 'Tin mới nhất', railAlerts: 'Cảnh báo gần đây', railWatch: 'Theo dõi', seeAll: 'Xem tất cả', emptyRail: 'Chưa có gì', itemUnit: 'tin', tabbarLabel: 'Điều hướng một tay', themeLabel: 'Nền đọc',
     railBriefs: 'Bản tin phân tích mới nhất', openReports: 'Mở Báo cáo', noBriefsRail: 'Chưa có bản tin phân tích — mở mục Báo cáo để yêu cầu Agent tổng hợp hoặc nhận đồng bộ từ MCP / Obsidian.',
@@ -88,7 +87,7 @@ const copy = {
     askMode: 'Chế độ phân tích', askModeAnalyse: 'Phân tích nhanh (Model)', askModeAgent: 'Nghiên cứu sâu (Hub Agent)',
     askSaveBrief: 'Lưu kết quả thành Báo cáo (đồng bộ Obsidian)', askBriefTitle: 'Tiêu đề báo cáo (tuỳ chọn)',
     askSubmit: 'Phân tích ngay', askRunning: 'Agent đang phân tích…', askSavedAs: 'Đã lưu báo cáo:',
-    askHubHint: 'Chưa gọi được LNC Agent Hub (hãy kiểm tra HUB_BASE_URL và khóa hub-api-key trong Cài đặt → LNC Agent Hub). Các báo cáo gửi từ Business MCP Hub vẫn đọc và phản hồi bình thường.',
+    askHubHint: 'Chưa gọi được LNC Agent Hub (hãy kiểm tra kết nối trong mục Nhà cung cấp AI). Các báo cáo gửi từ Business MCP Hub vẫn đọc và phản hồi bình thường.',
     noBriefs: 'Chưa có báo cáo phân tích', noBriefsSub: 'Bấm “Phân tích ngay” ở trên (bật Lưu thành Báo cáo) hoặc để Agent định kỳ gửi brief qua cổng /mcp.',
     citedArticles: 'Bài nguồn trích dẫn', noCited: 'Báo cáo này chưa gắn mã bài nguồn cụ thể.',
     feedbackTitle: 'Ý kiến của anh & Phản hồi hai chiều', feedbackSub: 'Ghi chú của anh trên web được bảo vệ (Agent không thể sửa/xóa); ý kiến anh viết trong Obsidian cũng tự gắn về đúng mã báo cáo này.',
@@ -99,7 +98,7 @@ const copy = {
     connectorAutoOn: 'Đang bật tự động chạy Connector định kỳ', connectorAutoOff: 'Tự động chạy Connector đang tắt', connectorAutoHelp: 'Tách riêng với RSS để anh bấm “Lấy ngay” kiểm thử từng nhà cung cấp trước khi bật chạy nền tự động.',
     connectorRunNow: 'Lấy ngay', connectorRunning: 'Đang lấy…', connectorEnable: 'Bật', connectorDisable: 'Tắt',
     connectorRanOk: (obs: number, docs: number, ev: number) => `Đã lấy dữ liệu: ${obs} điểm số liệu, ${docs} văn bản, ${ev} sự kiện.`,
-    connectorErrRegion: 'Vùng của connector này đang tắt — hãy bật vùng ở mục Vùng trước.', connectorErrSecret: 'Thiếu khóa API của nhà cung cấp — hãy lưu khóa ở mục Khóa nhà cung cấp trước.', connectorErrConfig: 'Thiếu cấu hình máy chủ (ví dụ SEC_USER_AGENT).', connectorErrCache: 'Dữ liệu vừa lấy vẫn còn mới trong cửa sổ cache.', connectorErrQuota: 'Đã hết hạn mức truy vấn hôm nay của connector này.',
+    connectorErrRegion: 'Vùng của connector này đang tắt — hãy bật vùng ở mục Vùng trước.', connectorErrSecret: 'Thiếu khóa API của nhà cung cấp — hãy cấu hình khóa ở mục Nhà cung cấp AI hoặc Trình kết nối MCP trước.', connectorErrConfig: 'Thiếu thông số nhận diện kết nối nguồn dữ liệu trên máy chủ.', connectorErrCache: 'Dữ liệu vừa lấy vẫn còn mới trong cửa sổ cache.', connectorErrQuota: 'Đã hết hạn mức truy vấn hôm nay của connector này.',
     searchArticles: 'Tìm toàn văn bài báo', searchArticlesPlaceholder: 'Tìm tiêu đề hoặc nội dung toàn văn đã lưu (không dấu cũng khớp, vd: lai suat, thue)…', searchGo: 'Tìm',
     readInApp: 'Đọc ngay', openOriginal: 'Mở bài gốc ↗', closeReader: 'Đóng',
     extractNow: 'Tải toàn văn sạch', reExtract: 'Tải lại toàn văn', extracting: 'Đang bóc toàn văn sạch từ trang gốc…',
@@ -119,14 +118,14 @@ const copy = {
   },
   en: {
     today: 'Today', topics: 'Topics', stories: 'Stories', reports: 'Reports', alerts: 'Alerts', timeline: 'Timeline', saved: 'Saved', 'api-keys': 'API Keys', 'llm-providers': 'LLM Providers', 'mcp-connectors': 'MCP Connectors', settings: 'Settings',
-    subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Use the MANAGEMENT_KEY configured for this application.', ssoPrimary: 'Sign in with LNC SSO', breakGlassSummary: 'Break-glass management key sign-in', ssoHint: 'Sign in via Keycloak SSO, or expand the break-glass key form below.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'MANAGEMENT_KEY is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
+    subtitle: 'A place to read and research', signIn: 'Management sign in', key: 'Management key', keyHint: 'Enter the break-glass management key configured for this workspace.', ssoPrimary: 'Sign in with LNC SSO', breakGlassSummary: 'Break-glass management key sign-in', ssoHint: 'Sign in via Keycloak SSO, or expand the break-glass key form below.', enter: 'Enter Newsman', invalid: 'Could not sign in. Check the key and try again.', limited: 'Too many sign-in attempts. Please try again in 5 minutes.', missing: 'Break-glass management sign-in is not configured on the server.', welcome: 'Welcome back.', checking: 'Checking…',
     briefing: 'A quieter place to read', briefingSub: 'New items from enabled sources with stored excerpts and clean extracted full text for distraction-free reading, full-text search and grounded AI analysis.', noStories: 'No news yet', noStoriesSub: 'Add an RSS/Atom source, enable it and turn on automatic collection in Settings, or press “Fetch now” on a source.', nextPhase: 'Collection & Content Archive',
     latest: 'Latest news', articles24h: 'Items in 24 hours', articlesTotal: 'Total items', sourcesEnabled: 'Enabled sources', sourcesPaused: 'Sources paused by errors', allTopics: 'All', loadMore: 'Load more', loading: 'Loading…', loadFailed: 'Could not load more — try again', fetchedAt: 'Fetched', noDate: 'Publication date unknown',
     collectorOn: 'Automatic collection is on', collectorOff: 'Automatic collection is off', collectorHelp: 'When on, enabled sources are checked at their configured interval, at least 5 seconds apart per host. A source that fails 5 times in a row is paused automatically.', collectorToggle: 'Turn automatic collection on or off', topicArticles: 'items',
     alertsTitle: 'Alerts', alertsSub: 'In-app notifications when new items match a rule; a rule can also post to Telegram while that channel is on.', alertsEmpty: 'No alerts yet', alertsEmptySub: 'Enable an alert rule in Settings; notifications appear when a new item matches.', alertsUnread: 'unread', markRead: 'Mark read', markAllRead: 'Mark all read', alertsSweep: 'Run sweep now', alertsSwept: (n: number) => `Created ${n} notifications`, alertsRules: 'Alert rules', alertsRulesSub: 'Each rule matches a topic, region, entity or keyword. One event notifies exactly once; cooldown and quiet hours apply.', alertCooldown: 'Cooldown (seconds)', alertQuiet: 'Quiet hours', alertLevel: 'Level', alertMatch: 'Match', alertOff: 'Off', alertChannelGap: 'The in-app channel always works. Telegram receives alerts only once it is switched on and fully configured below; email and webhooks come later.', entities: 'Entities',
     changeTheme: 'Change reading mode', refresh: 'Refresh', topicsTracked: 'Enabled topics', pendingAlerts: 'Alerts', upcoming: 'Not implemented yet',
     settingsTitle: 'Display settings', settingsSub: 'Set defaults for first-time visitors. This browser’s own preferences take precedence.', language: 'Default language', readerMode: 'Default reading mode', save: 'Save defaults', saving: 'Saving…', savedToast: 'Settings saved', admin: 'Admin', signOut: 'Sign out',
-    emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', tgTitle: 'Telegram channel', tgSub: 'Deliver alerts through the fleet Telegram relay or a bot of our own. Tokens are write-only: they can be replaced, never read back.', tgMode: 'Delivery path', tgRelay: 'Via relay telegram.lengoc.me', tgDirect: 'Direct Bot API', tgOff: 'Off', tgChatId: 'Chat / group id', tgTopic: 'Topic reserved for alerts (optional)', tgSave: 'Save channel', tgReady: 'Ready to send', tgNotReady: 'Not sending yet', tgEnvOverride: 'Overridden by the TELEGRAM_MODE environment variable', tgRelayToken: 'Relay token stored', tgBotToken: 'Bot token stored', tgQueue: 'Queue', tgPending: 'pending', tgSent: 'sent', tgFailed: 'failed', tgFlushNow: 'Send now', tgFlushed: (n: number) => `Sent ${n} alerts`, settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
+    emptyTitle: 'This feature is being prepared', emptySub: 'Reports, alerts, timeline and saved items arrive in later phases.', sampleTopics: 'Enabled topics', sampleTopicsSub: 'Pick a topic to read its items, including child topics. Manage topics in Settings.', tgTitle: 'Telegram channel', tgSub: 'Deliver alerts through the fleet Telegram relay or a bot of our own. Manage delivery credentials in MCP Connectors.', tgMode: 'Delivery path', tgRelay: 'Via relay telegram.lengoc.me', tgDirect: 'Direct Bot API', tgOff: 'Off', tgChatId: 'Chat / group id', tgTopic: 'Topic reserved for alerts (optional)', tgSave: 'Save channel', tgReady: 'Ready to send', tgNotReady: 'Not sending yet', tgEnvOverride: 'Telegram delivery mode is currently controlled by server defaults.', tgRelayToken: 'Relay token stored', tgBotToken: 'Bot token stored', tgQueue: 'Queue', tgPending: 'pending', tgSent: 'sent', tgFailed: 'failed', tgFlushNow: 'Send now', tgFlushed: (n: number) => `Sent ${n} alerts`, settingsError: 'Could not load or save settings. Please try again.', loadError: 'Could not load data. Please refresh.', dismiss: 'Dismiss', failedLogout: 'Could not sign out. Please try again.', changeLanguage: 'Change language',
     region: 'Region', allRegions: 'All enabled regions', regionsTitle: 'Regions and region packs', regionsSub: 'Enable a region so jobs and the reader use it together with its parent regions. Regions discovered from the pack directory always start disabled.',
     reloadRegions: 'Reload regions', reloading: 'Reloading…', packIssues: 'Pack issues', packClean: 'No pack issues.', packSummary: (r: number, s: number) => `${r} regions, ${s} sources from packs`, packNever: 'Pack not loaded yet', packLast: 'Last load',
     regionTree: 'Region tree', regionEnable: 'Turn the region on or off', regionInherit: 'includes parents', noRegions: 'No regions yet.', regionError: 'Could not change the region. Check the parent region first.',
@@ -135,8 +134,8 @@ const copy = {
     dueIn: (n: number) => n === 0 ? 'today' : `in ${n} days`, dueSoon: 'Due soon', unverified: 'Not checked with the tax authority', verified: 'Verified', taxNotice: 'Not legal or tax advice. Deadlines come from a declared region pack rule and no network call was made; verify them with the tax authority.', holidaysNote: 'Public holidays are not modelled; a date is only shifted by a declared weekend rule.', docSummary: 'Written summary', docNoSummary: 'No written summary for this document yet.', effectiveOn: 'Effective', publishedOn: 'Published', searchDocs: 'Search documents', searchHint: 'Accents are optional (e.g. thue).', allTopicsDoc: 'All topics',
     market: 'Markets', marketTitle: 'Time series', marketSub: 'Numeric data by region. No provider is connected yet: this list only fills once a real connector is approved and running.', noSeries: 'No series yet', noSeriesSub: 'P2 provides only the series store and the connector framework. Real data needs a chosen provider (plan section 8).',
     seriesPoints: (n: number) => `${n} points`, observing: 'Fetch data', latestValue: 'Latest value', asOf: 'Known as of', observedAt: 'Period', revision: (n: number) => `revision ${n}`, noAttribution: 'This series has no credit line yet.',
-    hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research. The key is write-only and never shown again. The address is server configuration (environment), not entered here.', hubKeyName: 'hub-api-key', hubKeyHint: 'Newsman’s own Hub key. Paste it here; the value is never returned.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'The server has no HUB_BASE_URL, or the host is not in HUB_ALLOWED_HOSTS.',
-    secretsTitle: 'Provider keys', secretsSub: 'Write-only; never shown again. Requires a valid LNC_MASTER_KEY on the server.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The server has no LNC_MASTER_KEY, so the secret store is closed.', mcpWrites: 'Writes through the connector', mcpWritesSub: 'Every agent write carries a source label. The label is the client id the Hub assigned, not something the agent chose.', mcpNoWrites: 'No agent has written anything yet.', mcpAnalyses: 'Stored briefs', mcpSources: 'sources', mcpNoAnalyses: 'No briefs yet.', mcpOwner: 'owner', mcpTitle: 'Business MCP Hub connector', mcpSub: 'The Hub calls /mcp with its own connector key plus a signed delegation per agent (newsman:read for queries, newsman:write for briefs, feedback notes & two-way Obsidian sync).', mcpReady: 'Paired', mcpNotReady: 'Not paired', mcpBearer: 'Connector key', mcpSecret: 'Delegation secret', mcpAudience: 'Audience', mcpScopes: 'Maximum scopes', mcpFromEnv: 'environment', mcpFromAdmin: 'set here', mcpUnset: 'not set', mcpSet: 'set', mcpSave: 'Save', mcpSaved: 'Connector settings saved.', mcpStoreClosed: 'The server has no LNC_MASTER_KEY, so the two connector secrets cannot be stored yet.', mcpHint: 'Both secrets live under "Provider keys" below, named `connector-bearer` and `delegation-secret`. They are secrets: write-only, never shown again.', legalTitle: 'Legal-text sources', legalSub: 'Each source lists the terms we read and the date we checked them. A source whose terms were not read cannot be switched on.', legalBlocked: 'Not available', legalBlockedUnverified: 'Terms not checked', legalBlockedProhibited: 'Not permitted', legalTurnsOn: 'Follow this source', legalTurnsOff: 'Stop following', legalTerms: 'Terms', legalChecked: 'Checked', legalStale: 'The terms were checked a long time ago — read them again', legalNoChannel: 'No official access channel yet', legalReasonUnverified: 'The site’s terms of use could not be read, so this source is not followed.', legalReasonProhibited: 'The site’s terms do not allow automated retrieval.', valid_terms_unverified: 'The terms of use could not be read, so this source cannot be switched on.', valid_terms_prohibit_polling: 'The site’s terms do not allow automated retrieval.', valid_no_documented_channel: 'This source has no official access channel yet.', valid_region_disabled: 'This source’s region is off.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
+    hubTitle: 'LNC Agent Hub', hubSub: 'Connect the Hub for classification, summaries and research through LLM Providers.', hubKeyName: 'hub-api-key', hubKeyHint: 'Manage the Hub credential in LLM Providers.', hubCheck: 'Check connection', hubChecking: 'Checking…', hubCheckOk: (n: number) => `Connected, ${n} models visible. Model listing only — no content generated, no tokens billed.`, hubCheckFail: 'Could not reach the Hub. Check the address, the host allowlist and the key.', hubHost: 'Host', hubAllowed: 'Allowlist', hubModels: 'Model per task', hubClassify: 'Classify', hubSummarise: 'Summarise', hubAnalyse: 'Analyse', hubAgent: 'Agent', hubBudget: 'Tokens today', hubSecret: 'Key', hubSaved: 'Hub key saved.', hubHasKey: 'key present', hubNoKey: 'no key', hubNotConfigured: 'LNC Agent Hub is not yet configured in LLM Providers.',
+    secretsTitle: 'Provider keys', secretsSub: 'Managed centrally under LLM Providers and MCP Connectors.', secretName: 'Key name', secretValue: 'Value', saveSecret: 'Save key', deleting: 'Deleting…', removeSecret: 'Delete', secretSaved: 'Key saved.', notConfigured: 'The credential store is currently unavailable.', mcpWrites: 'Writes through the connector', mcpWritesSub: 'Every agent write carries a source label. The label is the client id the Hub assigned, not something the agent chose.', mcpNoWrites: 'No agent has written anything yet.', mcpAnalyses: 'Stored briefs', mcpSources: 'sources', mcpNoAnalyses: 'No briefs yet.', mcpOwner: 'owner', mcpTitle: 'Business MCP Hub connector', mcpSub: 'The Hub calls /mcp with its own connector key plus a signed delegation per agent (newsman:read for queries, newsman:write for briefs, feedback notes & two-way Obsidian sync).', mcpReady: 'Paired', mcpNotReady: 'Not paired', mcpBearer: 'Connector key', mcpSecret: 'Delegation secret', mcpAudience: 'Audience', mcpScopes: 'Maximum scopes', mcpFromEnv: 'default', mcpFromAdmin: 'set here', mcpUnset: 'not set', mcpSet: 'set', mcpSave: 'Save', mcpSaved: 'Connector settings saved.', mcpStoreClosed: 'The connector credential store is currently unavailable.', mcpHint: 'Manage MCP connector credentials under MCP Connectors.', legalTitle: 'Legal-text sources', legalSub: 'Each source lists the terms we read and the date we checked them. A source whose terms were not read cannot be switched on.', legalBlocked: 'Not available', legalBlockedUnverified: 'Terms not checked', legalBlockedProhibited: 'Not permitted', legalTurnsOn: 'Follow this source', legalTurnsOff: 'Stop following', legalTerms: 'Terms', legalChecked: 'Checked', legalStale: 'The terms were checked a long time ago — read them again', legalNoChannel: 'No official access channel yet', legalReasonUnverified: 'The site’s terms of use could not be read, so this source is not followed.', legalReasonProhibited: 'The site’s terms do not allow automated retrieval.', valid_terms_unverified: 'The terms of use could not be read, so this source cannot be switched on.', valid_terms_prohibit_polling: 'The site’s terms do not allow automated retrieval.', valid_no_documented_channel: 'This source has no official access channel yet.', valid_region_disabled: 'This source’s region is off.', connectors: 'Connectors', connectorHealth: 'Health', quota: 'Today’s quota', needsSecret: 'needs a key', neverRan: 'Never ran',
     browse: 'Browse', browseAll: 'Everything visible', byTopic: 'Topics', byRegion: 'Regions', bySource: 'Sources', quickFilter: 'Quick filter', filterPlaceholder: 'Topic or source name…', clearFilter: 'Clear filter', showing: 'Showing', noMatch: 'Nothing matches', railLatest: 'Latest items', railAlerts: 'Recent alerts', railWatch: 'Following', seeAll: 'See all', emptyRail: 'Nothing yet', itemUnit: 'items', tabbarLabel: 'One-handed navigation', themeLabel: 'Reading theme',
     railBriefs: 'Latest briefs', openReports: 'Open Reports', noBriefsRail: 'No briefs stored yet — open Reports to ask the Analyst or sync via MCP / Obsidian.',
     reportsTitle: 'Briefs & Research Analyst', reportsSub: 'Read agent-authored briefs, check cited source articles, leave two-way feedback notes (synced with Obsidian) or run a grounded analysis.',
@@ -148,7 +147,7 @@ const copy = {
     askMode: 'Analysis mode', askModeAnalyse: 'Quick brief (Model)', askModeAgent: 'Deep research (Hub Agent)',
     askSaveBrief: 'Save result as a Brief (syncs to Obsidian)', askBriefTitle: 'Brief title (optional)',
     askSubmit: 'Run analysis', askRunning: 'Analysing…', askSavedAs: 'Saved brief:',
-    askHubHint: 'Could not reach LNC Agent Hub (check HUB_BASE_URL and hub-api-key in Settings → LNC Agent Hub). Briefs pushed via Business MCP Hub still read and accept feedback normally.',
+    askHubHint: 'Could not reach LNC Agent Hub (check the Hub provider under LLM Providers). Briefs pushed via Business MCP Hub still read and accept feedback normally.',
     noBriefs: 'No briefs stored yet', noBriefsSub: 'Click “Run analysis” above (with Save as a Brief checked) or let a scheduled MCP agent publish briefs via /mcp.',
     citedArticles: 'Cited source articles', noCited: 'No specific stored articles were cited.',
     feedbackTitle: 'Your feedback & two-way notes', feedbackSub: 'Notes you write here are protected (agents cannot edit or delete them); feedback written in Obsidian also attaches to this brief.',
@@ -159,7 +158,7 @@ const copy = {
     connectorAutoOn: 'Automatic scheduled connector polling is on', connectorAutoOff: 'Automatic connector polling is off', connectorAutoHelp: 'Kept separate from RSS so you can verify each provider with “Run now” before enabling scheduled background runs.',
     connectorRunNow: 'Run now', connectorRunning: 'Running…', connectorEnable: 'Enable', connectorDisable: 'Disable',
     connectorRanOk: (obs: number, docs: number, ev: number) => `Fetched: ${obs} observations, ${docs} documents, ${ev} events.`,
-    connectorErrRegion: 'This connector’s region is off — enable the region above first.', connectorErrSecret: 'Required provider API key is missing — save it under Provider keys first.', connectorErrConfig: 'Required server configuration is missing (e.g. SEC_USER_AGENT).', connectorErrCache: 'Recent data is still fresh inside the cache window.', connectorErrQuota: 'Today’s request quota for this connector is exhausted.',
+    connectorErrRegion: 'This connector’s region is off — enable the region above first.', connectorErrSecret: 'Required provider API key is missing — save it under LLM Providers or MCP Connectors first.', connectorErrConfig: 'Required upstream connector header configuration is missing on the server.', connectorErrCache: 'Recent data is still fresh inside the cache window.', connectorErrQuota: 'Today’s request quota for this connector is exhausted.',
     searchArticles: 'Search stored articles', searchArticlesPlaceholder: 'Search headlines & stored full text (accents optional, e.g. fed rates)…', searchGo: 'Search',
     readInApp: 'Read', openOriginal: 'Original ↗', closeReader: 'Close',
     extractNow: 'Extract full text', reExtract: 'Re-extract full text', extracting: 'Extracting clean article text from source…',
@@ -206,6 +205,8 @@ const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'repor
 const HASH_ALIASES: Record<string, Page> = {
   keys: 'api-keys',
   tokens: 'api-keys',
+  oidc: 'api-keys',
+  sso: 'api-keys',
   providers: 'llm-providers',
   models: 'llm-providers',
   connections: 'llm-providers',
@@ -303,15 +304,23 @@ function App() {
 function Login({ lang, setLang, oidcEnabled, configured, offline }: { lang: Lang; setLang: (v: Lang) => void; oidcEnabled: boolean; configured: boolean; offline: boolean }) {
   const t = copy[lang]
   const [key, setKey] = useState('')
-  const [error, setError] = useState(() => new URLSearchParams(location.search).get('error') ?? '')
+  const [error, setError] = useState(() => {
+    const params = new URLSearchParams(location.search)
+    return params.get('oidc_error') ?? params.get('error') ?? ''
+  })
   const [pending, setPending] = useState(false)
+  useEffect(() => {
+    if (location.search) {
+      history.replaceState(null, '', `${location.pathname}${location.hash}`)
+    }
+  }, [])
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setPending(true); setError('')
     try { await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ key }) }); setKey(''); window.location.assign('/admin') }
     catch (err) { setError(err instanceof ApiError && err.status === 429 ? t.limited : t.invalid) }
     finally { setPending(false) }
   }
-  return <main className="login-page"><section className="login-card">
+  return <main className="login-page"><FloatingToast error={error} onDismissError={() => setError('')} /><section className="login-card">
     <div className="login-brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>{t.subtitle}</span></div></div>
     <div className="login-copy"><p className="eyebrow">{t.signIn}</p><h1>{t.welcome}</h1><p>{offline ? t.loadError : oidcEnabled ? t.ssoHint : configured ? t.keyHint : t.missing}</p></div>
     {oidcEnabled && <a className="btn primary login-sso-primary" href="/api/auth/oidc/login">{t.ssoPrimary}</a>}
@@ -319,7 +328,6 @@ function Login({ lang, setLang, oidcEnabled, configured, offline }: { lang: Lang
       <summary>{t.breakGlassSummary}</summary>
       <form onSubmit={submit} className="login-form"><label htmlFor="management-key">{t.key}</label><input id="management-key" type="password" autoComplete="current-password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="••••••••••••" /><button className="btn primary" disabled={!key || pending || !configured}>{pending ? t.checking : t.enter}</button></form>
     </details>
-    {error && <div className="form-error" role="alert">{error}</div>}
     <div className="login-footer"><span>Private internal workspace</span><button type="button" className="language-link" onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang === 'vi' ? 'English' : 'Tiếng Việt'}</button></div>
   </section></main>
 }
@@ -367,7 +375,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         </div>
       </header>
       {regions && <div className="mobile-region-bar"><Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} /></div>}
-      {error && <div className="alert error" role="alert"><strong>{error === 'logout' ? t.failedLogout : t.loadError}</strong><button onClick={() => setError('')}>{t.dismiss}</button></div>}
+      <FloatingToast error={error ? (error === 'logout' ? t.failedLogout : t.loadError) : ''} onDismissError={() => setError('')} />
       <div className="page-content">
         {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} onOpenArticle={setReadingId} />}
         {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} onOpenArticle={setReadingId} />}
@@ -801,8 +809,7 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
   if (!settings) return <div role={error ? 'alert' : 'status'} className="loading-inline">{error ? t.settingsError : t.loading}</div>
   const stats = dashboard?.stats
   const themeOptions = THEMES.map((theme) => ({ value: theme.id, label: lang === 'vi' ? theme.vi : theme.en }))
-  return <div className="content-stack settings-page"><section className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2>{t.settingsTitle}</h2><p>{t.settingsSub}</p></div>{saved && <span className="save-state" role="status">✓ {t.savedToast}</span>}</section>
-    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
+  return <div className="content-stack settings-page"><FloatingToast notice={saved ? t.savedToast : backfillNote} error={error ? t.settingsError : ''} onDismissNotice={() => { setSaved(false); setBackfillNote('') }} onDismissError={() => setError(false)} /><section className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2>{t.settingsTitle}</h2><p>{t.settingsSub}</p></div></section>
     <div className="settings-grid"><section className="settings-card"><div className="card-heading"><span className="card-icon">Aa</span><div><h3>{t.settingsTitle}</h3><p>{t.settingsSub}</p></div></div>
       <Select label={t.language} value={settings.language} options={[{ value: 'vi', label: 'Tiếng Việt' }, { value: 'en', label: 'English' }]} onChange={(value) => { setSaved(false); setSettings({ ...settings, language: value as Lang }) }} />
       <Select label={t.readerMode} value={settings.default_reader_mode} options={themeOptions} onChange={(value) => { setSaved(false); setSettings({ ...settings, default_reader_mode: value as ReaderMode }) }} />
@@ -812,7 +819,6 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
       <div className="switch-row"><div><strong>{settings.fulltext_auto_enabled ? t.fulltextAutoOn : t.fulltextAutoOff}</strong><span>{t.fulltextAutoHelp}</span></div><button type="button" role="switch" className="switch" aria-checked={settings.fulltext_auto_enabled} disabled={busy} onClick={() => void toggleFulltext()} /></div>
       {stats && <dl className="stat-pairs"><div><dt>{t.sourcesEnabled}</dt><dd>{stats.sources_enabled}</dd></div><div><dt>{t.sourcesPaused}</dt><dd>{stats.sources_paused}</dd></div><div><dt>{t.articles24h}</dt><dd>{stats.articles_24h}</dd></div><div><dt>{t.articlesTotal}</dt><dd>{stats.articles_total}</dd></div><div><dt>{t.articlesArchived}</dt><dd>{stats.articles_with_content ?? 0}</dd></div><div><dt>{t.articlesPending}</dt><dd>{stats.articles_pending_content ?? 0}</dd></div></dl>}
       <div className="btn-row"><button type="button" className="btn secondary" disabled={backfillBusy} onClick={() => void runBackfill()}>{backfillBusy ? t.backfilling : t.backfillBtn}</button></div>
-      {backfillNote && <div className="save-state" role="status">✓ {backfillNote}</div>}
     </section></div>
     <section className="settings-card">
       <div className="card-heading"><span className="card-icon">✦</span><div><h3>{t.focusTitle}</h3><p>{t.focusSub}</p></div></div>
@@ -837,7 +843,7 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
         <a className="btn secondary" href="#api-keys">⚷ {t['api-keys']}</a>
       </div>
     </section>
-    <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><SecretsManager t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
+    <div className="settings-actions"><span className="muted">Version {settings.version} · MCP + Obsidian two-way sync</span><div className="btn-row"><button className="btn primary" onClick={save} disabled={busy}>{busy ? t.saving : t.save}</button></div></div><AuditActivityCard lang={lang} api={api} /><RegionsManager t={t} lang={lang} regions={regions} onChanged={onRegionsChanged} /><LegalSourcesPanel t={t} lang={lang} /><TelegramPanel t={t} /><ConnectorsPanel t={t} /><AlertRulesManager t={t} lang={lang} /><CatalogManager lang={lang} api={api} regions={regions} onChanged={onCatalogChanged} /></div>
 }
 
 function RegionsManager({ t, lang, regions, onChanged }: { t: Copy; lang: Lang; regions: RegionsPayload | null; onChanged: () => void }) {
@@ -956,69 +962,21 @@ function TelegramPanel({ t }: { t: Copy }) {
   if (!settings) return <div role={error ? 'alert' : 'status'} className="loading-inline">{error ? t.settingsError : t.loading}</div>
   const ready = settings.telegram_ready
   return <section className="telegram-admin" aria-labelledby="telegram-title">
+    <FloatingToast notice={notice} error={error ? t.settingsError : ''} onDismissNotice={() => setNotice('')} onDismissError={() => setError(false)} />
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="telegram-title">{t.tgTitle}</h2><p>{t.tgSub}</p></div>
       <span className={ready ? 'save-state' : 'muted'} role="status">{ready ? `✓ ${t.tgReady}` : `${t.tgNotReady}${settings.telegram_reason ? ` · ${settings.telegram_reason}` : ''}`}</span></div>
     {settings.telegram_env_override && <p className="catalog-notice" role="status">{t.tgEnvOverride}</p>}
-    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
-    {notice && <div className="save-state" role="status">✓ {notice}</div>}
     <form className="catalog-form" onSubmit={save} autoComplete="off">
       <Select label={t.tgMode} value={mode} options={[{ value: 'off', label: t.tgOff }, { value: 'relay', label: t.tgRelay }, { value: 'direct', label: t.tgDirect }]} onChange={(value) => setMode(value as 'relay' | 'direct' | 'off')} />
       <label className="field"><span>{t.tgChatId}</span><input inputMode="numeric" value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="-1001234567890" /></label>
       <label className="field"><span>{t.tgTopic}</span><input inputMode="numeric" value={topicId} onChange={(e) => setTopicId(e.target.value)} placeholder="42" /></label>
-      <p className="muted">{settings.telegram_has_relay_token ? `✓ ${t.tgRelayToken}` : `— ${t.tgRelayToken}`} · {settings.telegram_has_bot_token ? `✓ ${t.tgBotToken}` : `— ${t.tgBotToken}`}</p>
+      <p className="muted">{settings.telegram_has_relay_token ? `✓ ${t.tgRelayToken}` : `— ${t.tgRelayToken}`} · {settings.telegram_has_bot_token ? `✓ ${t.tgBotToken}` : `— ${t.tgBotToken}`} · <a href="#mcp-connectors">{t['mcp-connectors']}</a></p>
       {status && <p className="muted">{t.tgQueue}: {status.queue.pending} {t.tgPending} · {status.queue.sending} · {status.queue.sent} {t.tgSent} · {status.queue.failed} {t.tgFailed}</p>}
       <div className="btn-row catalog-form-actions">
         <button className="btn primary" disabled={busy}>{busy ? t.saving : t.tgSave}</button>
         <button type="button" className="btn secondary" disabled={busy || !ready} onClick={() => void flush()}>{t.tgFlushNow}</button>
       </div>
     </form>
-  </section>
-}
-
-function SecretsManager({ t }: { t: Copy }) {
-  const [items, setItems] = useState<SecretMeta[] | null>(null)
-  const [fingerprint, setFingerprint] = useState<string | null>(null)
-  const [closed, setClosed] = useState(false)
-  const [name, setName] = useState('')
-  const [value, setValue] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [error, setError] = useState(false)
-  const load = () => api<{ data: SecretMeta[]; key_fingerprint: string | null }>('/api/admin/secrets')
-    .then((payload) => { setItems(payload.data); setFingerprint(payload.key_fingerprint); setClosed(false) })
-    .catch((err) => { setItems([]); setClosed(err instanceof ApiError && err.status === 503) })
-  useEffect(() => { void load() }, [])
-  const save = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError(false); setNotice('')
-    try {
-      await api(`/api/admin/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ value }) })
-      // The value is cleared immediately and never read back from the server.
-      setValue(''); setName(''); setNotice(t.secretSaved); await load()
-    } catch { setError(true) } finally { setBusy(false) }
-  }
-  const remove = async (keyName: string) => {
-    setBusy(true); setError(false)
-    try { await api(`/api/admin/secrets/${encodeURIComponent(keyName)}`, { method: 'DELETE' }); await load() }
-    catch { setError(true) } finally { setBusy(false) }
-  }
-  return <section className="secrets-admin" aria-labelledby="secrets-title">
-    <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="secrets-title">{t.secretsTitle}</h2><p>{t.secretsSub}</p></div>{fingerprint && <span className="muted">key {fingerprint}</span>}</div>
-    {closed && <p className="catalog-notice" role="status">{t.notConfigured}</p>}
-    {error && <div className="form-error" role="alert">{t.settingsError}</div>}
-    {notice && <div className="save-state" role="status">✓ {notice}</div>}
-    <div className="catalog-layout">
-      <div className="catalog-list">
-        {!items ? <p className="muted">{t.loading}</p> : items.length === 0 ? <p className="muted">{t.noRegions}</p> : items.map((item) => <article className="catalog-entry" key={item.name}>
-          <div className="catalog-entry-main"><strong>{item.name}</strong><span>v{item.key_version} · {item.updated_at}</span></div>
-          <div className="catalog-entry-actions"><button type="button" className="text-button" disabled={busy} onClick={() => void remove(item.name)}>{busy ? t.deleting : t.removeSecret}</button></div>
-        </article>)}
-      </div>
-      <form className="catalog-form" onSubmit={save} autoComplete="off">
-        <label className="field"><span>{t.secretName}</span><input required maxLength={64} pattern="[a-z0-9]+(-[a-z0-9]+)*" value={name} onChange={(e) => setName(e.target.value)} placeholder="provider-api-key" /></label>
-        <label className="field"><span>{t.secretValue}</span><input required type="password" autoComplete="new-password" maxLength={8192} value={value} onChange={(e) => setValue(e.target.value)} /></label>
-        <div className="btn-row catalog-form-actions"><button className="btn primary" disabled={busy || closed || !name || !value}>{busy ? t.saving : t.saveSecret}</button></div>
-      </form>
-    </div>
   </section>
 }
 
@@ -1042,8 +1000,8 @@ function LegalSourcesPanel({ t, lang }: { t: Copy; lang: Lang }) {
   }
   const date = (value: string) => value ? new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${value}T00:00:00`)) : ''
   return <section className="legal-sources" aria-labelledby="legal-title">
+    <FloatingToast error={error} onDismissError={() => setError('')} />
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="legal-title">{t.legalTitle}</h2><p>{t.legalSub}</p></div></div>
-    {error && <div className="form-error" role="alert">{error}</div>}
     {!items ? <p className="muted">{t.loading}</p> : items.length === 0 ? <p className="muted">{t.legalSub}</p> : <div className="catalog-list">{items.map((row) => <article className="catalog-entry" key={row.code}>
       <div className="catalog-entry-main">
         <strong>{lang === 'vi' ? row.name_vi : row.name_en}</strong>
@@ -1065,10 +1023,6 @@ function LegalSourcesPanel({ t, lang }: { t: Copy; lang: Lang }) {
   </section>
 }
 
-/// The Business MCP Hub card. It shows **where** each value came from and whether it
-/// is set — never the value itself, because both of the important ones are secrets.
-/// Saving here only touches the audience and the scope ceiling; the two secrets are
-/// written through the provider-keys panel like every other sealed value.
 function ConnectorsPanel({ t }: { t: Copy }) {
   const [items, setItems] = useState<ConnectorStatus[] | null>(null)
   const [autoEnabled, setAutoEnabled] = useState(false)
@@ -1121,10 +1075,9 @@ function ConnectorsPanel({ t }: { t: Copy }) {
   }
   const when = (seconds: number | null) => seconds ? new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(seconds * 1000)) : null
   return <section className="connectors-admin" aria-labelledby="connectors-title">
+    <FloatingToast notice={notice} error={error} onDismissNotice={() => setNotice('')} onDismissError={() => setError('')} />
     <div className="section-heading"><div><span className="eyebrow">{t.admin}</span><h2 id="connectors-title">{t.connectors}</h2><p>{t.connectorAutoHelp}</p></div></div>
     <div className="switch-row"><div><strong>{autoEnabled ? t.connectorAutoOn : t.connectorAutoOff}</strong><span>{t.connectorAutoHelp}</span></div><button type="button" role="switch" className="switch" aria-checked={autoEnabled} disabled={busyId !== ''} onClick={() => void toggleAuto()} /></div>
-    {error && <div className="form-error" role="alert">{error}</div>}
-    {notice && <div className="save-state" role="status">✓ {notice}</div>}
     {!items ? <p className="muted">{t.loading}</p> : items.length === 0 ? <p className="muted">{t.noSeriesSub}</p> : <div className="catalog-list">{items.map((item) => <article className="catalog-entry" key={item.id}>
       <div className="catalog-entry-main"><strong>{item.id}</strong><span>{item.provider} · {item.region}{item.needs_secret ? ` · ${t.needsSecret}` : ''}</span>
         <span className={item.enabled ? 'catalog-status' : 'catalog-status inactive'}>{item.enabled ? t.connectorEnable : t.connectorDisable} · {t.connectorHealth}: {item.health}</span>

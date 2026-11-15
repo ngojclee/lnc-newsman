@@ -52,8 +52,9 @@ mod tests {
             version: "test",
         };
         let _ = db.ensure_bootstrap_management_key(cfg.management_key.as_deref(), test_now());
-        let mut sec = security::SecurityRuntime::for_test(&cfg);
-        sec.oidc = oidc_cfg;
+        security::seed_bootstrap_env(&db, &cfg, Some(&vault));
+        let sec = security::SecurityRuntime::for_test(&cfg);
+        sec.set_oidc_cfg(oidc_cfg);
         Arc::new(AppState {
             cfg,
             db: Mutex::new(db),
@@ -181,7 +182,7 @@ mod tests {
         let env_cipher = vault
             .seal_envelope("api_key:ak-1", "nm_key_secret_payload_abc")
             .unwrap();
-        assert!(env_cipher.starts_with("aesgcm:v1:"));
+        assert!(env_cipher.starts_with("$enc:1:"));
         assert_eq!(
             vault.open_envelope("api_key:ak-1", &env_cipher).unwrap(),
             "nm_key_secret_payload_abc"
@@ -439,6 +440,7 @@ mod tests {
             redirect_uri: "https://newsman.test/api/auth/oidc/callback".into(),
             allowed_users: vec!["louis".into()],
             allowed_hosts: vec!["127.0.0.1".into()],
+            ..Default::default()
         };
         let state = state_with_vault(oidc_cfg.clone());
         let app = router(state.clone());
@@ -446,8 +448,7 @@ mod tests {
         // Unit check on verify_id_token_claims: rejects HS256 & mismatched nonce
         assert_eq!(
             oidc::verify_id_token_claims("eyJhbGciOiJIUzI1NiJ9.e30.abc", &jwk_set, &[&base_url], "lnc-newsman", "n1")
-                .err()
-                .as_deref(),
+                .err(),
             Some("oidc_disallowed_alg")
         );
 
@@ -1054,12 +1055,676 @@ mod tests {
 
         // Audit log contains recorded lifecycle events
         let (st, _, audit) = read_json(
-            app.oneshot(json_req("GET", "/api/admin/audit-events", "", Some(&cookie), None, false))
+            app.clone()
+                .oneshot(json_req("GET", "/api/admin/audit-events", "", Some(&cookie), None, false))
                 .await
                 .unwrap(),
         )
         .await;
         assert_eq!(st, StatusCode::OK);
         assert!(!audit["items"].as_array().unwrap().is_empty());
+
+        let (st_alias, _, audit_alias) = read_json(
+            app.oneshot(json_req("GET", "/api/admin/audit", "", Some(&cookie), None, false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st_alias, StatusCode::OK);
+        assert!(!audit_alias["items"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn oidc_admin_crud_omit_blank_ssrf_wildcard_and_hot_reload() {
+        let jwks_json = json!({
+            "keys": [{
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": "test-ed-1",
+                "alg": "EdDSA",
+                "use": "sig",
+                "x": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+            }]
+        });
+
+        async fn spawn_idp(jwks: Value) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+            let b_clone = base.clone();
+            let srv = Router::new()
+                .route(
+                    "/.well-known/openid-configuration",
+                    get(move || {
+                        let b = b_clone.clone();
+                        async move {
+                            Json(json!({
+                                "issuer": b,
+                                "authorization_endpoint": format!("{b}/authorize"),
+                                "token_endpoint": format!("{b}/token"),
+                                "jwks_uri": format!("{b}/jwks")
+                            }))
+                        }
+                    }),
+                )
+                .route(
+                    "/jwks",
+                    get(move || {
+                        let j = jwks.clone();
+                        async move { Json(j) }
+                    }),
+                );
+            tokio::spawn(async move {
+                axum::serve(listener, srv).await.unwrap();
+            });
+            base
+        }
+
+        let idp1 = spawn_idp(jwks_json.clone()).await;
+        let idp2 = spawn_idp(jwks_json).await;
+
+        let state = state_with_vault(oidc::OidcConfig::default());
+        let app = router(state.clone());
+        let cookie = admin_cookie(&app, "bootstrap-env-mgmt-key-123456").await;
+
+        // 1. Wildcard `*` in allowlist must be rejected (400)
+        let (st, _, body) = read_json(
+            app.clone()
+                .oneshot(json_req(
+                    "PUT",
+                    "/api/admin/oidc",
+                    &json!({
+                        "enabled": true,
+                        "issuer_url": idp1,
+                        "client_id": "lnc-newsman",
+                        "client_secret": "s3cr3t-one",
+                        "allowed_users": ["*"],
+                        "allowed_hosts": ["127.0.0.1"]
+                    })
+                    .to_string(),
+                    Some(&cookie),
+                    None,
+                    true,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "oidc_wildcard_not_allowed");
+
+        // 2. Empty allowlist when enabled=true must fail closed (400)
+        let (st, _, body) = read_json(
+            app.clone()
+                .oneshot(json_req(
+                    "PUT",
+                    "/api/admin/oidc",
+                    &json!({
+                        "enabled": true,
+                        "issuer_url": idp1,
+                        "client_id": "lnc-newsman",
+                        "client_secret": "s3cr3t-one",
+                        "allowed_users": [],
+                        "allowed_groups": [],
+                        "allowed_hosts": ["127.0.0.1"]
+                    })
+                    .to_string(),
+                    Some(&cookie),
+                    None,
+                    true,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "oidc_incomplete_or_empty_allowlist");
+
+        // 3. SSRF block on metadata IP during /test
+        let (st, _, ssrf) = read_json(
+            app.clone()
+                .oneshot(json_req(
+                    "POST",
+                    "/api/admin/oidc/test",
+                    r#"{"issuer_url":"http://169.254.169.254/realms/x","allowed_hosts":[]}"#,
+                    Some(&cookie),
+                    None,
+                    true,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(ssrf["error"], "ssrf_blocked_private_url");
+
+        // 4. Save IdP #1 via PUT /api/admin/oidc
+        let (st, hdrs, saved1) = read_json(
+            app.clone()
+                .oneshot(json_req(
+                    "PUT",
+                    "/api/admin/oidc",
+                    &json!({
+                        "enabled": true,
+                        "issuer_url": idp1,
+                        "client_id": "lnc-newsman",
+                        "client_secret": "s3cr3t-one",
+                        "redirect_uri": "https://newsman.test/api/auth/oidc/callback",
+                        "scopes": "openid profile email",
+                        "allowed_users": ["louis"],
+                        "allowed_groups": ["lnc-admins"],
+                        "allowed_hosts": ["127.0.0.1"]
+                    })
+                    .to_string(),
+                    Some(&cookie),
+                    None,
+                    true,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(saved1["client_secret"], "********");
+        assert_eq!(saved1["has_client_secret"], true);
+        assert!(hdrs.get(header::CACHE_CONTROL).unwrap().to_str().unwrap().contains("no-store"));
+
+        // Probe discovery via POST /api/admin/oidc/test
+        let (st, _, probe) = read_json(
+            app.clone()
+                .oneshot(json_req("POST", "/api/admin/oidc/test", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(probe["ok"], true);
+        assert_eq!(probe["jwks_keys"], 1);
+
+        // Live hot-reload #1: /api/auth/oidc/login redirects to IdP #1 without restart
+        let r1 = app
+            .clone()
+            .oneshot(json_req("GET", "/api/auth/oidc/login", "", None, None, false))
+            .await
+            .unwrap();
+        assert_eq!(r1.status(), StatusCode::SEE_OTHER);
+        assert!(r1.headers().get(header::LOCATION).unwrap().to_str().unwrap().starts_with(&idp1));
+
+        // 5. Update to IdP #2 via `/api/oidc` alias with `client_secret: "********"` (omitBlankSecrets)
+        let (st, _, _) = read_json(
+            app.clone()
+                .oneshot(json_req(
+                    "PUT",
+                    "/api/oidc",
+                    &json!({
+                        "enabled": true,
+                        "issuer_url": idp2,
+                        "client_secret": "********"
+                    })
+                    .to_string(),
+                    Some(&cookie),
+                    None,
+                    true,
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(state.security.oidc_cfg().client_secret, "s3cr3t-one");
+
+        // Live hot-reload #2: /api/auth/oidc/login immediately redirects to IdP #2
+        let r2 = app
+            .clone()
+            .oneshot(json_req("GET", "/api/auth/oidc/login", "", None, None, false))
+            .await
+            .unwrap();
+        assert_eq!(r2.status(), StatusCode::SEE_OTHER);
+        assert!(r2.headers().get(header::LOCATION).unwrap().to_str().unwrap().starts_with(&idp2));
+
+        // GET /api/oidc never leaks plaintext secret
+        let (st, _, got) = read_json(
+            app.clone()
+                .oneshot(json_req("GET", "/api/oidc", "", Some(&cookie), None, false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(!got.to_string().contains("s3cr3t-one"));
+
+        // Reset endpoint works cleanly
+        let (st, _, _) = read_json(
+            app.oneshot(json_req("POST", "/api/admin/oidc/reset", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn three_boot_master_key_rotation_and_hmac_repepper() {
+        let mk1 = [0x11u8; 32];
+        let mk2 = [0x22u8; 32];
+
+        // Boot 1: MK1 only
+        let db = db::Database::in_memory().unwrap();
+        let vault1 = secrets::SecretBox::from_bytes(mk1, None);
+        let cfg = config::Config {
+            data_dir: ".".into(),
+            regions_dir: ".".into(),
+            bind_address: "127.0.0.1".parse().unwrap(),
+            port: 8000,
+            management_key: Some("bootstrap-env-mgmt-key-123456".into()),
+            api_keys: vec!["seeded-env-key-alpha-999".into()],
+            allowed_hosts: vec!["newsman.test".into(), "127.0.0.1".into()],
+            trusted_proxies: Vec::new(),
+            secure_cookie: true,
+            version: "test",
+        };
+        db.ensure_bootstrap_management_key(cfg.management_key.as_deref(), test_now())
+            .unwrap();
+        security::seed_bootstrap_env(&db, &cfg, Some(&vault1));
+        secrets::set(&db, &vault1, agent_bridge::SEC_HUB_TOKEN, "hub-tok-boot1-xyz").unwrap();
+        let oidc_init = oidc::OidcConfig {
+            enabled: true,
+            issuer_url: "https://sso.lengoc.me/realms/lengoc".into(),
+            client_id: "lnc-newsman".into(),
+            client_secret: "oidc-sec-boot1-abc".into(),
+            redirect_uri: "https://newsman.test/api/auth/oidc/callback".into(),
+            allowed_users: vec!["louis".into()],
+            ..Default::default()
+        };
+        oidc::persist_oidc_to_db(&db, Some(&vault1), &oidc_init, None).unwrap();
+
+        let sec1 = security::SecurityRuntime::for_test(&cfg);
+        sec1.set_oidc_cfg(oidc_init);
+        let agent_bridge1 = agent_bridge::AgentBridgeRuntime::new(&db);
+        let state1 = Arc::new(AppState {
+            cfg: cfg.clone(),
+            db: Mutex::new(db),
+            login_limiter: Mutex::new(auth::LoginLimiter::default()),
+            started_at: test_now(),
+            fetcher: crate::fetch::Fetcher::public_only(),
+            in_flight: Mutex::new(HashSet::new()),
+            connector_in_flight: Mutex::new(HashSet::new()),
+            host_gates: Mutex::new(std::collections::HashMap::new()),
+            host_gap: collector::HOST_GAP,
+            secrets: Some(vault1),
+            connector_config: connectors::ConnectorConfig::default(),
+            llm: llm::LlmConfig { base_url: None, model: "mock".into() },
+            hub: hub::ProviderConfig::default(),
+            telegram: crate::telegram::TelegramConfig::default(),
+            connector: connector::ConnectorConfig::default(),
+            connector_nonces: Mutex::new(std::collections::HashMap::new()),
+            llm_enabled: false,
+            pack: Mutex::new(regions::PackStatus::default()),
+            alerts_running: AtomicBool::new(false),
+            agent_bridge: agent_bridge1,
+            security: Arc::new(sec1),
+        });
+        let app1 = router(state1.clone());
+        let cookie1 = admin_cookie(&app1, "bootstrap-env-mgmt-key-123456").await;
+
+        // Seeded env key works in Boot 1, then admin deletes it — must NOT resurrect on Boot 2/3!
+        let (st, _, _) = read_json(
+            app1.clone()
+                .oneshot(json_req("GET", "/api/v1/articles", "", None, Some("seeded-env-key-alpha-999"), false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let (st, _, listed) = read_json(
+            app1.clone()
+                .oneshot(json_req("GET", "/api/admin/api-keys", "", Some(&cookie1), None, false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let seeded_id = listed["items"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(listed["items"][0]["env_managed"], false);
+        let (st, _, _) = read_json(
+            app1.clone()
+                .oneshot(json_req("DELETE", &format!("/api/admin/api-keys/{seeded_id}"), "", Some(&cookie1), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // Deleted seeded key must immediately 401 (no cfg.api_keys bypass!)
+        let (st, _, _) = read_json(
+            app1.clone()
+                .oneshot(json_req("GET", "/api/v1/articles", "", None, Some("seeded-env-key-alpha-999"), false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+        // Create runtime API key + custom provider under MK1
+        let (st, _, created_key) = read_json(
+            app1.clone()
+                .oneshot(json_req("POST", "/api/admin/api-keys", r#"{"label":"Survives Rotation"}"#, Some(&cookie1), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let runtime_secret = created_key["secret"].as_str().unwrap().to_string();
+        let runtime_key_id = created_key["id"].as_str().unwrap().to_string();
+
+        let (st, _, created_prov) = read_json(
+            app1.oneshot(json_req(
+                "POST",
+                "/api/admin/providers",
+                r#"{"name":"RotProv","base_url":"https://api.openai.com/v1","api_key":"sk-survives-mk2"}"#,
+                Some(&cookie1),
+                None,
+                true,
+            ))
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let prov_id = created_prov["id"].as_str().unwrap().to_string();
+
+        // Extract underlying DB for Boot 2 (MK2 + OLD=MK1) -> Boot 3 (MK2 ONLY)
+        let db = {
+            let mut guard = state1.db.lock().unwrap();
+            std::mem::replace(&mut *guard, db::Database::in_memory().unwrap())
+        };
+
+        // Boot 2: MK2 with OLD=MK1
+        let vault2 = secrets::SecretBox::from_bytes(mk2, Some(mk1));
+        let rotated_count = secrets::boot_rotate_vault_and_keys(&db, &vault2).unwrap();
+        assert!(rotated_count >= 3);
+        security::seed_bootstrap_env(&db, &cfg, Some(&vault2));
+
+        // Boot 3: MK2 ONLY (no OLD key!)
+        let vault3 = secrets::SecretBox::from_bytes(mk2, None);
+        assert_eq!(secrets::boot_rotate_vault_and_keys(&db, &vault3).unwrap(), 0);
+        security::seed_bootstrap_env(&db, &cfg, Some(&vault3));
+        let oidc_boot3 = oidc::OidcConfig::load_or_seed(&db, Some(&vault3));
+        assert_eq!(oidc_boot3.client_secret, "oidc-sec-boot1-abc");
+        assert_eq!(secrets::get(&db, &vault3, agent_bridge::SEC_HUB_TOKEN).unwrap(), "hub-tok-boot1-xyz");
+
+        // Verify all stored ciphertexts use canonical `$enc:1:` prefix
+        let enc_oidc = db.get_setting("oidc_client_secret_enc").unwrap().unwrap();
+        assert!(enc_oidc.starts_with("$enc:1:"));
+
+        let sec3 = security::SecurityRuntime::for_test(&cfg);
+        sec3.set_oidc_cfg(oidc_boot3);
+        let agent_bridge3 = agent_bridge::AgentBridgeRuntime::new(&db);
+        let state3 = Arc::new(AppState {
+            cfg: cfg.clone(),
+            db: Mutex::new(db),
+            login_limiter: Mutex::new(auth::LoginLimiter::default()),
+            started_at: test_now(),
+            fetcher: crate::fetch::Fetcher::public_only(),
+            in_flight: Mutex::new(HashSet::new()),
+            connector_in_flight: Mutex::new(HashSet::new()),
+            host_gates: Mutex::new(std::collections::HashMap::new()),
+            host_gap: collector::HOST_GAP,
+            secrets: Some(vault3),
+            connector_config: connectors::ConnectorConfig::default(),
+            llm: llm::LlmConfig { base_url: None, model: "mock".into() },
+            hub: hub::ProviderConfig::default(),
+            telegram: crate::telegram::TelegramConfig::default(),
+            connector: connector::ConnectorConfig::default(),
+            connector_nonces: Mutex::new(std::collections::HashMap::new()),
+            llm_enabled: false,
+            pack: Mutex::new(regions::PackStatus::default()),
+            alerts_running: AtomicBool::new(false),
+            agent_bridge: agent_bridge3,
+            security: Arc::new(sec3),
+        });
+        let app3 = router(state3);
+        let cookie3 = admin_cookie(&app3, "bootstrap-env-mgmt-key-123456").await;
+
+        // Deleted seeded key STILL 401 (never resurrected!)
+        let (st, _, _) = read_json(
+            app3.clone()
+                .oneshot(json_req("GET", "/api/v1/articles", "", None, Some("seeded-env-key-alpha-999"), false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+        // Runtime Bearer key created in Boot 1 STILL authenticates in Boot 3 (MK2-only) thanks to eager HMAC re-pepper!
+        let (st, _, _) = read_json(
+            app3.clone()
+                .oneshot(json_req("GET", "/api/v1/articles", "", None, Some(&runtime_secret), false))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        // Copy on API key & Provider both succeed under MK2-only
+        let (st, _, cp_key) = read_json(
+            app3.clone()
+                .oneshot(json_req("POST", &format!("/api/admin/api-keys/{runtime_key_id}/copy"), "{}", Some(&cookie3), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(cp_key["secret"], runtime_secret);
+
+        let (st, _, cp_prov) = read_json(
+            app3.oneshot(json_req("POST", &format!("/api/admin/providers/{prov_id}/copy"), "{}", Some(&cookie3), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(cp_prov["secret"], "sk-survives-mk2");
+    }
+
+    #[tokio::test]
+    async fn legacy_hash_only_410_rotate_upgrade_and_revoked_409_and_get_logout_405() {
+        let state = state_with_vault(oidc::OidcConfig::default());
+        let app = router(state.clone());
+        let cookie = admin_cookie(&app, "bootstrap-env-mgmt-key-123456").await;
+
+        // 1. GET /api/auth/logout -> 405 Method Not Allowed + Allow: POST
+        let resp = app
+            .clone()
+            .oneshot(json_req("GET", "/api/auth/logout", "", Some(&cookie), None, false))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.headers().get(header::ALLOW).unwrap(), "POST");
+
+        // 2. Insert legacy hash-only API key (copy_available = 0, ciphertext = NULL)
+        {
+            let db = state.db.lock().unwrap();
+            let vault = state.secrets.as_ref().unwrap();
+            let digest = vault.hmac_api_key("nm_legacy_hash_only_0000");
+            db.conn
+                .execute(
+                    "INSERT INTO api_keys(id, name, prefix, last4, key_hash_hmac, secret_enc, scopes_json, status, copy_available, created_at, updated_at)
+                     VALUES ('ak-legacy-1', 'Legacy Key', 'nm_legac', '0000', ?1, '', '[\"newsman:read\"]', 'active', 0, 1700000000, 1700000000)",
+                    [digest],
+                )
+                .unwrap();
+        }
+
+        // Copy on hash-only key -> 410 Gone
+        let (st, _, err_410) = read_json(
+            app.clone()
+                .oneshot(json_req("POST", "/api/admin/api-keys/ak-legacy-1/copy", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::GONE);
+        assert_eq!(err_410["error"], "legacy_hash_only_rotate_required");
+
+        // Rotate upgrades hash-only key to `$enc:1:` envelope -> 200 OK
+        let (st, _, rotated) = read_json(
+            app.clone()
+                .oneshot(json_req("POST", "/api/admin/api-keys/ak-legacy-1/rotate", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let new_sec = rotated["secret"].as_str().unwrap().to_string();
+
+        // Subsequent Copy -> 200 OK
+        let (st, _, cp_ok) = read_json(
+            app.clone()
+                .oneshot(json_req("POST", "/api/admin/api-keys/ak-legacy-1/copy", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(cp_ok["secret"], new_sec);
+
+        // Revoke -> subsequent Copy returns 409 Conflict
+        let (st, _, _) = read_json(
+            app.clone()
+                .oneshot(json_req("POST", "/api/admin/api-keys/ak-legacy-1/revoke", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+
+        let (st, _, err_409) = read_json(
+            app.oneshot(json_req("POST", "/api/admin/api-keys/ak-legacy-1/copy", "{}", Some(&cookie), None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(err_409["error"], "api_key_revoked");
+    }
+
+    #[tokio::test]
+    async fn rule_t2_contract_a_app_connector_v4s_grant_and_replay_guard() {
+        use hmac::{Hmac, Mac};
+
+        let state = state_with_vault(oidc::OidcConfig::default());
+        {
+            let db = state.db.lock().unwrap();
+            let vault = state.secrets.as_ref().unwrap();
+            secrets::set(&db, vault, agent_bridge::SEC_HUB_TOKEN, "hub-shared-token-777").unwrap();
+        }
+        let app = router(state.clone());
+
+        // 1. Internal Docker Swarm probe (`Host: lnc-newsman:8000`) reaches health endpoints cleanly
+        for path in [
+            "/v1/app-connectors/lnc-newsman/health",
+            "/v1/app-connectors/lnc-newsman/healthz",
+            "/v1/app-connectors/lnc-newsman/mcp/health",
+        ] {
+            let req = Request::builder()
+                .method("GET")
+                .uri(path)
+                .header(header::HOST, "lnc-newsman:8000")
+                .body(Body::empty())
+                .unwrap();
+            let (st, _, body) = read_json(app.clone().oneshot(req).await.unwrap()).await;
+            assert_eq!(st, StatusCode::OK, "health path {path}");
+            assert_eq!(body["app_id"], "lnc-newsman");
+        }
+
+        // Helper to mint compact `<b64url_claims>.<hex_hmac>` Hub V4s grant
+        let mint_compact = |aud: &str, nonce: &str, secret: &str| -> String {
+            let now_ts = test_now() as i64;
+            let claims = json!({
+                "iss": "lnc-agents-hub",
+                "aud": aud,
+                "sub": "agent:research-rio",
+                "user_id": "louis",
+                "scopes": ["newsman:read"],
+                "iat": now_ts,
+                "exp": now_ts + 60,
+                "jti": nonce
+            });
+            let b64 = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).unwrap();
+            mac.update(b64.as_bytes());
+            let sig: String = mac
+                .finalize()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            format!("{b64}.{sig}")
+        };
+
+        let rpc_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        })
+        .to_string();
+
+        // 2. Bad bearer -> 401
+        let valid_grant = mint_compact("lnc-newsman", "nonce-good-0001", "hub-shared-token-777");
+        let req_bad_bearer = Request::builder()
+            .method("POST")
+            .uri("/v1/app-connectors/lnc-newsman/mcp")
+            .header(header::HOST, "lnc-newsman:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer wrong-token")
+            .header("x-lnc-v4s-grant", &valid_grant)
+            .body(Body::from(rpc_body.clone()))
+            .unwrap();
+        let (st, _, _) = read_json(app.clone().oneshot(req_bad_bearer).await.unwrap()).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+        // 3. Valid Hub bearer + valid compact V4s grant -> 200 OK with MCP tools
+        let req_ok = Request::builder()
+            .method("POST")
+            .uri("/v1/app-connectors/lnc-newsman/mcp")
+            .header(header::HOST, "lnc-newsman:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer hub-shared-token-777")
+            .header("x-lnc-v4s-grant", &valid_grant)
+            .body(Body::from(rpc_body.clone()))
+            .unwrap();
+        let (st, _, mcp_res) = read_json(app.clone().oneshot(req_ok).await.unwrap()).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(!mcp_res["result"]["tools"].as_array().unwrap().is_empty());
+
+        // 4. Replay of exact same grant (`nonce-good-0001`) -> 403 Forbidden
+        let req_replay = Request::builder()
+            .method("POST")
+            .uri("/v1/app-connectors/lnc-newsman/mcp")
+            .header(header::HOST, "lnc-newsman:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer hub-shared-token-777")
+            .header("x-lnc-v4s-grant", &valid_grant)
+            .body(Body::from(rpc_body.clone()))
+            .unwrap();
+        let (st, _, _) = read_json(app.clone().oneshot(req_replay).await.unwrap()).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // 5. Wrong audience -> 403 Forbidden
+        let wrong_aud_grant = mint_compact("other-app", "nonce-wrong-aud-0002", "hub-shared-token-777");
+        let req_wrong_aud = Request::builder()
+            .method("POST")
+            .uri("/v1/app-connectors/lnc-newsman/mcp")
+            .header(header::HOST, "lnc-newsman:8000")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer hub-shared-token-777")
+            .header("x-lnc-v4s-grant", &wrong_aud_grant)
+            .body(Body::from(rpc_body))
+            .unwrap();
+        let (st, _, err_aud) = read_json(app.oneshot(req_wrong_aud).await.unwrap()).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert_eq!(err_aud["error"], "audience_denied");
     }
 }

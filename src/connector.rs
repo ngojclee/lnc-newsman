@@ -320,37 +320,30 @@ fn stored_setting(state: &SharedState, key: &str) -> Option<String> {
 
 pub fn resolve(state: &SharedState) -> Resolved {
     let cfg = &state.connector;
-    let (bearer, bearer_source) = match cfg.bearer.clone() {
-        Some(value) => (Some(value), Source::Env),
-        None => match stored(state, BEARER_SECRET) {
-            Some(value) => (Some(value), Source::Admin),
+    let (bearer, bearer_source) = match stored(state, BEARER_SECRET) {
+        Some(value) => (Some(value), Source::Admin),
+        None => match cfg.bearer.clone() {
+            Some(value) => (Some(value), Source::Env),
             None => (None, Source::Unset),
         },
     };
-    let (delegation_secret, secret_source) = match cfg.delegation_secret.clone() {
-        Some(value) => (Some(value), Source::Env),
-        None => match stored(state, DELEGATION_SECRET) {
-            Some(value) => (Some(value), Source::Admin),
+    let (delegation_secret, secret_source) = match stored(state, DELEGATION_SECRET) {
+        Some(value) => (Some(value), Source::Admin),
+        None => match cfg.delegation_secret.clone() {
+            Some(value) => (Some(value), Source::Env),
             None => (None, Source::Unset),
         },
     };
-    let (audience, audience_source) = match cfg.audience.clone() {
-        Some(value) => (value, Source::Env),
-        None => match stored_setting(state, AUDIENCE_KEY) {
-            Some(value) => (value, Source::Admin),
+    let (audience, audience_source) = match stored_setting(state, AUDIENCE_KEY) {
+        Some(value) => (value, Source::Admin),
+        None => match cfg.audience.clone() {
+            Some(value) => (value, Source::Env),
             None => (DEFAULT_AUDIENCE.to_string(), Source::Unset),
         },
     };
-    // The ceiling can only ever narrow. Whatever an operator types into
-    // `CONNECTOR_MAX_SCOPES` is intersected with the one scope this build implements,
-    // so a typo (`newsman:read `, `newsman:write`, a scope copied from another app)
-    // cannot make every delegated call fail with an unexplained 403. The admin endpoint
-    // still refuses an unsupported scope outright so the mistake is visible there; env
-    // is deploy-time and has no such moment, so it is filtered instead.
-    let requested = cfg
-        .max_scopes
-        .clone()
-        .or_else(|| stored_setting(state, MAX_SCOPES_KEY).map(|value| split_scopes(&value)))
+    let requested = stored_setting(state, MAX_SCOPES_KEY)
+        .map(|value| split_scopes(&value))
+        .or_else(|| cfg.max_scopes.clone())
         .unwrap_or_else(|| ALL_SCOPES.iter().map(|s| s.to_string()).collect());
     let max_scopes: Vec<String> = requested
         .into_iter()
@@ -729,14 +722,370 @@ pub fn verify_v4s_grant(
     })
 }
 
+fn active_bearer_candidates(state: &SharedState, resolved: &Resolved) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(ref b) = resolved.bearer
+        && !b.is_empty()
+    {
+        out.push(b.clone());
+    }
+    let hub_tok = crate::agent_bridge::resolve_hub_token(state);
+    if !hub_tok.is_empty() && !out.contains(&hub_tok) {
+        out.push(hub_tok);
+    }
+    out
+}
+
+fn active_signing_secrets(state: &SharedState, resolved: &Resolved) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(ref s) = resolved.delegation_secret
+        && !s.is_empty()
+    {
+        out.push(s.clone());
+    }
+    let hub_tok = crate::agent_bridge::resolve_hub_token(state);
+    if !hub_tok.is_empty() && !out.contains(&hub_tok) {
+        out.push(hub_tok);
+    }
+    if let Some(ref b) = resolved.bearer
+        && !b.is_empty()
+        && !out.contains(b)
+    {
+        out.push(b.clone());
+    }
+    out
+}
+
+fn decode_b64_any(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(s))
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(s))
+        .ok()
+}
+
+fn normalize_hub_scopes(raw_scopes: &[String], max_scopes: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in raw_scopes {
+        let t = s.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if matches!(t, "*" | "newsman:*" | "mcp:tools" | "mcp:*") {
+            for m in max_scopes {
+                if !out.contains(m) {
+                    out.push(m.clone());
+                }
+            }
+        } else if t == "mcp:read" || t == "read" {
+            let r = READ_SCOPE.to_string();
+            if max_scopes.contains(&r) && !out.contains(&r) {
+                out.push(r);
+            }
+        } else if !out.contains(&t.to_string()) {
+            out.push(t.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Verify `X-Lnc-V4s-Grant` across all 3 Rule T2 Contract A wire encodings:
+/// 1) Raw JSON `V4sGrant`, 2) Base64url-encoded `V4sGrant` JSON, or
+/// 3) `<base64url(claims_json)>.<hex_or_b64url_hmac_sha256>` compact Hub Contract A token.
+pub fn verify_any_v4s_header(
+    state: &SharedState,
+    secrets: &[String],
+    expected_audience: &str,
+    max_scopes: &[String],
+    raw_header: &str,
+    now_unix: i64,
+) -> Result<Caller, Denied> {
+    let trimmed = raw_header.trim();
+    if trimmed.is_empty() {
+        return Err(Denied::delegation());
+    }
+
+    // Format 3: `<payload_b64>.<sig>` compact Contract A token (matching lnc-ads / LNC-Agent-Hub)
+    if !trimmed.starts_with('{')
+        && let Some((payload_b64, sig_part)) = trimmed.split_once('.')
+        && !sig_part.contains('.')
+    {
+        let payload_bytes = decode_b64_any(payload_b64).ok_or_else(Denied::delegation)?;
+        let sig_ok = secrets.iter().any(|sec| {
+            let Some(expected_hex) = sign(sec, payload_b64) else {
+                return false;
+            };
+            if constant_time_eq(&expected_hex, &sig_part.to_ascii_lowercase()) {
+                return true;
+            }
+            if let Some(sig_bytes) = decode_b64_any(sig_part) {
+                let hex_from_b64: String = sig_bytes.iter().map(|b| format!("{b:02x}")).collect();
+                return constant_time_eq(&expected_hex, &hex_from_b64);
+            }
+            false
+        });
+        if !sig_ok {
+            return Err(Denied::delegation());
+        }
+        let val: serde_json::Value =
+            serde_json::from_slice(&payload_bytes).map_err(|_| Denied::delegation())?;
+        let aud = val
+            .get("aud")
+            .or_else(|| val.get("audience"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let expected_aud = expected_audience.trim();
+        if aud.is_empty() || (aud != expected_aud && aud != DEFAULT_AUDIENCE) {
+            return Err(Denied::audience());
+        }
+        if let Some(app_id) = val.get("app_id").and_then(|v| v.as_str()).map(str::trim)
+            && !app_id.is_empty()
+            && app_id != expected_aud
+            && app_id != DEFAULT_AUDIENCE
+        {
+            return Err(Denied::audience());
+        }
+        if let Some(iss) = val.get("iss").and_then(|v| v.as_str()).map(str::trim)
+            && !iss.is_empty()
+            && !iss.starts_with("lnc-agent-hub")
+            && !iss.starts_with("lnc-agents-hub")
+            && !iss.starts_with("lnc-mcp-hub")
+        {
+            return Err(Denied::delegation());
+        }
+        let ts = val
+            .get("ts")
+            .or_else(|| val.get("iat"))
+            .or_else(|| val.get("timestamp"))
+            .and_then(|v| v.as_i64())
+            .ok_or_else(Denied::delegation)?;
+        if (now_unix - ts).unsigned_abs() > MAX_SKEW_SECONDS {
+            return Err(Denied::delegation());
+        }
+        if let Some(exp) = val.get("exp").and_then(|v| v.as_i64())
+            && now_unix > exp
+        {
+            return Err(Denied::delegation());
+        }
+        let nonce = val
+            .get("nonce")
+            .or_else(|| val.get("jti"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if !valid_v4s_nonce(nonce) {
+            return Err(Denied::delegation());
+        }
+        let caller_agent = val
+            .get("caller_agent")
+            .or_else(|| val.get("sub"))
+            .or_else(|| val.get("agent_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("hub-agent")
+            .trim();
+        if !valid_v4s_id(caller_agent, 96) {
+            return Err(Denied::delegation());
+        }
+        let delegated_user = val
+            .get("delegated_user")
+            .or_else(|| val.get("user_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let raw_scopes: Vec<String> = if let Some(arr) = val.get("scopes").and_then(|v| v.as_array())
+        {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        } else if let Some(s) = val
+            .get("scope")
+            .or_else(|| val.get("scopes"))
+            .and_then(|v| v.as_str())
+        {
+            s.split([',', ' '])
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        } else {
+            max_scopes.to_vec()
+        };
+        let scopes = normalize_hub_scopes(&raw_scopes, max_scopes);
+        if scopes.is_empty()
+            || scopes
+                .iter()
+                .any(|s| !valid_scope(s) || !v4s_scope_within_ceiling(s, max_scopes))
+        {
+            return Err(Denied::scope());
+        }
+        let ctx_val = val
+            .get("resource_ctx")
+            .cloned()
+            .filter(|v| !v.is_null())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed_ctx: ResourceCtx =
+            serde_json::from_value(ctx_val).map_err(|_| Denied::delegation())?;
+        if !claim_nonce(state, nonce, now_unix.max(0) as u64) {
+            return Err(Denied::delegation());
+        }
+        return Ok(Caller {
+            client_id: caller_agent.to_string(),
+            app_id: Some(aud.to_string()),
+            scopes,
+            delegated_user: (!delegated_user.is_empty()).then(|| delegated_user.to_string()),
+            resource_ctx: Some(parsed_ctx),
+        });
+    }
+
+    // Format 1 or 2: Raw JSON or base64url-encoded JSON `V4sGrant`
+    let json_bytes: Vec<u8> = if trimmed.starts_with('{') {
+        trimmed.as_bytes().to_vec()
+    } else {
+        decode_b64_any(trimmed).ok_or_else(Denied::delegation)?
+    };
+    let mut grant: V4sGrant =
+        serde_json::from_slice(&json_bytes).map_err(|_| Denied::delegation())?;
+    let mapped_scopes = normalize_hub_scopes(&grant.scopes, max_scopes);
+    // Try exact signed grant scopes first, then mapped scopes if Hub sent wildcard/mcp:tools
+    let mut last_err = Denied::delegation();
+    for secret in secrets {
+        match verify_v4s_grant(state, secret, expected_audience, max_scopes, &grant, now_unix) {
+            Ok(caller) => return Ok(caller),
+            Err(e) => last_err = e,
+        }
+        if mapped_scopes != grant.scopes {
+            grant.scopes = mapped_scopes.clone();
+            if let Ok(caller) =
+                verify_v4s_grant(state, secret, expected_audience, max_scopes, &grant, now_unix)
+            {
+                return Ok(caller);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// Authenticate Rule T2 Contract A (`/v1/app-connectors/lnc-newsman/mcp`) using active
+/// Hub token or connector bearer + `X-Lnc-V4s-Grant` (falling back to `X-MCP-Hub-*` v3/v4/v4s).
+pub fn authenticate_contract_a(state: &SharedState, headers: &HeaderMap) -> Result<Caller, Denied> {
+    if stored_setting(state, "connector_revoked").as_deref() == Some("1") {
+        return Err(Denied::unauthorized());
+    }
+    let resolved = resolve(state);
+    let bearers = active_bearer_candidates(state, &resolved);
+    if bearers.is_empty() {
+        return Err(Denied::unauthorized());
+    }
+    let supplied = header_str(headers, "authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or_default();
+    if supplied.is_empty() || !bearers.iter().any(|exp| constant_time_eq(supplied, exp)) {
+        return Err(Denied::unauthorized());
+    }
+    let secrets = active_signing_secrets(state, &resolved);
+    if secrets.is_empty() {
+        return Err(Denied::unauthorized());
+    }
+    if let Some(raw_grant) = header_str(headers, "x-lnc-v4s-grant") {
+        return verify_any_v4s_header(
+            state,
+            &secrets,
+            &resolved.audience,
+            &resolved.max_scopes,
+            raw_grant,
+            crate::now() as i64,
+        );
+    }
+    if headers.contains_key(HEADER_CLIENT_ID) || headers.contains_key(HEADER_VERSION) {
+        return authenticate(state, headers);
+    }
+    Err(Denied::delegation())
+}
+
+pub async fn app_connector_health(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+) -> Response {
+    let mut res = Json(serde_json::json!({
+        "ok": true,
+        "service": "lnc-newsman",
+        "app_id": DEFAULT_AUDIENCE,
+        "version": state.cfg.version,
+        "status": "healthy",
+        "mcp": true,
+        "tool_count": crate::mcp::tools().len(),
+    }))
+    .into_response();
+    res.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, private"),
+    );
+    res
+}
+
+pub async fn app_connector_mcp_get(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    headers: HeaderMap,
+) -> Response {
+    if stored_setting(&state, "connector_revoked").as_deref() == Some("1") {
+        return crate::failure(StatusCode::UNAUTHORIZED, DENIED_BEARER);
+    }
+    let resolved = resolve(&state);
+    let bearers = active_bearer_candidates(&state, &resolved);
+    let supplied = header_str(&headers, "authorization")
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or_default();
+    if bearers.is_empty()
+        || supplied.is_empty()
+        || !bearers.iter().any(|exp| constant_time_eq(supplied, exp))
+    {
+        return crate::failure(StatusCode::UNAUTHORIZED, DENIED_BEARER);
+    }
+    Json(serde_json::json!({
+        "ok": true,
+        "app_id": DEFAULT_AUDIENCE,
+        "protocol": "mcp",
+        "contract": "app-connector-v1",
+        "tool_count": crate::mcp::tools().len(),
+    }))
+    .into_response()
+}
+
+pub async fn app_connector_mcp_post(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    match authenticate_contract_a(&state, &headers) {
+        Ok(caller) => {
+            let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&body) else {
+                return crate::failure(StatusCode::BAD_REQUEST, "invalid_json");
+            };
+            crate::mcp::handle(
+                axum::extract::State(state),
+                Some(axum::Extension(caller)),
+                Json(json_val),
+            )
+            .await
+        }
+        Err(denied) => denied.response(),
+    }
+}
+
 /// Verify the connector bearer and the delegation signature, in that order. Order
 /// matters: the bearer is the cheap check, and failing it must not advertise whether
 /// a signature would have been accepted.
 pub fn authenticate(state: &SharedState, headers: &HeaderMap) -> Result<Caller, Denied> {
-    if stored_setting(state, "connector_revoked").as_deref() == Some("1")
-        && !(state.connector.bearer.is_some() && state.connector.delegation_secret.is_some())
-    {
+    if stored_setting(state, "connector_revoked").as_deref() == Some("1") {
         return Err(Denied::unauthorized());
+    }
+    if headers.contains_key("x-lnc-v4s-grant") {
+        return authenticate_contract_a(state, headers);
     }
     let resolved = resolve(state);
     let (Some(expected_bearer), Some(secret)) =
@@ -1004,7 +1353,7 @@ pub async fn require_mcp(
         };
     }
     if crate::session_valid(&state, req.headers())
-        || crate::auth::has_api_key(req.headers(), &state.cfg.api_keys)
+        || crate::security::validate_api_key_request(&state, req.headers())
     {
         return next.run(req).await;
     }

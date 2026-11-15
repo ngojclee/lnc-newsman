@@ -69,8 +69,8 @@ export function Select({
     const menuWidth = Math.min(rawWidth, Math.max(140, window.innerWidth - 24))
     const maxLeft = Math.max(12, window.innerWidth - menuWidth - 12)
     const left = Math.min(Math.max(12, rect.left), maxLeft)
-    const below = window.innerHeight - rect.bottom - 16
-    const above = rect.top - 12
+    const below = window.innerHeight - rect.bottom - 36
+    const above = rect.top - 16
     const wanted = Math.min(300, Math.max(132, options.length * 42 + 12))
     const up = below < wanted && above > below
     setPlacement({
@@ -78,7 +78,7 @@ export function Select({
       width: menuWidth,
       top: up ? undefined : rect.bottom + 6,
       bottom: up ? Math.max(32, window.innerHeight - rect.top + 6) : undefined,
-      maxHeight: Math.max(120, Math.min(300, up ? rect.top - 38 : below)),
+      maxHeight: Math.max(96, Math.min(300, up ? rect.top - 18 : Math.max(96, below))),
       above: up,
     })
   }
@@ -96,16 +96,21 @@ export function Select({
       const target = event.target as Node
       if (!trigger.current?.contains(target) && !menu.current?.contains(target)) setOpen(false)
     }
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
     const onRouteOrHash = () => setOpen(false)
     window.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', place)
     window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('keydown', onKey)
     window.addEventListener('hashchange', onRouteOrHash)
     window.addEventListener('popstate', onRouteOrHash)
     return () => {
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', place)
       window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('keydown', onKey)
       window.removeEventListener('hashchange', onRouteOrHash)
       window.removeEventListener('popstate', onRouteOrHash)
     }
@@ -185,9 +190,7 @@ export function Select({
     }
   }
 
-  const host =
-    trigger.current?.closest<HTMLElement>('.app-shell, .reader-shell, .reader, .login-page') ??
-    document.body
+  const host = document.body
 
   const hasLabel = Boolean(label && label.trim().length > 0)
   const accessibleName = ariaLabel || label || selected?.label || 'Select'

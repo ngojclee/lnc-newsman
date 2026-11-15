@@ -1386,13 +1386,12 @@ pub(crate) fn load_bridge_config_db(conn: &Connection) -> BridgeConfigRow {
         cfg.astraea_url = std::env::var("ASTRAEA_URL").unwrap_or_default();
     }
     if cfg.hub_url.trim().is_empty() {
-        cfg.hub_url = std::env::var("AGENT_HUB_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
+        cfg.hub_url = crate::security::hub_url_from_env()
             .or_else(|| {
                 std::env::var("LNC_HUB_URL")
                     .ok()
-                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.trim().trim_end_matches('/').to_string())
+                    .filter(|s| !s.is_empty())
             })
             .unwrap_or_default();
     }
@@ -1429,20 +1428,19 @@ fn resolve_astraea_token(state: &SharedState) -> String {
 }
 
 pub(crate) fn resolve_hub_token(state: &SharedState) -> String {
+    if let Ok(db) = state.db.lock()
+        && db
+            .get_setting("hub_provider_revoked")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("1")
+    {
+        return String::new();
+    }
     read_vault_secret(state, SEC_HUB_TOKEN)
         .or_else(|| read_vault_secret(state, crate::hub::SECRET_NAME))
-        .or_else(|| {
-            std::env::var("AGENT_HUB_TOKEN")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .or_else(|| {
-            std::env::var("LNC_HUB_TOKEN")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
+        .or_else(crate::security::hub_token_from_env)
         .unwrap_or_default()
 }
 

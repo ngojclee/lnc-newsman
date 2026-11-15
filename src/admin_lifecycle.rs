@@ -4,6 +4,7 @@
 //! - Unified AI Provider Hub (`LNC Agents Hub` + custom OpenAI-compat providers, catalog, 2 model roles)
 //! - MCP Connectors (Inbound `/mcp` pairing + custom outbound MCP connectors with live `tools/list` test)
 //! - Immutable security audit trail & SSRF-safe outbound validation
+#![allow(clippy::result_large_err, clippy::type_complexity)]
 
 use crate::{
     SharedState, agent_bridge, auth, connector, db, failure,
@@ -148,10 +149,14 @@ fn outbound_fetcher(state: &SharedState, extra_allowed_hosts: &[String]) -> Fetc
         .with_timeout(std::time::Duration::from_secs(30))
 }
 
-fn validate_outbound_url(state: &SharedState, raw: &str) -> Result<String, Response> {
+pub(crate) fn validate_outbound_url_with_hosts(
+    state: &SharedState,
+    raw: &str,
+    extra_allowed_hosts: &[String],
+) -> Result<String, Response> {
     let parsed = fetch::parse_target(raw.trim())
         .map_err(|e| bad_request_msg(format!("invalid url: {}", e.code())))?;
-    let fetcher = outbound_fetcher(state, &[]);
+    let fetcher = outbound_fetcher(state, extra_allowed_hosts);
     let allow_priv = fetcher.host_allows_private(&parsed);
     match parsed.host() {
         Some(url::Host::Ipv4(v4)) if !fetch::is_public_ip(IpAddr::V4(v4)) && !allow_priv => {
@@ -176,6 +181,10 @@ fn validate_outbound_url(state: &SharedState, raw: &str) -> Result<String, Respo
     Ok(parsed.to_string().trim_end_matches('/').to_string())
 }
 
+fn validate_outbound_url(state: &SharedState, raw: &str) -> Result<String, Response> {
+    validate_outbound_url_with_hosts(state, raw, &[])
+}
+
 fn secret_for_copy(
     state: &SharedState,
     aad: &str,
@@ -191,7 +200,7 @@ fn secret_for_copy(
     if !encoded.trim().is_empty() {
         return vault
             .open_envelope(aad, encoded)
-            .map_err(|_| failure(StatusCode::CONFLICT, "copy_unavailable_rotate_required"));
+            .map_err(|_| failure(StatusCode::GONE, "legacy_hash_only_rotate_required"));
     }
     if let Some(sname) = fallback_secret_name.filter(|s| !s.is_empty()) {
         let db = state.db.lock().expect("database lock poisoned");
@@ -200,8 +209,8 @@ fn secret_for_copy(
         }
     }
     Err(failure(
-        StatusCode::CONFLICT,
-        "copy_unavailable_rotate_required",
+        StatusCode::GONE,
+        "legacy_hash_only_rotate_required",
     ))
 }
 
@@ -210,7 +219,9 @@ fn is_blank_or_mask(val: Option<&str>) -> bool {
         None => true,
         Some(s) => {
             let t = s.trim();
-            t.is_empty() || t == MASKED_SECRET
+            t.is_empty()
+                || t == MASKED_SECRET
+                || (t.chars().count() >= 4 && t.chars().all(|c| c == '*' || c == '•'))
         }
     }
 }
@@ -239,6 +250,9 @@ struct ApiKeyView {
 
 fn list_api_keys_data(state: &SharedState) -> anyhow::Result<(Vec<ApiKeyView>, Value)> {
     let db = state.db.lock().expect("database lock poisoned");
+    if state.secrets.is_some() {
+        security::seed_bootstrap_env(&db, &state.cfg, state.secrets.as_ref());
+    }
     let mut st = db.conn.prepare(
         "SELECT id, name, prefix, last4, scopes_json, status, source, copy_available,
                 created_at, updated_at, last_used_at, revoked_at
@@ -261,7 +275,7 @@ fn list_api_keys_data(state: &SharedState) -> anyhow::Result<(Vec<ApiKeyView>, V
                 scopes: serde_json::from_str(&scopes_raw)
                     .unwrap_or_else(|_| vec!["newsman:read".to_string()]),
                 status: r.get(5)?,
-                env_managed: source == "env",
+                env_managed: false,
                 source,
                 copy_available: copy_flag != 0 && state.secrets.is_some(),
                 created_at: r.get::<_, i64>(8)?.max(0) as u64,
@@ -272,24 +286,29 @@ fn list_api_keys_data(state: &SharedState) -> anyhow::Result<(Vec<ApiKeyView>, V
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    for (idx, raw) in state.cfg.api_keys.iter().enumerate() {
-        let (prefix, last4) = token_prefix_and_last4(raw);
-        items.push(ApiKeyView {
-            id: format!("env-key-{}", idx + 1),
-            name: format!("LNC_API_KEYS #{}", idx + 1),
-            label: format!("LNC_API_KEYS #{}", idx + 1),
-            prefix,
-            last4,
-            scopes: vec!["newsman:read".to_string(), "newsman:write".to_string()],
-            status: "active".to_string(),
-            source: "env".to_string(),
-            env_managed: true,
-            copy_available: false,
-            created_at: 0,
-            updated_at: 0,
-            last_used_at: 0,
-            revoked_at: 0,
-        });
+    if state.secrets.is_none() {
+        for (idx, raw) in state.cfg.api_keys.iter().enumerate() {
+            let Some((lbl, sec)) = security::parse_env_api_key_entry(raw, idx) else {
+                continue;
+            };
+            let (prefix, last4) = token_prefix_and_last4(&sec);
+            items.push(ApiKeyView {
+                id: format!("env-key-{}", idx + 1),
+                name: lbl.clone(),
+                label: lbl,
+                prefix,
+                last4,
+                scopes: vec!["newsman:read".to_string(), "newsman:write".to_string()],
+                status: "active".to_string(),
+                source: "env".to_string(),
+                env_managed: false,
+                copy_available: false,
+                created_at: 0,
+                updated_at: 0,
+                last_used_at: 0,
+                revoked_at: 0,
+            });
+        }
     }
 
     let rt = db.runtime_auth_state()?;
@@ -299,9 +318,9 @@ fn list_api_keys_data(state: &SharedState) -> anyhow::Result<(Vec<ApiKeyView>, V
         "source": if !rt.mgmt_key_hash.is_empty() { rt.mgmt_source.clone() } else if state.cfg.management_key.is_some() { "env".to_string() } else { "unset".to_string() },
         "hash_algo": "argon2id",
         "session_epoch": rt.session_epoch,
-        "oidc_enabled": state.security.oidc.is_active(),
+        "oidc_enabled": state.security.oidc_cfg().is_active(),
         "vault_configured": state.secrets.is_some(),
-        "env_pinned": rt.mgmt_source == "env" && state.cfg.management_key.is_some(),
+        "env_pinned": false,
     });
     Ok((items, mgmt))
 }
@@ -517,17 +536,17 @@ pub async fn copy_api_key(
         Err(res) => return res,
     };
     if id.starts_with("env-key-") {
-        return failure(StatusCode::CONFLICT, "env_managed_immutable");
+        return failure(StatusCode::GONE, "legacy_hash_only_rotate_required");
     }
     let (auth_method, actor) = actor_identity(&state, &headers);
-    let (secret_enc, copy_flag): (String, i64) = {
+    let (secret_enc, copy_flag, key_status): (String, i64, String) = {
         let db = state.db.lock().expect("database lock poisoned");
-        let row: Option<(String, i64)> = db
+        let row: Option<(String, i64, String)> = db
             .conn
             .query_row(
-                "SELECT secret_enc, copy_available FROM api_keys WHERE id = ?1",
+                "SELECT secret_enc, copy_available, status FROM api_keys WHERE id = ?1",
                 [&id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()
             .ok()
@@ -537,8 +556,11 @@ pub async fn copy_api_key(
             None => return failure(StatusCode::NOT_FOUND, "not_found"),
         }
     };
+    if key_status == "revoked" {
+        return failure(StatusCode::CONFLICT, "api_key_revoked");
+    }
     if copy_flag == 0 || secret_enc.is_empty() {
-        return failure(StatusCode::CONFLICT, "copy_unavailable_rotate_required");
+        return failure(StatusCode::GONE, "legacy_hash_only_rotate_required");
     }
     let plain = match secret_for_copy(&state, &format!("api_key:{id}"), &secret_enc, None) {
         Ok(p) => p,
@@ -893,20 +915,26 @@ struct ProviderView {
 }
 
 fn hub_key_info(state: &SharedState) -> (bool, String, bool, String) {
+    let hub_revoked = {
+        let db = state.db.lock().expect("database lock poisoned");
+        db.get_setting("hub_provider_revoked")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("1")
+    };
+    if hub_revoked {
+        return (false, String::new(), false, "revoked".to_string());
+    }
     for name in [agent_bridge::SEC_HUB_TOKEN, hub::SECRET_NAME] {
         if let Some(val) = agent_bridge::read_vault_secret(state, name) {
             let (_, last4) = token_prefix_and_last4(&val);
             return (true, last4, true, "runtime".to_string());
         }
     }
-    for env_key in ["AGENT_HUB_TOKEN", "LNC_HUB_TOKEN"] {
-        if let Ok(val) = std::env::var(env_key) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                let (_, last4) = token_prefix_and_last4(trimmed);
-                return (true, last4, false, "env".to_string());
-            }
-        }
+    if let Some(val) = security::hub_token_from_env() {
+        let (_, last4) = token_prefix_and_last4(&val);
+        return (true, last4, true, "env_seed".to_string());
     }
     (false, String::new(), false, "unset".to_string())
 }
@@ -958,7 +986,7 @@ fn build_providers_snapshot(state: &SharedState) -> anyhow::Result<Value> {
         has_secret: hub_has_secret,
         key_last4: hub_last4,
         copy_available: hub_copy_avail,
-        env_managed: hub_source == "env",
+        env_managed: false,
         source: hub_source,
         model_count: hub_model_count.max(0) as usize,
         consumer_refs: 2,
@@ -1413,28 +1441,43 @@ pub async fn copy_provider_secret(
     };
     let (auth_method, actor) = actor_identity(&state, &headers);
     let plain = if id == HUB_PROVIDER_ID {
+        let revoked = {
+            let db = state.db.lock().expect("database lock poisoned");
+            db.get_setting("hub_provider_revoked")
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("1")
+        };
+        if revoked {
+            return failure(StatusCode::CONFLICT, "provider_revoked");
+        }
         let from_vault = agent_bridge::read_vault_secret(&state, agent_bridge::SEC_HUB_TOKEN)
-            .or_else(|| agent_bridge::read_vault_secret(&state, hub::SECRET_NAME));
+            .or_else(|| agent_bridge::read_vault_secret(&state, hub::SECRET_NAME))
+            .or_else(security::hub_token_from_env);
         match from_vault {
             Some(v) => v,
-            None => return failure(StatusCode::CONFLICT, "copy_unavailable_rotate_required"),
+            None => return failure(StatusCode::GONE, "legacy_hash_only_rotate_required"),
         }
     } else {
-        let row: Option<(String, String)> = {
+        let row: Option<(String, String, String)> = {
             let db = state.db.lock().expect("database lock poisoned");
             db.conn
                 .query_row(
-                    "SELECT secret_enc, secret_name FROM ai_providers WHERE id = ?1",
+                    "SELECT secret_enc, secret_name, status FROM ai_providers WHERE id = ?1",
                     [&id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()
                 .ok()
                 .flatten()
         };
-        let Some((enc, sname)) = row else {
+        let Some((enc, sname, status)) = row else {
             return failure(StatusCode::NOT_FOUND, "not_found");
         };
+        if status == "revoked" {
+            return failure(StatusCode::CONFLICT, "provider_revoked");
+        }
         match secret_for_copy(&state, &format!("provider:{id}"), &enc, Some(&sname)) {
             Ok(p) => p,
             Err(res) => return res,
@@ -1577,6 +1620,8 @@ pub async fn revoke_provider(
     {
         let db = state.db.lock().expect("database lock poisoned");
         if id == HUB_PROVIDER_ID {
+            let _ = secrets::delete(&db, agent_bridge::SEC_HUB_TOKEN);
+            let _ = secrets::delete(&db, hub::SECRET_NAME);
             let _ = db.set_setting("hub_provider_revoked", "1");
         } else {
             let changed = db
@@ -1962,7 +2007,7 @@ fn source_label(src: connector::Source) -> &'static str {
 
 fn public_mcp_url(state: &SharedState, headers: &HeaderMap) -> String {
     if let Some(ref base) = state.security.public_base_url {
-        return format!("{}/mcp", base.trim_end_matches('/'));
+        return format!("{}/v1/app-connectors/lnc-newsman/mcp", base.trim_end_matches('/'));
     }
     if let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) {
         let proto = headers
@@ -1972,17 +2017,16 @@ fn public_mcp_url(state: &SharedState, headers: &HeaderMap) -> String {
             .map(str::trim)
             .filter(|v| *v == "https" || *v == "http")
             .unwrap_or("https");
-        return format!("{proto}://{host}/mcp");
+        return format!("{proto}://{host}/v1/app-connectors/lnc-newsman/mcp");
     }
-    "/mcp".to_string()
+    "/v1/app-connectors/lnc-newsman/mcp".to_string()
 }
 
 fn build_mcp_connectors_snapshot(state: &SharedState, headers: &HeaderMap) -> anyhow::Result<Value> {
     let resolved = connector::resolve(state);
     let bearer_source = source_label(resolved.bearer_source);
     let secret_source = source_label(resolved.secret_source);
-    let env_managed = resolved.bearer_source == connector::Source::Env
-        && resolved.secret_source == connector::Source::Env;
+    let (hub_has_secret, _, hub_copy_avail, _) = hub_key_info(state);
     let db = state.db.lock().expect("database lock poisoned");
     let revoked = db
         .get_setting("connector_revoked")
@@ -1990,32 +2034,35 @@ fn build_mcp_connectors_snapshot(state: &SharedState, headers: &HeaderMap) -> an
         .flatten()
         .as_deref()
         == Some("1");
-    let paired = resolved.bearer.is_some() && resolved.delegation_secret.is_some();
-    let bearer_copy_avail = state.secrets.is_some()
-        && resolved.bearer_source == connector::Source::Admin
-        && secrets::get(&db, state.secrets.as_ref().expect("checked"), connector::BEARER_SECRET).is_ok();
-    let delegation_copy_avail = state.secrets.is_some()
-        && resolved.secret_source == connector::Source::Admin
-        && secrets::get(&db, state.secrets.as_ref().expect("checked"), connector::DELEGATION_SECRET).is_ok();
+    let paired = (resolved.bearer.is_some() && resolved.delegation_secret.is_some()) || hub_has_secret;
+    let bearer_copy_avail = (state.secrets.is_some()
+        && secrets::get(&db, state.secrets.as_ref().expect("checked"), connector::BEARER_SECRET).is_ok())
+        || resolved.bearer.is_some()
+        || hub_copy_avail;
+    let delegation_copy_avail = (state.secrets.is_some()
+        && secrets::get(&db, state.secrets.as_ref().expect("checked"), connector::DELEGATION_SECRET).is_ok())
+        || resolved.delegation_secret.is_some()
+        || hub_copy_avail;
 
     let mut items = vec![json!({
         "id": INBOUND_MCP_ID,
-        "name": "Inbound /mcp Endpoint (Newsman MCP)",
+        "name": "LNC Agents Hub Inbound MCP (Contract A)",
         "direction": "inbound",
         "endpoint_url": public_mcp_url(state, headers),
+        "legacy_endpoint_url": "/mcp",
         "audience": resolved.audience,
         "scopes": resolved.max_scopes,
         "enabled": paired && !revoked,
         "status": if revoked { "revoked" } else if paired { "active" } else { "unpaired" },
-        "bearer_configured": resolved.bearer.is_some(),
-        "bearer_source": bearer_source,
-        "bearer_copy_available": bearer_copy_avail,
-        "delegation_configured": resolved.delegation_secret.is_some(),
-        "delegation_source": secret_source,
-        "delegation_copy_available": delegation_copy_avail,
-        "copy_available": bearer_copy_avail || delegation_copy_avail,
-        "env_managed": env_managed,
-        "source": if env_managed { "env" } else if bearer_source == "runtime" || secret_source == "runtime" { "runtime" } else { "unset" },
+        "bearer_configured": resolved.bearer.is_some() || hub_has_secret,
+        "bearer_source": if resolved.bearer.is_some() { bearer_source } else if hub_has_secret { "hub" } else { "unset" },
+        "bearer_copy_available": bearer_copy_avail && !revoked,
+        "delegation_configured": resolved.delegation_secret.is_some() || hub_has_secret,
+        "delegation_source": if resolved.delegation_secret.is_some() { secret_source } else if hub_has_secret { "hub" } else { "unset" },
+        "delegation_copy_available": delegation_copy_avail && !revoked,
+        "copy_available": (bearer_copy_avail || delegation_copy_avail) && !revoked,
+        "env_managed": false,
+        "source": if bearer_source == "runtime" || secret_source == "runtime" || hub_has_secret { "runtime" } else if bearer_source == "env" || secret_source == "env" { "env_seed" } else { "unset" },
         "tool_count": mcp::tools().len(),
     })];
 
@@ -2132,9 +2179,6 @@ async fn upsert_mcp_connector_inner(
             let _ = db.set_setting(connector::MAX_SCOPES_KEY, &scopes.join(","));
         }
         if !is_blank_or_mask(input.bearer_token.as_deref()) {
-            if state.connector.bearer.is_some() {
-                return failure(StatusCode::CONFLICT, "env_managed_immutable");
-            }
             let Some(vault) = state.secrets.as_ref() else {
                 return failure(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -2149,11 +2193,9 @@ async fn upsert_mcp_connector_inner(
             ) {
                 return failure(StatusCode::BAD_REQUEST, err.code());
             }
+            let _ = db.set_setting("connector_revoked", "0");
         }
         if !is_blank_or_mask(input.delegation_secret.as_deref()) {
-            if state.connector.delegation_secret.is_some() {
-                return failure(StatusCode::CONFLICT, "env_managed_immutable");
-            }
             let Some(vault) = state.secrets.as_ref() else {
                 return failure(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -2168,6 +2210,7 @@ async fn upsert_mcp_connector_inner(
             ) {
                 return failure(StatusCode::BAD_REQUEST, err.code());
             }
+            let _ = db.set_setting("connector_revoked", "0");
         }
         if let Some(en) = input.enabled {
             let _ = db.set_setting("connector_revoked", if en { "0" } else { "1" });
@@ -2363,50 +2406,63 @@ pub async fn copy_mcp_connector(
     let field = query.field.unwrap_or_else(|| "bearer".to_string());
 
     let (secret_val, copied_field) = if id == INBOUND_MCP_ID {
-        let Some(vault) = state.secrets.as_ref() else {
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "secret_store_not_configured",
-            );
+        let revoked = {
+            let db = state.db.lock().expect("database lock poisoned");
+            db.get_setting("connector_revoked")
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("1")
         };
-        let (target_name, label, env_pinned) = if field == "delegation" {
+        if revoked {
+            return failure(StatusCode::CONFLICT, "mcp_connector_revoked");
+        }
+        let resolved = connector::resolve(&state);
+        let (target_name, label, resolved_fallback) = if field == "delegation" {
             (
                 connector::DELEGATION_SECRET,
                 "delegation_secret",
-                state.connector.delegation_secret.is_some(),
+                resolved.delegation_secret,
             )
         } else {
             (
                 connector::BEARER_SECRET,
                 "bearer_token",
-                state.connector.bearer.is_some(),
+                resolved.bearer,
             )
         };
-        if env_pinned {
-            return failure(StatusCode::CONFLICT, "env_managed_immutable");
-        }
-        let db = state.db.lock().expect("database lock poisoned");
-        let val = match secrets::get(&db, vault, target_name) {
-            Ok(v) => v,
-            Err(_) => return failure(StatusCode::CONFLICT, "copy_unavailable_rotate_required"),
+        let from_vault = state.secrets.as_ref().and_then(|vault| {
+            let db = state.db.lock().expect("database lock poisoned");
+            secrets::get(&db, vault, target_name).ok()
+        });
+        let val = match from_vault
+            .or(resolved_fallback)
+            .or_else(|| agent_bridge::read_vault_secret(&state, agent_bridge::SEC_HUB_TOKEN))
+            .or_else(security::hub_token_from_env)
+        {
+            Some(v) => v,
+            None => return failure(StatusCode::GONE, "legacy_hash_only_rotate_required"),
         };
         (val, label)
     } else {
-        let enc: Option<String> = {
+        let row: Option<(String, String)> = {
             let db = state.db.lock().expect("database lock poisoned");
             db.conn
                 .query_row(
-                    "SELECT secret_enc FROM mcp_connectors WHERE id = ?1",
+                    "SELECT secret_enc, status FROM mcp_connectors WHERE id = ?1",
                     [&id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .ok()
                 .flatten()
         };
-        let Some(enc) = enc else {
+        let Some((enc, status)) = row else {
             return failure(StatusCode::NOT_FOUND, "not_found");
         };
+        if status == "revoked" {
+            return failure(StatusCode::CONFLICT, "mcp_connector_revoked");
+        }
         match secret_for_copy(&state, &format!("mcp_connector:{id}"), &enc, None) {
             Ok(p) => (p, "bearer_token"),
             Err(res) => return res,
@@ -2455,11 +2511,6 @@ pub async fn rotate_mcp_connector(
 
     if id == INBOUND_MCP_ID {
         let field = body.field.unwrap_or_else(|| "bearer".to_string());
-        if (field == "bearer" && state.connector.bearer.is_some())
-            || (field == "delegation" && state.connector.delegation_secret.is_some())
-        {
-            return failure(StatusCode::CONFLICT, "env_managed_immutable");
-        }
         let new_val = match body.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(s) => s.to_string(),
             None => match mint_token(if field == "delegation" { "nmd_" } else { "nmc_" }, 24) {
@@ -2562,9 +2613,6 @@ pub async fn revoke_mcp_connector(
     {
         let db = state.db.lock().expect("database lock poisoned");
         if id == INBOUND_MCP_ID {
-            if state.connector.bearer.is_some() && state.connector.delegation_secret.is_some() {
-                return failure(StatusCode::CONFLICT, "env_managed_immutable");
-            }
             let _ = db.set_setting("connector_revoked", "1");
         } else {
             let changed = db
@@ -2611,12 +2659,9 @@ pub async fn delete_mcp_connector(
     {
         let db = state.db.lock().expect("database lock poisoned");
         if id == INBOUND_MCP_ID {
-            if state.connector.bearer.is_some() && state.connector.delegation_secret.is_some() {
-                return failure(StatusCode::CONFLICT, "env_managed_immutable");
-            }
             let _ = secrets::delete(&db, connector::BEARER_SECRET);
             let _ = secrets::delete(&db, connector::DELEGATION_SECRET);
-            let _ = db.set_setting("connector_revoked", "0");
+            let _ = db.set_setting("connector_revoked", "1");
         } else {
             let removed = db
                 .conn

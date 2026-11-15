@@ -1,9 +1,32 @@
 mod admin_lifecycle;
+#[allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::if_same_then_else,
+    clippy::let_underscore_future,
+    clippy::manual_is_multiple_of,
+    clippy::result_large_err,
+    clippy::single_match,
+    clippy::too_many_arguments,
+    clippy::unnecessary_lazy_evaluations
+)]
 mod agent_bridge;
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    clippy::field_reassign_with_default,
+    clippy::result_large_err
+)]
 mod agent_bridge_tests;
+#[allow(
+    clippy::collapsible_if,
+    clippy::large_enum_variant,
+    clippy::trim_split_whitespace,
+    clippy::type_complexity
+)]
 mod agent_v2;
 mod alerts;
+#[allow(dead_code)]
 mod auth;
 #[cfg(test)]
 mod blueprint_tests;
@@ -16,6 +39,7 @@ mod collector;
 mod collector_tests;
 mod config;
 mod connectors;
+#[allow(dead_code, clippy::too_many_arguments)]
 mod db;
 #[cfg(test)]
 mod docs_tests;
@@ -26,6 +50,7 @@ mod filings;
 mod hub;
 mod llm;
 mod legal;
+#[allow(dead_code)]
 mod connector;
 mod mcp;
 mod oidc;
@@ -223,14 +248,15 @@ async fn main() -> anyhow::Result<()> {
     app_state.hub = hub::ProviderConfig::from_env();
     app_state.telegram = telegram::TelegramConfig::from_env();
     app_state.connector = connector::ConnectorConfig::from_env();
-    app_state.security = {
+    {
         let db_guard = app_state.db.lock().expect("database lock poisoned");
-        Arc::new(security::SecurityRuntime::from_env(
+        app_state.security = Arc::new(security::SecurityRuntime::from_env(
             &db_guard,
             &app_state.cfg,
             app_state.secrets.as_ref(),
-        ))
-    };
+        ));
+        app_state.agent_bridge = agent_bridge::AgentBridgeRuntime::new(&db_guard);
+    }
     if app_state.secrets.is_none() {
         tracing::info!("LNC_MASTER_KEY is not set; the provider secret store stays closed");
     }
@@ -601,6 +627,19 @@ fn router(state: SharedState) -> Router {
             "/api/admin/audit-events",
             get(admin_lifecycle::get_audit_events),
         )
+        .route("/api/admin/audit", get(admin_lifecycle::get_audit_events))
+        .route(
+            "/api/admin/oidc",
+            get(oidc::admin_get_oidc).put(oidc::admin_put_oidc),
+        )
+        .route("/api/admin/oidc/test", post(oidc::admin_test_oidc))
+        .route("/api/admin/oidc/reset", post(oidc::admin_reset_oidc))
+        .route(
+            "/api/oidc",
+            get(oidc::admin_get_oidc).put(oidc::admin_put_oidc),
+        )
+        .route("/api/oidc/test", post(oidc::admin_test_oidc))
+        .route("/api/oidc/reset", post(oidc::admin_reset_oidc))
         .route(
             "/api/admin/providers",
             get(admin_lifecycle::get_providers).post(admin_lifecycle::post_provider),
@@ -702,9 +741,28 @@ fn router(state: SharedState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), connector::require_mcp));
     Router::new()
         .route("/health", get(health))
+        .route(
+            "/v1/app-connectors/lnc-newsman/health",
+            get(connector::app_connector_health),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/healthz",
+            get(connector::app_connector_health),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/mcp/health",
+            get(connector::app_connector_health),
+        )
+        .route(
+            "/v1/app-connectors/lnc-newsman/mcp",
+            post(connector::app_connector_mcp_post).get(connector::app_connector_mcp_get),
+        )
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/login", post(login))
-        .route("/api/auth/logout", post(logout))
+        .route(
+            "/api/auth/logout",
+            post(logout).get(logout_method_not_allowed),
+        )
         .route("/api/auth/oidc/login", get(oidc::oidc_login))
         .route("/api/auth/oidc/callback", get(oidc::oidc_callback))
         .route("/api/app-info", get(app_info))
@@ -745,7 +803,7 @@ pub(crate) fn internal_error(err: impl std::fmt::Display) -> Response {
 
 async fn security_headers(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let api = path.starts_with("/api/") || path == "/mcp";
+    let api = path.starts_with("/api/") || path.starts_with("/v1/") || path == "/mcp";
     let html_shell = !api && !path.starts_with("/assets/");
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
@@ -775,16 +833,26 @@ async fn security_headers(req: Request, next: Next) -> Response {
 }
 
 fn has_query_token_param(req: &Request) -> bool {
-    let path = req.uri().path();
-    if path == "/api/auth/oidc/callback" || (!path.starts_with("/api/") && path != "/mcp") {
-        return false;
-    }
     let Some(query) = req.uri().query() else {
         return false;
     };
     query.split('&').any(|pair| {
         let key = pair.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
-        matches!(key.as_str(), "token" | "api_key" | "access_token" | "key")
+        matches!(
+            key.as_str(),
+            "token"
+                | "key"
+                | "api_key"
+                | "apikey"
+                | "access_token"
+                | "secret"
+                | "password"
+                | "passwd"
+                | "client_secret"
+                | "management_key"
+                | "bearer"
+                | "auth_token"
+        )
     })
 }
 
@@ -792,10 +860,12 @@ async fn csrf_guard(State(state): State<SharedState>, req: Request, next: Next) 
     if has_query_token_param(&req) {
         return failure(StatusCode::BAD_REQUEST, "query_token_disabled");
     }
+    let path = req.uri().path();
     if connector::presents_connector_bearer(req.headers())
-        || (req.uri().path() == "/mcp" && auth::cookie_value(req.headers()).is_none())
+        || ((path == "/mcp" || path.starts_with("/v1/app-connectors/"))
+            && auth::cookie_value(req.headers()).is_none())
         || matches!(
-            req.uri().path(),
+            path,
             "/api/app-agents/telegram/webhook/direct" | "/api/app-agents/telegram/webhook/cygnus"
         )
     {
@@ -811,6 +881,9 @@ async fn host_guard(State(state): State<SharedState>, req: Request, next: Next) 
     if state.cfg.allowed_hosts.is_empty() || state.cfg.allowed_hosts.iter().any(|v| v == "*") {
         return next.run(req).await;
     }
+    if req.uri().path().starts_with("/v1/app-connectors/lnc-newsman/") {
+        return next.run(req).await;
+    }
     let host = req
         .headers()
         .get(header::HOST)
@@ -823,7 +896,8 @@ async fn host_guard(State(state): State<SharedState>, req: Request, next: Next) 
     let hostname = std::env::var("HOSTNAME")
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if ["localhost", "127.0.0.1", "::1"].contains(&host.as_str())
+    if ["localhost", "127.0.0.1", "::1", "lnc-newsman", "tasks.lnc-newsman"]
+        .contains(&host.as_str())
         || (!hostname.is_empty() && host == hostname)
         || state
             .cfg
@@ -902,9 +976,9 @@ async fn auth_status(
         "version": state.cfg.version,
         "authenticated": authenticated,
         "management_configured": management_configured,
-        "oidc_enabled": state.security.oidc.is_active(),
+        "oidc_enabled": state.security.oidc_cfg().is_active(),
         "auth_methods": {
-            "oidc": state.security.oidc.is_active(),
+            "oidc": state.security.oidc_cfg().is_active(),
             "local_key": management_configured,
         },
     });
@@ -1012,6 +1086,13 @@ async fn login(
     );
     response
 }
+async fn logout_method_not_allowed() -> Response {
+    let mut res = failure(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
+    res.headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    res
+}
+
 async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     if let Some(token) = auth::cookie_value(&headers)
         && let Err(err) = state

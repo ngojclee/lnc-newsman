@@ -90,7 +90,11 @@ impl ProviderConfig {
                 .filter(|value| !value.is_empty())
         };
         Self {
-            base_url: env("HUB_BASE_URL").map(|value| value.trim_end_matches('/').to_string()),
+            base_url: env("LNC_AGENTS_HUB_URL")
+                .or_else(|| env("LNC_AGENT_HUB_URL"))
+                .or_else(|| env("AGENT_HUB_URL"))
+                .or_else(|| env("HUB_BASE_URL"))
+                .map(|value| value.trim_end_matches('/').to_string()),
             allowed_hosts: std::env::var("HUB_ALLOWED_HOSTS")
                 .unwrap_or_default()
                 .split(',')

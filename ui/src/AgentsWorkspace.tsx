@@ -2493,28 +2493,13 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           : 'Only needed to override the Astraea WS/HTTP relay target or allow additional internal hosts.'}
                       </p>
 
-                      <div className="catalog-form-row">
-                        <label className="field">
-                          <span>{c.bridgeAstraeaUrl}</span>
-                          <input
-                            value={connForm.astraea_url}
-                            placeholder=""
-                            onChange={(e) =>
-                              setConnForm((p) => ({ ...p, astraea_url: e.target.value }))
-                            }
-                          />
-                        </label>
-                        <label className="field">
-                          <span>{c.bridgeAstraeaToken}</span>
-                          <input
-                            type="password"
-                            value={connForm.astraea_token}
-                            placeholder={bridgeStatus.has_astraea_token ? '••••••••' : ''}
-                            onChange={(e) =>
-                              setConnForm((p) => ({ ...p, astraea_token: e.target.value }))
-                            }
-                          />
-                        </label>
+                      <div className="chip-row" style={{ margin: '8px 0' }}>
+                        <span className={bridgeStatus.has_astraea_token ? 'bp-chip ok' : 'bp-chip muted'}>
+                          Astraea: {bridgeStatus.has_astraea_token ? c.bridgeTokenSaved : 'unset'}
+                        </span>
+                        <a className="btn secondary btn-sm" href="#mcp-connectors">
+                          {uiLang === 'vi' ? 'Quản lý tại Trình kết nối MCP ↗' : 'Manage in MCP Connectors ↗'}
+                        </a>
                       </div>
                       <label className="field">
                         <span>{c.bridgeAllowedHosts}</span>
