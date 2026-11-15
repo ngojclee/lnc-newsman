@@ -17,18 +17,20 @@ use chrono::{Duration as ChronoDuration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::SharedState;
 use crate::agent_bridge::{
     ActiveViewContext, AgentMessage, AgentThread, AppAgentConfig, ApprovalRequiredMeta,
-    BridgeConfigRow, InboundTelegramMessage, LlmEndpoint, MIGRATION_0025_SQL, TurnOptions,
-    apply_vault_secret_patch, bad_request, bridge_fetcher, call_chat_completion_with_backup,
-    chat_completions_url, effective_hub_base, ensure_telegram_route_thread_db,
-    execute_turn_orchestrator_with_options, get_agent_db, get_thread_db, insert_message_db,
-    list_messages_db, list_telegram_routes_db, load_hub_bundle_cache_db, models_list_url, new_id,
-    outcome_json, persist_bridge_config_row, read_vault_secret, resolve_fast_model,
-    resolve_hub_token, resolve_llm_endpoint, resolve_smart_model, send_outbound_telegram_reply,
-    update_message_v2_meta_db, upsert_agent_conn,
+    BridgeConfigRow, HubSkillSummary, InboundTelegramMessage, LlmEndpoint, MIGRATION_0025_SQL,
+    TurnOptions, apply_vault_secret_patch, bad_request, bridge_fetcher,
+    call_chat_completion_with_backup, chat_completions_url, effective_hub_base,
+    ensure_telegram_route_thread_db, execute_turn_orchestrator_with_options, get_agent_db,
+    get_thread_db, insert_message_db, list_messages_db, list_skills_db, list_telegram_routes_db,
+    load_hub_bundle_cache_db, models_list_url, new_id, outcome_json, persist_bridge_config_row,
+    read_vault_secret, resolve_fast_model, resolve_hub_token, resolve_llm_endpoint,
+    resolve_smart_model, send_outbound_telegram_reply, update_message_v2_meta_db,
+    upsert_agent_conn,
 };
 use crate::fetch::{is_public_ip, parse_target};
 
@@ -143,6 +145,43 @@ pub(crate) fn ensure_v2_columns_and_tables(conn: &Connection) -> Result<()> {
             &format!("ALTER TABLE app_telegram_routes ADD COLUMN {col} {def}"),
         )?;
     }
+
+    // app_agent_model_catalog v2.1 / v2.2 columns
+    for (col, def) in [
+        ("capability_overrides_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("last_test_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+        ("detected_context_window", "INTEGER"),
+    ] {
+        ensure_column(
+            conn,
+            "app_agent_model_catalog",
+            col,
+            &format!("ALTER TABLE app_agent_model_catalog ADD COLUMN {col} {def}"),
+        )?;
+    }
+
+    // app_agent_skills_cache v2.2 pinned column
+    ensure_column(
+        conn,
+        "app_agent_skills_cache",
+        "pinned",
+        "ALTER TABLE app_agent_skills_cache ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+    )?;
+
+    // app_agent_custom_skills v2.2 table for `+ Create Skill` & pin persistence
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_agent_custom_skills (
+            slug TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            skill_md TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            slash_command TEXT NOT NULL DEFAULT '',
+            pinned INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );",
+    )?;
 
     let now = Utc::now().to_rfc3339();
     for (ns, name, desc, count) in [
@@ -747,33 +786,66 @@ pub(crate) async fn maybe_auto_title_thread(
 }
 
 // ---------------------------------------------------------------------------
-// Manifest & Capabilities
+// Manifest & Capabilities (lnc-app-agents v2.2)
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn get_manifest(State(state): State<SharedState>) -> Response {
     let cfg = state.agent_bridge.config();
+    let skills_manifest: Vec<Value> = {
+        let db = state.db.lock().expect("database lock poisoned");
+        list_skills_db(&db.conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|sk| sk.granted && sk.enabled)
+            .map(|sk| {
+                let source = match sk.source.as_str() {
+                    "custom" => "custom",
+                    "hub" => "hub",
+                    _ => "app",
+                };
+                let mut tags = sk.group_slugs.clone();
+                if !sk.category.trim().is_empty() && !tags.iter().any(|t| t == &sk.category) {
+                    tags.insert(0, sk.category.clone());
+                }
+                json!({
+                    "slug": sk.slug,
+                    "name": sk.display_name,
+                    "description": sk.description,
+                    "source": source,
+                    "pinned": sk.pinned,
+                    "slash_command": format!("/{}", sk.slug),
+                    "tags": tags,
+                    "skill_md": sk.body_md,
+                })
+            })
+            .collect()
+    };
+    let caps = json!({
+        "voice_tts": false,
+        "voice_stt": false,
+        "image_gen": false,
+        "co_writer": true,
+        "group_rooms": true,
+        "telegram": true,
+        "memory_graph": true,
+        "thread_branching": true,
+        "ask_user": true,
+        "custom_providers": true,
+        "model_catalog": true,
+        "mcp_namespaces": true
+    });
     Json(json!({
         "ok": true,
-        "protocol_version": "2.0",
+        "protocol_version": "2.2",
         "app_id": "lnc-newsman",
         "app_name": "LNC Newsman",
         "display_name": "LNC Newsman",
         "app_version": env!("CARGO_PKG_VERSION"),
-        "capabilities": {
-            "voice_tts": false,
-            "voice_stt": false,
-            "image_gen": false,
-            "co_writer": true,
-            "group_rooms": true,
-            "telegram": true,
-            "memory_graph": true,
-            "thread_branching": true,
-            "ask_user": true,
-            "custom_providers": true,
-            "model_catalog": true,
-            "mcp_namespaces": true
-        },
+        "capabilities": caps,
+        "features": caps,
         "scope_kinds": ["region", "series", "topic"],
+        "workspace_tabs": ["activity", "notes", "preview", "artifact", "memory"],
+        "skills": skills_manifest,
         "ui_defaults": {
             "interface_language": cfg.interface_language,
             "model_output_language": cfg.model_output_language,
@@ -827,8 +899,131 @@ pub(crate) async fn get_manifest(State(state): State<SharedState>) -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// Model Catalog + Fetch + Dual Global Roles (Smart & Fast)
+// Model Catalog + Fetch + Bulk Import + Fingerprints + Custom Skills (v2.2)
 // ---------------------------------------------------------------------------
+
+/// Heuristic capability inference from model_id (`(reasoning, vision, tools, embedding, context_window)`).
+pub fn infer_model_capabilities(model_id: &str) -> (bool, bool, bool, bool, i64) {
+    let lower = model_id.trim().to_ascii_lowercase();
+    let is_embedding =
+        lower.contains("embed") || lower.contains("bge-") || lower.contains("text-embedding");
+    let reasoning = !is_embedding
+        && (lower.starts_with("o1")
+            || lower.starts_with("o3")
+            || lower.starts_with("o4")
+            || lower.contains("gpt-5")
+            || lower.contains("deepseek-r1")
+            || lower.contains("claude-3-7")
+            || lower.contains("claude-sonnet-4")
+            || lower.contains("claude-opus-4")
+            || lower.contains("gemini-2.5")
+            || lower.contains("qwq"));
+    let vision = !is_embedding
+        && (lower.contains("gpt-4o")
+            || lower.contains("gpt-5")
+            || lower.contains("claude-3")
+            || lower.contains("claude-sonnet-4")
+            || lower.contains("claude-opus-4")
+            || lower.contains("gemini")
+            || lower.contains("vl"));
+    let tools = !is_embedding;
+    let ctx = if lower.contains("claude") || lower.contains("gpt-5") || lower.contains("o3") {
+        200_000
+    } else if lower.contains("gemini") {
+        1_000_000
+    } else {
+        128_000
+    };
+    (reasoning, vision, tools, is_embedding, ctx)
+}
+
+pub fn capabilities_vec_from_inferred(model_id: &str) -> (Vec<String>, i64) {
+    let (reasoning, vision, tools, embedding, ctx) = infer_model_capabilities(model_id);
+    if embedding {
+        return (vec!["embedding".to_string()], ctx);
+    }
+    let mut caps = vec!["text".to_string()];
+    if reasoning {
+        caps.push("reasoning".to_string());
+    }
+    if vision {
+        caps.push("vision".to_string());
+    }
+    if tools {
+        caps.push("tools".to_string());
+    }
+    (caps, ctx)
+}
+
+/// Deterministic SHA-256 fingerprint over `(provider_id, model_id, base_url, api_key, capability_overrides_json)`.
+/// Never exposes or logs `api_key` in the hex digest.
+pub fn model_config_fingerprint(
+    provider_id: &str,
+    model_id: &str,
+    base_url: &str,
+    api_key: &str,
+    capability_overrides_json: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lnc-model-fp-v1\0");
+    hasher.update(provider_id.trim().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(model_id.trim().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(base_url.trim().trim_end_matches('/').as_bytes());
+    hasher.update(b"\0");
+    hasher.update(api_key.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(capability_overrides_json.trim().as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
+}
+
+/// Embedding vector dimension guard: prevents mixing incompatible embedding models
+/// (e.g. `1536` vs `3072`) against an existing vector index.
+pub fn check_embedding_dimension_guard(
+    expected_dim: Option<usize>,
+    observed_dim: usize,
+) -> std::result::Result<(), String> {
+    if observed_dim == 0 {
+        return Err("embedding returned zero-length vector".to_string());
+    }
+    if let Some(exp) = expected_dim
+        && exp != observed_dim
+    {
+        return Err(format!(
+            "embedding dimension mismatch: index expects {exp}, model returned {observed_dim}. Re-index before switching embedding model."
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_capability_overrides_json(raw: Option<&Value>, fallback_str: Option<&str>) -> String {
+    if let Some(Value::Object(map)) = raw {
+        let mut clean = serde_json::Map::new();
+        for (k, v) in map {
+            if let Some(s) = v.as_str() {
+                let norm = match s.trim() {
+                    "enabled" | "disabled" | "auto" => s.trim(),
+                    _ => continue,
+                };
+                clean.insert(k.clone(), Value::String(norm.to_string()));
+            }
+        }
+        return serde_json::to_string(&Value::Object(clean)).unwrap_or_else(|_| "{}".into());
+    }
+    if let Some(s) = fallback_str {
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(s) {
+            return normalize_capability_overrides_json(Some(&Value::Object(map)), None);
+        }
+    }
+    "{}".to_string()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ModelCatalogEntry {
@@ -837,6 +1032,10 @@ pub(crate) struct ModelCatalogEntry {
     pub provider: String,
     pub capabilities: Vec<String>,
     pub context_window: Option<i64>,
+    pub detected_context_window: Option<i64>,
+    pub capability_overrides_json: String,
+    pub capability_overrides: Value,
+    pub last_test_fingerprint: String,
     pub enabled: bool,
     pub source: String,
     pub last_fetched_at: String,
@@ -845,18 +1044,28 @@ pub(crate) struct ModelCatalogEntry {
 fn list_catalog_entries_db(conn: &Connection) -> Result<Vec<ModelCatalogEntry>> {
     let mut st = conn.prepare(
         "SELECT model_id, display_name, provider, capabilities_json, context_window, \
-                enabled, source, last_fetched_at \
+                enabled, source, last_fetched_at, \
+                COALESCE(capability_overrides_json, '{}'), \
+                COALESCE(last_test_fingerprint, ''), \
+                detected_context_window \
          FROM app_agent_model_catalog \
          ORDER BY enabled DESC, provider ASC, display_name ASC",
     )?;
     let rows = st.query_map([], |r| {
         let caps_raw: String = r.get(3)?;
+        let overrides_raw: String = r.get(8)?;
+        let overrides_val: Value =
+            serde_json::from_str(&overrides_raw).unwrap_or_else(|_| json!({}));
         Ok(ModelCatalogEntry {
             model_id: r.get(0)?,
             display_name: r.get(1)?,
             provider: r.get(2)?,
             capabilities: serde_json::from_str(&caps_raw).unwrap_or_else(|_| vec!["text".into()]),
             context_window: r.get(4)?,
+            detected_context_window: r.get(10)?,
+            capability_overrides_json: overrides_raw,
+            capability_overrides: overrides_val,
+            last_test_fingerprint: r.get(9)?,
             enabled: r.get::<_, i64>(5)? != 0,
             source: r.get(6)?,
             last_fetched_at: r.get(7)?,
@@ -878,7 +1087,11 @@ pub(crate) fn catalog_models_for_state(state: &SharedState) -> Option<(bool, Vec
                 "name": e.display_name,
                 "provider": e.provider,
                 "capabilities": e.capabilities,
-                "context_window": e.context_window,
+                "context_window": e.detected_context_window.or(e.context_window),
+                "detected_context_window": e.detected_context_window,
+                "capability_overrides": e.capability_overrides,
+                "capability_overrides_json": e.capability_overrides_json,
+                "last_test_fingerprint": e.last_test_fingerprint,
                 "source": e.source,
                 "enabled": e.enabled,
             })
@@ -1105,28 +1318,41 @@ pub(crate) async fn post_models_fetch(State(state): State<SharedState>) -> Respo
             .unwrap_or(0);
         let initial_enable = prior_enabled == 0;
         for (model_id, display_name, provider, caps, ctx_win, source_tag) in deduped {
-            let caps_json = serde_json::to_string(&caps).unwrap_or_else(|_| "[\"text\"]".into());
+            let (inferred_caps, inferred_ctx) = capabilities_vec_from_inferred(&model_id);
+            let final_caps = if caps.len() <= 1 && caps.first().map(String::as_str) == Some("text") {
+                inferred_caps
+            } else {
+                caps
+            };
+            let caps_json =
+                serde_json::to_string(&final_caps).unwrap_or_else(|_| "[\"text\"]".into());
+            let detected_ctx = ctx_win.or(Some(inferred_ctx));
+            let fp = model_config_fingerprint(&provider, &model_id, &hub_base, &hub_token, "{}");
             let en_val = if initial_enable { 1_i64 } else { 0_i64 };
             if let Err(err) = db.conn.execute(
                 "INSERT INTO app_agent_model_catalog \
-                 (model_id, display_name, provider, capabilities_json, context_window, enabled, source, last_fetched_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                 (model_id, display_name, provider, capabilities_json, context_window, enabled, source, last_fetched_at, last_test_fingerprint, detected_context_window) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
                  ON CONFLICT(model_id) DO UPDATE SET \
                      display_name = excluded.display_name, \
                      provider = excluded.provider, \
                      capabilities_json = excluded.capabilities_json, \
                      context_window = COALESCE(excluded.context_window, app_agent_model_catalog.context_window), \
                      source = excluded.source, \
-                     last_fetched_at = excluded.last_fetched_at",
+                     last_fetched_at = excluded.last_fetched_at, \
+                     last_test_fingerprint = excluded.last_test_fingerprint, \
+                     detected_context_window = COALESCE(excluded.detected_context_window, app_agent_model_catalog.detected_context_window)",
                 params![
                     model_id,
                     display_name,
                     provider,
                     caps_json,
-                    ctx_win,
+                    detected_ctx,
                     en_val,
                     source_tag,
-                    now
+                    now,
+                    fp,
+                    ctx_win
                 ],
             ) {
                 return internal_error(err);
@@ -1197,6 +1423,571 @@ pub(crate) async fn patch_models_catalog(
         }
     };
     Json(json!({ "ok": true, "items": items })).into_response()
+}
+
+fn default_preserve_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpsertModelInput {
+    pub model_id: String,
+    pub previous_model_id: Option<String>,
+    pub display_name: Option<String>,
+    pub provider: Option<String>,
+    pub capabilities: Option<Vec<String>>,
+    pub context_window: Option<i64>,
+    pub detected_context_window: Option<i64>,
+    pub capability_overrides: Option<Value>,
+    pub capability_overrides_json: Option<String>,
+    pub enabled: Option<bool>,
+    pub source: Option<String>,
+}
+
+pub(crate) async fn post_models_upsert(
+    State(state): State<SharedState>,
+    Json(input): Json<UpsertModelInput>,
+) -> Response {
+    let model_id = input.model_id.trim().to_string();
+    if model_id.is_empty() {
+        return bad_request("model_id is required");
+    }
+    let cfg = state.agent_bridge.config();
+    let hub_base = effective_hub_base(&state, &cfg);
+    let hub_token = resolve_hub_token(&state);
+    let now = Utc::now().to_rfc3339();
+    let (inferred_caps, inferred_ctx) = capabilities_vec_from_inferred(&model_id);
+    let caps = input
+        .capabilities
+        .filter(|c| !c.is_empty())
+        .unwrap_or(inferred_caps);
+    let caps_json = serde_json::to_string(&caps).unwrap_or_else(|_| "[\"text\"]".into());
+    let overrides_json = normalize_capability_overrides_json(
+        input.capability_overrides.as_ref(),
+        input.capability_overrides_json.as_deref(),
+    );
+    let provider = input
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("hub")
+        .to_string();
+    let display_name = input
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&model_id)
+        .to_string();
+    let ctx_win = input.context_window.or(Some(inferred_ctx));
+    let detected_ctx = input.detected_context_window;
+    let source = input
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("manual")
+        .to_string();
+    let fp = model_config_fingerprint(&provider, &model_id, &hub_base, &hub_token, &overrides_json);
+
+    let items = {
+        let mut db = state.db.lock().expect("database lock poisoned");
+        let tx = match db.conn.transaction() {
+            Ok(t) => t,
+            Err(err) => return internal_error(err),
+        };
+        if let Some(prev) = input
+            .previous_model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && *p != model_id)
+        {
+            let _ = tx.execute(
+                "DELETE FROM app_agent_model_catalog WHERE model_id = ?1",
+                [prev],
+            );
+        }
+        let existing_enabled: Option<i64> = tx
+            .query_row(
+                "SELECT enabled FROM app_agent_model_catalog WHERE model_id = ?1",
+                [&model_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        let en_val = match input.enabled {
+            Some(b) => b as i64,
+            None => existing_enabled.unwrap_or(1),
+        };
+        if let Err(err) = tx.execute(
+            "INSERT INTO app_agent_model_catalog \
+             (model_id, display_name, provider, capabilities_json, context_window, enabled, source, \
+              last_fetched_at, capability_overrides_json, last_test_fingerprint, detected_context_window) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             ON CONFLICT(model_id) DO UPDATE SET \
+                 display_name = excluded.display_name, \
+                 provider = excluded.provider, \
+                 capabilities_json = excluded.capabilities_json, \
+                 context_window = COALESCE(excluded.context_window, app_agent_model_catalog.context_window), \
+                 enabled = excluded.enabled, \
+                 source = excluded.source, \
+                 last_fetched_at = excluded.last_fetched_at, \
+                 capability_overrides_json = excluded.capability_overrides_json, \
+                 last_test_fingerprint = excluded.last_test_fingerprint, \
+                 detected_context_window = COALESCE(excluded.detected_context_window, app_agent_model_catalog.detected_context_window)",
+            params![
+                model_id,
+                display_name,
+                provider,
+                caps_json,
+                ctx_win,
+                en_val,
+                source,
+                now,
+                overrides_json,
+                fp,
+                detected_ctx,
+            ],
+        ) {
+            return internal_error(err);
+        }
+        if let Err(err) = tx.commit() {
+            return internal_error(err);
+        }
+        match list_catalog_entries_db(&db.conn) {
+            Ok(l) => l,
+            Err(err) => return internal_error(err),
+        }
+    };
+    let saved = items.iter().find(|m| m.model_id == model_id).cloned();
+    Json(json!({ "ok": true, "model": saved, "items": items })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct BulkModelUpsertItem {
+    pub model_id: String,
+    pub display_name: Option<String>,
+    pub provider: Option<String>,
+    pub provider_id: Option<String>,
+    pub capabilities: Option<Vec<String>>,
+    pub context_window: Option<i64>,
+    pub detected_context_window: Option<i64>,
+    pub capability_overrides: Option<Value>,
+    pub capability_overrides_json: Option<String>,
+    pub enabled: Option<bool>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct BulkModelUpsertInput {
+    #[serde(default)]
+    pub models: Vec<BulkModelUpsertItem>,
+    pub provider: Option<String>,
+    pub provider_id: Option<String>,
+    #[serde(default = "default_preserve_enabled")]
+    pub preserve_existing_enabled: bool,
+}
+
+pub(crate) async fn post_models_bulk_upsert(
+    State(state): State<SharedState>,
+    Json(input): Json<BulkModelUpsertInput>,
+) -> Response {
+    if input.models.is_empty() {
+        return bad_request("models list cannot be empty");
+    }
+    let cfg = state.agent_bridge.config();
+    let hub_base = effective_hub_base(&state, &cfg);
+    let hub_token = resolve_hub_token(&state);
+    let default_provider = input
+        .provider
+        .as_deref()
+        .or(input.provider_id.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("hub")
+        .to_string();
+    let preserve = input.preserve_existing_enabled;
+    let now = Utc::now().to_rfc3339();
+
+    let (upserted_count, items) = {
+        let mut db = state.db.lock().expect("database lock poisoned");
+        let tx = match db.conn.transaction() {
+            Ok(t) => t,
+            Err(err) => return internal_error(err),
+        };
+        let mut count = 0usize;
+        for item in &input.models {
+            let mid = item.model_id.trim();
+            if mid.is_empty() {
+                continue;
+            }
+            let (inferred_caps, inferred_ctx) = capabilities_vec_from_inferred(mid);
+            let caps = item
+                .capabilities
+                .clone()
+                .filter(|c| !c.is_empty())
+                .unwrap_or(inferred_caps);
+            let caps_json = serde_json::to_string(&caps).unwrap_or_else(|_| "[\"text\"]".into());
+            let overrides_json = normalize_capability_overrides_json(
+                item.capability_overrides.as_ref(),
+                item.capability_overrides_json.as_deref(),
+            );
+            let provider = item
+                .provider
+                .as_deref()
+                .or(item.provider_id.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&default_provider);
+            let display_name = item
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(mid);
+            let ctx_win = item.context_window.or(Some(inferred_ctx));
+            let detected_ctx = item.detected_context_window;
+            let source = item
+                .source
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("bulk_import");
+            let fp = model_config_fingerprint(provider, mid, &hub_base, &hub_token, &overrides_json);
+
+            let existing_enabled: Option<i64> = tx
+                .query_row(
+                    "SELECT enabled FROM app_agent_model_catalog WHERE model_id = ?1",
+                    [mid],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten();
+            let requested_en = item.enabled.unwrap_or(true) as i64;
+            let final_en = if preserve {
+                existing_enabled.unwrap_or(requested_en)
+            } else {
+                requested_en
+            };
+
+            if let Err(err) = tx.execute(
+                "INSERT INTO app_agent_model_catalog \
+                 (model_id, display_name, provider, capabilities_json, context_window, enabled, source, \
+                  last_fetched_at, capability_overrides_json, last_test_fingerprint, detected_context_window) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                 ON CONFLICT(model_id) DO UPDATE SET \
+                     display_name = excluded.display_name, \
+                     provider = excluded.provider, \
+                     capabilities_json = excluded.capabilities_json, \
+                     context_window = COALESCE(excluded.context_window, app_agent_model_catalog.context_window), \
+                     enabled = excluded.enabled, \
+                     source = excluded.source, \
+                     last_fetched_at = excluded.last_fetched_at, \
+                     capability_overrides_json = CASE \
+                         WHEN excluded.capability_overrides_json = '{}' THEN app_agent_model_catalog.capability_overrides_json \
+                         ELSE excluded.capability_overrides_json \
+                     END, \
+                     last_test_fingerprint = excluded.last_test_fingerprint, \
+                     detected_context_window = COALESCE(excluded.detected_context_window, app_agent_model_catalog.detected_context_window)",
+                params![
+                    mid,
+                    display_name,
+                    provider,
+                    caps_json,
+                    ctx_win,
+                    final_en,
+                    source,
+                    now,
+                    overrides_json,
+                    fp,
+                    detected_ctx,
+                ],
+            ) {
+                return internal_error(err);
+            }
+            count += 1;
+        }
+        if let Err(err) = tx.commit() {
+            return internal_error(err);
+        }
+        let list = match list_catalog_entries_db(&db.conn) {
+            Ok(l) => l,
+            Err(err) => return internal_error(err),
+        };
+        (count, list)
+    };
+
+    Json(json!({
+        "ok": true,
+        "upserted_count": upserted_count,
+        "preserve_existing_enabled": preserve,
+        "items": items,
+    }))
+    .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Custom App Skills CRUD (`app_agent_custom_skills`, v2.2)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CustomSkillItem {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub skill_md: String,
+    pub tags: Vec<String>,
+    pub slash_command: String,
+    pub pinned: bool,
+    pub enabled: bool,
+    pub source: String,
+    pub updated_at: String,
+}
+
+fn sanitize_skill_slug(raw: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in raw.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+        if out.len() >= 48 {
+            break;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn map_custom_skill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CustomSkillItem> {
+    let slug: String = r.get(0)?;
+    let tags_raw: String = r.get(4)?;
+    let raw_slash: String = r.get(5)?;
+    let slash_command = if raw_slash.trim().is_empty() {
+        format!("/{slug}")
+    } else if raw_slash.trim().starts_with('/') {
+        raw_slash.trim().to_string()
+    } else {
+        format!("/{}", raw_slash.trim())
+    };
+    Ok(CustomSkillItem {
+        slug,
+        name: r.get(1)?,
+        description: r.get(2)?,
+        skill_md: r.get(3)?,
+        tags: serde_json::from_str(&tags_raw).unwrap_or_default(),
+        slash_command,
+        pinned: r.get::<_, i64>(6)? != 0,
+        enabled: r.get::<_, i64>(7)? != 0,
+        source: "custom".to_string(),
+        updated_at: r.get(8)?,
+    })
+}
+
+fn custom_skill_to_hub_summary(item: &CustomSkillItem) -> HubSkillSummary {
+    let preview: String = item.skill_md.chars().take(240).collect();
+    HubSkillSummary {
+        slug: item.slug.clone(),
+        name: item.name.clone(),
+        display_name: item.name.clone(),
+        description: item.description.clone(),
+        category: item
+            .tags
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "custom".to_string()),
+        group_slugs: item.tags.clone(),
+        body_md: item.skill_md.clone(),
+        body_preview: preview,
+        granted: true,
+        enabled: item.enabled,
+        pinned: item.pinned,
+        version: "1.0.0".to_string(),
+        source: "custom".to_string(),
+        updated_at: Some(item.updated_at.clone()).filter(|s| !s.is_empty()),
+    }
+}
+
+pub(crate) fn list_custom_skills_db(conn: &Connection) -> Result<Vec<CustomSkillItem>> {
+    let mut st = conn.prepare(
+        "SELECT slug, name, description, skill_md, tags_json, slash_command, pinned, enabled, updated_at \
+         FROM app_agent_custom_skills ORDER BY pinned DESC, slug ASC",
+    )?;
+    let rows = st.query_map([], map_custom_skill_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub(crate) fn list_custom_skills_as_hub_summaries(conn: &Connection) -> Result<Vec<HubSkillSummary>> {
+    Ok(list_custom_skills_db(conn)?
+        .iter()
+        .map(custom_skill_to_hub_summary)
+        .collect())
+}
+
+pub(crate) fn get_custom_skill_as_hub_summary(
+    conn: &Connection,
+    slug: &str,
+) -> Result<Option<HubSkillSummary>> {
+    let opt = conn
+        .query_row(
+            "SELECT slug, name, description, skill_md, tags_json, slash_command, pinned, enabled, updated_at \
+             FROM app_agent_custom_skills WHERE slug = ?1",
+            [slug],
+            map_custom_skill_row,
+        )
+        .optional()?;
+    Ok(opt.as_ref().map(custom_skill_to_hub_summary))
+}
+
+pub(crate) async fn get_custom_skills(State(state): State<SharedState>) -> Response {
+    let db = state.db.lock().expect("database lock poisoned");
+    match list_custom_skills_db(&db.conn) {
+        Ok(items) => Json(json!({ "ok": true, "items": items })).into_response(),
+        Err(err) => internal_error(err),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpsertCustomSkillInput {
+    pub slug: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub skill_md: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub slash_command: Option<String>,
+    pub pinned: Option<bool>,
+    pub enabled: Option<bool>,
+}
+
+pub(crate) async fn post_custom_skill(
+    State(state): State<SharedState>,
+    Json(input): Json<UpsertCustomSkillInput>,
+) -> Response {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return bad_request("skill name is required");
+    }
+    let slug_seed = input
+        .slug
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(&name);
+    let slug = sanitize_skill_slug(slug_seed);
+    if slug.is_empty() {
+        return bad_request("invalid skill slug");
+    }
+    let slash_command = input
+        .slash_command
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.starts_with('/') {
+                s.to_string()
+            } else {
+                format!("/{s}")
+            }
+        })
+        .unwrap_or_else(|| format!("/{slug}"));
+    let tags_clean: Vec<String> = input
+        .tags
+        .into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let tags_json = serde_json::to_string(&tags_clean).unwrap_or_else(|_| "[]".into());
+    let pinned = input.pinned.unwrap_or(false);
+    let enabled = input.enabled.unwrap_or(true);
+    let now = Utc::now().to_rfc3339();
+
+    let items = {
+        let db = state.db.lock().expect("database lock poisoned");
+        // Refuse overwriting a Hub/builtin cached skill slug
+        let conflicts_builtin: bool = db
+            .conn
+            .query_row(
+                "SELECT 1 FROM app_agent_skills_cache WHERE slug = ?1 LIMIT 1",
+                [&slug],
+                |_| Ok(true),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+        if conflicts_builtin {
+            return bad_request("slug conflicts with an existing builtin or Hub skill");
+        }
+        if let Err(err) = db.conn.execute(
+            "INSERT INTO app_agent_custom_skills \
+             (slug, name, description, skill_md, tags_json, slash_command, pinned, enabled, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             ON CONFLICT(slug) DO UPDATE SET \
+                 name = excluded.name, \
+                 description = excluded.description, \
+                 skill_md = excluded.skill_md, \
+                 tags_json = excluded.tags_json, \
+                 slash_command = excluded.slash_command, \
+                 pinned = excluded.pinned, \
+                 enabled = excluded.enabled, \
+                 updated_at = excluded.updated_at",
+            params![
+                slug,
+                name,
+                input.description.trim(),
+                input.skill_md,
+                tags_json,
+                slash_command,
+                pinned as i64,
+                enabled as i64,
+                now,
+            ],
+        ) {
+            return internal_error(err);
+        }
+        match list_custom_skills_db(&db.conn) {
+            Ok(l) => l,
+            Err(err) => return internal_error(err),
+        }
+    };
+    let skill = items.iter().find(|s| s.slug == slug).cloned();
+    Json(json!({ "ok": true, "skill": skill, "items": items })).into_response()
+}
+
+pub(crate) async fn delete_custom_skill(
+    State(state): State<SharedState>,
+    AxumPath(slug): AxumPath<String>,
+) -> Response {
+    let clean = slug.trim();
+    let items = {
+        let db = state.db.lock().expect("database lock poisoned");
+        let deleted = db
+            .conn
+            .execute(
+                "DELETE FROM app_agent_custom_skills WHERE slug = ?1",
+                [clean],
+            )
+            .unwrap_or(0);
+        if deleted == 0 {
+            return failure(StatusCode::NOT_FOUND, "not_found");
+        }
+        match list_custom_skills_db(&db.conn) {
+            Ok(l) => l,
+            Err(err) => return internal_error(err),
+        }
+    };
+    Json(json!({ "ok": true, "deleted_slug": clean, "items": items })).into_response()
 }
 
 #[derive(Debug, Deserialize)]

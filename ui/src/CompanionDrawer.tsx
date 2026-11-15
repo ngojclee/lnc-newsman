@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AgentSelect, type ProviderStatusDot } from './agent-kit/AgentSelect.tsx'
+import { AgentSelectionToolbar } from './agent-kit/AgentSelectionToolbar.tsx'
+import { AgentComposerLead, AgentSkillPicker } from './agent-kit/AgentSkillPicker.tsx'
 import { ToolInvocationPill } from './AgentsWorkspace.tsx'
-import { AGENT_COPY, type AppAgentConfig } from './agentTypes.ts'
+import {
+  AGENT_COPY,
+  type AgentMessage,
+  type AppAgentConfig,
+  type SelectionAnchorV2,
+  type SideChatResponderV2,
+  type SkillOptionV2,
+} from './agentTypes.ts'
 import {
   appAgentsApi,
   boundActiveViewContext,
@@ -44,14 +54,32 @@ export function CompanionDrawer({
   onOpenArticle,
 }: CompanionDrawerProps) {
   const c = AGENT_COPY[lang]
-  const { agents, threads, workspaces, activeWorkspaceId, skills, loadThreads, createThread } =
-    useAppAgents()
+  const {
+    bridgeStatus,
+    manifest,
+    agents,
+    threads,
+    workspaces,
+    activeWorkspaceId,
+    skills,
+    customSkills,
+    toggleSkillPin,
+    deleteCustomSkill,
+    loadThreads,
+    createThread,
+  } = useAppAgents()
   const [selectedAgentSlug, setSelectedAgentSlug] = useState<string>('macro-argus')
   const [attachedSkills, setAttachedSkills] = useState<string[]>([])
+  const [applyEveryTurn, setApplyEveryTurn] = useState(true)
   const [threadId, setThreadId] = useState<number | string | null>(null)
   const [draft, setDraft] = useState('')
   const [creatingThread, setCreatingThread] = useState(false)
+  const [selectionBar, setSelectionBar] = useState<{
+    anchor: SelectionAnchorV2
+    coords: { x: number; y: number }
+  } | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const draftRef = useRef<HTMLTextAreaElement | null>(null)
 
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) ?? workspaces[0] ?? null,
@@ -60,6 +88,75 @@ export function CompanionDrawer({
   const grantedSkills = useMemo(
     () => skills.filter((s) => s.granted && s.enabled),
     [skills],
+  )
+  const providerDotStatus: ProviderStatusDot =
+    bridgeStatus.mode === 'disconnected' ? 'error' : 'connected'
+  const caps = manifest?.capabilities ?? manifest?.features
+
+  const allSkillOptionsV2 = useMemo<SkillOptionV2[]>(() => {
+    const map = new Map<string, SkillOptionV2>()
+    for (const sk of grantedSkills) {
+      map.set(sk.slug, {
+        slug: sk.slug,
+        name: skillDisplayName(sk),
+        description: sk.description,
+        source:
+          sk.source === 'custom'
+            ? 'custom'
+            : sk.source === 'app' || sk.source === 'builtin'
+              ? 'app'
+              : 'hub',
+        slash_command: `/${sk.slug}`,
+        skill_md: sk.body_md || sk.body_preview || sk.description,
+        tags: sk.group_slugs,
+        pinned: Boolean(sk.pinned),
+      })
+    }
+    for (const cs of customSkills) {
+      map.set(cs.slug, {
+        slug: cs.slug,
+        name: cs.name,
+        description: cs.description,
+        source: 'custom',
+        slash_command: cs.slash_command || `/${cs.slug}`,
+        skill_md: cs.skill_md,
+        tags: cs.tags,
+        pinned: Boolean(cs.pinned),
+      })
+    }
+    return Array.from(map.values())
+  }, [customSkills, grantedSkills])
+
+  const selectedSkillOptionsV2 = useMemo<SkillOptionV2[]>(
+    () =>
+      attachedSkills.map(
+        (slug) =>
+          allSkillOptionsV2.find((s) => s.slug === slug) ?? {
+            slug,
+            name: slug,
+            description: '',
+            source: 'app' as const,
+            slash_command: `/${slug}`,
+          },
+      ),
+    [allSkillOptionsV2, attachedSkills],
+  )
+
+  const pinnedSlugs = useMemo(
+    () => allSkillOptionsV2.filter((s) => s.pinned).map((s) => s.slug),
+    [allSkillOptionsV2],
+  )
+
+  const responderOptions = useMemo<SideChatResponderV2[]>(
+    () =>
+      agents.map((ag) => ({
+        slug: ag.slug,
+        displayName: ag.display_name,
+        emoji: ag.emoji,
+        accent: ag.color,
+        roleHint: ag.description,
+      })),
+    [agents],
   )
 
   const activeViewContext = useCompanionContext({
@@ -137,12 +234,16 @@ export function CompanionDrawer({
       }
     }
 
+    const skillsSnapshot = [...attachedSkills]
+    if (!applyEveryTurn && skillsSnapshot.length > 0) {
+      setAttachedSkills([])
+    }
     setDraft('')
     if (targetThreadId !== null && String(targetThreadId) === String(threadId)) {
       await sendTurn(trimmed, {
         mentions: extractMentions(trimmed, agents.map((a) => a.slug)),
         activeViewContext,
-        skillSlugs: attachedSkills,
+        skillSlugs: skillsSnapshot,
       })
     } else if (targetThreadId !== null) {
       const bounded = activeViewContext
@@ -154,12 +255,35 @@ export function CompanionDrawer({
           text: trimmed,
           idempotency_key: `comp_${targetThreadId}_${Date.now()}`,
           mentions: [selectedAgentSlug],
-          ...(attachedSkills.length > 0 ? { skill_slugs: attachedSkills } : {}),
+          ...(skillsSnapshot.length > 0 ? { skill_slugs: skillsSnapshot } : {}),
           ...(bounded ? { active_view_context: bounded } : {}),
         }),
       })
       setThreadId(targetThreadId)
     }
+  }
+
+  const handleAssistantMouseUp = (msg: AgentMessage) => {
+    if (msg.role === 'user') return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed) return
+    const quote = sel.toString().trim()
+    if (quote.length < 3) return
+    const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null
+    if (!range) return
+    const rect = range.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return
+    setSelectionBar({
+      anchor: {
+        id: `comp-msg-${msg.id}`,
+        quote: quote.slice(0, 600),
+        sourceTitle: msg.sender_slug ? `@${msg.sender_slug}` : 'analyst',
+      },
+      coords: {
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+      },
+    })
   }
 
   const previewBody = (contentText || excerpt || '').trim()
@@ -245,43 +369,37 @@ export function CompanionDrawer({
       </div>
 
       <div className="companion-controls">
-        <div className="chip-row">
-          {agents.map((ag) => (
-            <button
-              key={ag.slug}
-              type="button"
-              className={selectedAgentSlug === ag.slug ? 'chip active' : 'chip'}
-              onClick={() => setSelectedAgentSlug(ag.slug)}
-            >
-              {ag.emoji} {ag.display_name}
-            </button>
-          ))}
+        <div className="chip-row" style={{ alignItems: 'center' }}>
+          <AgentSelect
+            size="sm"
+            ariaLabel={c.studioRouteAgentLabel}
+            value={selectedAgentSlug}
+            onChange={setSelectedAgentSlug}
+            options={agents.map((ag) => ({
+              value: ag.slug,
+              label: `${ag.emoji} ${ag.display_name}`,
+              badge: `@${ag.slug}`,
+              dots: [providerDotStatus],
+            }))}
+          />
+          <AgentSkillPicker
+            size="sm"
+            label={c.v2SkillsBtn}
+            searchPlaceholder={c.skillsSearchPlaceholder}
+            skills={allSkillOptionsV2}
+            selectedSlugs={attachedSkills}
+            onToggleSkill={(slug) =>
+              setAttachedSkills((prev) =>
+                prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
+              )
+            }
+            applyEveryTurn={applyEveryTurn}
+            onToggleApplyEveryTurn={setApplyEveryTurn}
+            pinnedSlugs={pinnedSlugs}
+            onTogglePin={(slug) => void toggleSkillPin(slug, !pinnedSlugs.includes(slug))}
+            onDeleteCustomSkill={(slug) => void deleteCustomSkill(slug)}
+          />
         </div>
-
-        {grantedSkills.length > 0 && (
-          <div className="companion-skill-chips">
-            <small className="companion-skill-label">{c.companionSkillChipLabel}:</small>
-            <div className="chip-row">
-              {grantedSkills.map((sk) => {
-                const active = attachedSkills.includes(sk.slug)
-                return (
-                  <button
-                    key={sk.slug}
-                    type="button"
-                    className={active ? 'chip active' : 'chip'}
-                    onClick={() =>
-                      setAttachedSkills((prev) =>
-                        prev.includes(sk.slug) ? prev.filter((s) => s !== sk.slug) : [...prev, sk.slug],
-                      )
-                    }
-                  >
-                    🧩 {skillDisplayName(sk)}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
 
         <div className="companion-quick-prompts">
           <button
@@ -346,7 +464,12 @@ export function CompanionDrawer({
                     ))}
                   </div>
                 )}
-                <div className="salon-turn-prose">{renderWithCitations(m.content)}</div>
+                <div
+                  className="salon-turn-prose"
+                  onMouseUp={!isUser ? () => handleAssistantMouseUp(m) : undefined}
+                >
+                  {renderWithCitations(m.content)}
+                </div>
               </div>
             </div>
           )
@@ -378,11 +501,48 @@ export function CompanionDrawer({
         })}
       </div>
 
+      <AgentSelectionToolbar
+        anchor={selectionBar?.anchor ?? null}
+        coords={selectionBar?.coords ?? null}
+        showListen={Boolean(caps?.voice_tts)}
+        responders={responderOptions}
+        selectedResponderSlug={selectedAgentSlug}
+        onSelectResponder={setSelectedAgentSlug}
+        onAddToChat={(anchor) => {
+          const quoted = anchor.quote
+            .split('\n')
+            .map((line) => `> ${line}`)
+            .join('\n')
+          setDraft((prev) => (prev.trim() ? `${quoted}\n\n${prev}` : `${quoted}\n\n`))
+          setSelectionBar(null)
+          window.getSelection()?.removeAllRanges()
+          draftRef.current?.focus()
+        }}
+        onAsk={(anchor, slug) => {
+          const target = slug || selectedAgentSlug || 'macro-argus'
+          setSelectedAgentSlug(target)
+          setSelectionBar(null)
+          window.getSelection()?.removeAllRanges()
+          void ensureThreadAndSend(
+            `@${target} ${lang === 'vi' ? 'Phân tích đoạn trích này:' : 'Analyze this excerpt:'}\n> ${anchor.quote.replace(/\n+/g, ' ')}`,
+          )
+        }}
+        onDismiss={() => setSelectionBar(null)}
+      />
+
       {(error || streamState.lastError) && <p className="form-error">{error ?? streamState.lastError}</p>}
 
       <footer className="companion-footer">
+        <AgentComposerLead
+          selectedSkills={selectedSkillOptionsV2}
+          onRemoveSkill={(slug) =>
+            setAttachedSkills((prev) => prev.filter((item) => item !== slug))
+          }
+          applyEveryTurn={applyEveryTurn}
+        />
         <div className="chat-input-row">
           <textarea
+            ref={draftRef}
             rows={2}
             value={draft}
             placeholder={c.composerPlaceholder}

@@ -124,6 +124,7 @@ export interface HubSkillSummary {
   body_preview?: string
   granted: boolean
   enabled: boolean
+  pinned?: boolean
   version: string
   source: string
   updated_at?: string | null
@@ -918,6 +919,25 @@ export const AGENT_COPY = {
     v2LangModelLabel: 'Ngôn ngữ trả lời AI',
     v2SendKeyLabel: 'Phím gửi tin',
     v2QuickActionsLabel: 'Tác vụ nhanh',
+    v22SettingsModelsNav: 'Mô hình & Danh mục',
+    v22BulkImportBtn: '+ Nhập hàng loạt',
+    v22BulkImportTitle: 'Nhập hàng loạt Mô hình vào Danh mục',
+    v22BulkProviderLabel: 'Mã nhà cung cấp (provider_id)',
+    v22BulkModelsInputLabel: 'Danh sách mã mô hình (mỗi dòng 1 mã hoặc cách nhau dấu phẩy)',
+    v22BulkPreserveEnabled: 'Giữ nguyên trạng thái bật/tắt của mô hình đã có',
+    v22BulkSubmitBtn: 'Nhập vào danh mục',
+    v22CapOverrideAuto: 'Tự động',
+    v22CapOverrideEnabled: 'Bật ép buộc',
+    v22CapOverrideDisabled: 'Tắt',
+    v22CreateSkillTitle: 'Tạo Kỹ năng Nội bộ (SKILL.md)',
+    v22CreateSkillNameLabel: 'Tên kỹ năng',
+    v22CreateSkillSlugLabel: 'Mã slug (tùy chọn)',
+    v22CreateSkillDescLabel: 'Mô tả ngắn',
+    v22CreateSkillSlashLabel: 'Lệnh gạch chéo (vd: /soat-thue)',
+    v22CreateSkillMdLabel: 'Nội dung hướng dẫn SKILL.md',
+    v22CreateSkillSaveBtn: 'Lưu kỹ năng',
+    v22DockToggleBtn: 'Bảng bên',
+    v22DockBackBtn: 'Quay lại hội thoại',
   },
   en: {
     agents: 'Agent Desk',
@@ -1297,6 +1317,25 @@ export const AGENT_COPY = {
     v2LangModelLabel: 'Model Output Language',
     v2SendKeyLabel: 'Send Key',
     v2QuickActionsLabel: 'Quick Actions',
+    v22SettingsModelsNav: 'Models & Catalog',
+    v22BulkImportBtn: '+ Bulk Import',
+    v22BulkImportTitle: 'Bulk Import Models into Catalog',
+    v22BulkProviderLabel: 'Provider ID (provider_id)',
+    v22BulkModelsInputLabel: 'Model IDs (one per line or comma-separated)',
+    v22BulkPreserveEnabled: 'Preserve existing enabled state for known models',
+    v22BulkSubmitBtn: 'Import Models',
+    v22CapOverrideAuto: 'Auto',
+    v22CapOverrideEnabled: 'Enabled',
+    v22CapOverrideDisabled: 'Disabled',
+    v22CreateSkillTitle: 'Create Custom App Skill (SKILL.md)',
+    v22CreateSkillNameLabel: 'Skill name',
+    v22CreateSkillSlugLabel: 'Slug (optional)',
+    v22CreateSkillDescLabel: 'Short description',
+    v22CreateSkillSlashLabel: 'Slash command (e.g. /tax-audit)',
+    v22CreateSkillMdLabel: 'SKILL.md instructions',
+    v22CreateSkillSaveBtn: 'Save Skill',
+    v22DockToggleBtn: 'Side Dock',
+    v22DockBackBtn: 'Back to conversation',
   },
 } as const
 

@@ -1,9 +1,18 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentStudio } from './AgentStudio.tsx'
-import { AgentSelect } from './agent-kit/AgentSelect.tsx'
+import { AgentContextBudgetChip } from './agent-kit/AgentContextBudgetChip.tsx'
+import { AgentQueuedMessages } from './agent-kit/AgentQueuedMessages.tsx'
+import { AgentSelect, type ProviderStatusDot } from './agent-kit/AgentSelect.tsx'
+import { AgentSelectionToolbar } from './agent-kit/AgentSelectionToolbar.tsx'
+import { AgentSessionActivity } from './agent-kit/AgentSessionActivity.tsx'
+import { AgentComposerLead, AgentSkillPicker } from './agent-kit/AgentSkillPicker.tsx'
 import { AgentSplitLayout } from './agent-kit/AgentSplitPane.tsx'
+import { AgentTurnNavigator } from './agent-kit/AgentTurnNavigator.tsx'
+import { AgentWorkspaceDock, useThreadTabStash } from './agent-kit/AgentWorkspaceDock.tsx'
 import {
   AGENT_COPY,
+  buildContextBudgetV2,
+  buildSessionActivityV2,
   formatBridgeModeLabel,
   formatDiscussionModeShort,
   type AccessRequestTargetKind,
@@ -11,11 +20,18 @@ import {
   type AgentThread,
   type AgentWorkspace,
   type AppAgentConfig,
+  type CapabilityTriState,
   type CoWriterDraftRow,
   type DiscussionMode,
   type ExecutionTraceStep,
   type MemoryGraphNode,
   type MergedToolInvocation,
+  type QueuedMessageV2,
+  type SelectionAnchorV2,
+  type SessionArtifactFileV2,
+  type SideChatResponderV2,
+  type SkillOptionV2,
+  type TurnOutlineEntryV2,
   type WorkspaceSurface,
 } from './agentTypes.ts'
 import {
@@ -38,7 +54,7 @@ export interface AgentsWorkspaceProps {
   onOpenRegions?: () => void
 }
 
-type NewsmanSettingsTab = 'connections' | 'mcp' | 'memory' | 'general' | 'telegram'
+type NewsmanSettingsTab = 'connections' | 'models' | 'mcp' | 'memory' | 'general' | 'telegram'
 
 const DISCUSSION_MODES: readonly {
   id: DiscussionMode
@@ -142,6 +158,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     activeWorkspaceId,
     setActiveWorkspaceId,
     skills,
+    customSkills,
     skillGroups,
     capabilityBundles,
     mcpGroups,
@@ -156,6 +173,11 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     telegramConfig,
     telegramRoutes,
     saveBridgeConfig,
+    saveModelRoles,
+    fetchModelCatalog,
+    toggleCatalogModels,
+    upsertCatalogModel,
+    bulkUpsertCatalogModels,
     probeConnections,
     saveMcpNamespaces,
     saveAgent,
@@ -170,6 +192,9 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     deleteWorkspace,
     syncSkills,
     toggleSkillEnabled,
+    toggleSkillPin,
+    saveCustomSkill,
+    deleteCustomSkill,
     requestSkillAccess,
     suggestCowriterDiff,
     decideCowriterDraft,
@@ -207,7 +232,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [studioSubTab, setStudioSubTab] = useState<'agents' | 'workspaces' | 'skills'>('agents')
   const caps = manifest?.capabilities ?? manifest?.features
   const visibleSettingsTabs = useMemo<NewsmanSettingsTab[]>(() => {
-    const tabs: NewsmanSettingsTab[] = ['connections', 'mcp', 'memory', 'general']
+    const tabs: NewsmanSettingsTab[] = ['connections', 'models', 'mcp', 'memory', 'general']
     if (caps?.telegram !== false) tabs.push('telegram')
     return tabs
   }, [caps?.telegram])
@@ -219,17 +244,41 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   }, [settingsTab, visibleSettingsTabs])
   const [selectedThreadId, setSelectedThreadId] = useState<number | string | null>(null)
   const [railOpen, setRailOpen] = useState(true)
-  const [sidePanelOpen, setSidePanelOpen] = useState(false)
+  const [sidePanelOpen, setSidePanelOpen] = useState(true)
   const [sidePanelTab, setSidePanelTab] = useState<'trace' | 'context'>('trace')
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
   const [composerText, setComposerText] = useState('')
   const [caretPos, setCaretPos] = useState(0)
   const [turnSkillSlugs, setTurnSkillSlugs] = useState<string[]>([])
+  const [applySkillEveryTurn, setApplySkillEveryTurn] = useState(true)
   const [turnModelOverride, setTurnModelOverride] = useState('')
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null)
   const [composerPopover, setComposerPopover] = useState<
-    null | 'scope' | 'mode' | 'skills' | 'mcp' | 'style' | 'customize'
+    null | 'scope' | 'mode' | 'mcp' | 'style' | 'customize'
   >(null)
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessageV2[]>([])
+  const [selectionBar, setSelectionBar] = useState<{
+    anchor: SelectionAnchorV2
+    coords: { x: number; y: number }
+  } | null>(null)
+  const [selectedResponderSlug, setSelectedResponderSlug] = useState<string>('macro-argus')
+  const [createSkillOpen, setCreateSkillOpen] = useState(false)
+  const [createSkillForm, setCreateSkillForm] = useState({
+    slug: '',
+    name: '',
+    description: '',
+    slash_command: '',
+    skill_md: '',
+  })
+  const [createSkillBusy, setCreateSkillBusy] = useState(false)
+  const [bulkImportOpen, setBulkImportOpen] = useState(false)
+  const [bulkImportProvider, setBulkImportProvider] = useState('hub')
+  const [bulkImportRaw, setBulkImportRaw] = useState('')
+  const [bulkPreserveEnabled, setBulkPreserveEnabled] = useState(true)
+  const [bulkImportBusy, setBulkImportBusy] = useState(false)
+  const [fetchingCatalog, setFetchingCatalog] = useState(false)
+  const [smartRoleDraft, setSmartRoleDraft] = useState('')
+  const [fastRoleDraft, setFastRoleDraft] = useState('')
   const [chatMode, setChatMode] = useState<'chat' | 'co_writer' | 'research' | 'brief'>('chat')
   const [personaStyle, setPersonaStyle] = useState<string>('analytical')
   const [turnScopeFilter, setTurnScopeFilter] = useState({ region: '', series: '', topic: '' })
@@ -359,6 +408,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [connError, setConnError] = useState('')
 
   const listEndRef = useRef<HTMLDivElement | null>(null)
+  const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
   const activeWorkspace = useMemo(
@@ -380,6 +430,16 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     [enabledCatalogModels, models],
   )
   const roleSummary = useMemo(() => resolveModelRoles(bridgeStatus), [bridgeStatus])
+
+  useEffect(() => {
+    setSmartRoleDraft(bridgeStatus.default_smart_model ?? roleSummary.smartModel ?? '')
+    setFastRoleDraft(bridgeStatus.fast_background_model ?? roleSummary.fastModel ?? '')
+  }, [
+    bridgeStatus.default_smart_model,
+    bridgeStatus.fast_background_model,
+    roleSummary.smartModel,
+    roleSummary.fastModel,
+  ])
 
   useEffect(() => {
     const next: Record<string, boolean> = {}
@@ -662,9 +722,24 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     el.style.height = `${nextHeight}px`
   }, [composerText, surface])
 
+  const dockStash = useThreadTabStash([
+    { id: 'activity', kind: 'activity', title: `📈 ${c.v2DrawerActivity}`, closable: false },
+    { id: 'notes', kind: 'notes', title: `📝 ${c.v2DrawerNotes}`, closable: false },
+  ])
+  const dockThreadKey = String(activeThread?.id ?? 'default')
+  const dockState = dockStash.ensure(dockThreadKey)
+  const activeDockTab =
+    dockState.tabs.find((t) => t.id === dockState.activeId) ?? dockState.tabs[0] ?? null
+
+  useEffect(() => {
+    setQueuedMessages([])
+    setSelectionBar(null)
+  }, [selectedThreadId])
+
   const handleOpenTrace = (traceId: string) => {
     setSelectedTraceId(traceId)
     setSidePanelTab('trace')
+    dockStash.selectTab(dockThreadKey, 'activity')
     setSidePanelOpen(true)
   }
 
@@ -733,9 +808,30 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     setNewRoomOpen(false)
   }
 
-  const handleSend = async (overrideText?: string) => {
+  const toggleTurnSkill = (slug: string) => {
+    setTurnSkillSlugs((prev) =>
+      prev.includes(slug) ? prev.filter((item) => item !== slug) : [...prev, slug],
+    )
+  }
+
+  const handleSend = async (overrideText?: string, bypassQueue = false) => {
     const baseText = (overrideText ?? composerText).trim()
     if (!baseText) return
+    if (sending && !bypassQueue) {
+      setQueuedMessages((prev) => [
+        ...prev,
+        {
+          id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          content: baseText,
+          steerable: true,
+        },
+      ])
+      if (!overrideText) {
+        setComposerText('')
+        setGhostHint('')
+      }
+      return
+    }
     const scopeParts = [
       turnScopeFilter.region.trim() ? `region:${turnScopeFilter.region.trim()}` : '',
       turnScopeFilter.series.trim() ? `series:${turnScopeFilter.series.trim()}` : '',
@@ -762,18 +858,29 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     }
     const knownSlugs = agents.map((a) => a.slug)
     const mentions = extractMentions(raw, knownSlugs)
+    const activeSkillsSnapshot = [...turnSkillSlugs]
     if (!overrideText) {
       setComposerText('')
       setGhostHint('')
     }
+    if (!applySkillEveryTurn && activeSkillsSnapshot.length > 0) {
+      setTurnSkillSlugs([])
+    }
     await sendTurn(raw, {
       mentions,
-      skillSlugs: turnSkillSlugs,
+      skillSlugs: activeSkillsSnapshot,
       modelOverride: turnModelOverride || null,
       chatMode,
       personaStyle,
     })
   }
+
+  useEffect(() => {
+    if (sending || queuedMessages.length === 0) return
+    const [nextItem, ...rest] = queuedMessages
+    setQueuedMessages(rest)
+    void handleSend(nextItem.content, true)
+  }, [sending, queuedMessages])
 
   const handleExportMemory = (format: 'json' | 'md') => {
     const content =
@@ -882,6 +989,10 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
       label: uiLang === 'vi' ? 'Kết nối Hub' : 'Connections',
       icon: '🔌',
     },
+    models: {
+      label: c.v22SettingsModelsNav,
+      icon: '🧠',
+    },
     mcp: {
       label: uiLang === 'vi' ? 'Công cụ & MCP' : 'Tools & MCP',
       icon: '🧰',
@@ -898,6 +1009,316 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
       label: 'Telegram',
       icon: '✈️',
     },
+  }
+
+  const providerDotStatus: ProviderStatusDot =
+    bridgeStatus.mode === 'disconnected' ? 'error' : 'connected'
+
+  const allSkillOptionsV2 = useMemo<SkillOptionV2[]>(() => {
+    const map = new Map<string, SkillOptionV2>()
+    for (const sk of grantedSkills) {
+      map.set(sk.slug, {
+        slug: sk.slug,
+        name: skillDisplayName(sk),
+        description: sk.description,
+        source:
+          sk.source === 'custom'
+            ? 'custom'
+            : sk.source === 'app' || sk.source === 'builtin'
+              ? 'app'
+              : 'hub',
+        slash_command: `/${sk.slug}`,
+        skill_md: sk.body_md || sk.body_preview || sk.description,
+        tags: sk.group_slugs,
+        pinned: Boolean(sk.pinned),
+      })
+    }
+    for (const cs of customSkills) {
+      map.set(cs.slug, {
+        slug: cs.slug,
+        name: cs.name,
+        description: cs.description,
+        source: 'custom',
+        slash_command: cs.slash_command || `/${cs.slug}`,
+        skill_md: cs.skill_md,
+        tags: cs.tags,
+        pinned: Boolean(cs.pinned),
+      })
+    }
+    for (const ms of manifest?.skills ?? []) {
+      if (!map.has(ms.slug)) {
+        map.set(ms.slug, {
+          slug: ms.slug,
+          name: ms.name,
+          description: ms.description,
+          source: ms.source,
+          slash_command: ms.slash_command ?? `/${ms.slug}`,
+          skill_md: ms.skill_md,
+          tags: ms.tags,
+          pinned: Boolean(ms.pinned),
+        })
+      }
+    }
+    return Array.from(map.values())
+  }, [customSkills, grantedSkills, manifest?.skills])
+
+  const selectedSkillOptionsV2 = useMemo<SkillOptionV2[]>(
+    () =>
+      turnSkillSlugs.map(
+        (slug) =>
+          allSkillOptionsV2.find((s) => s.slug === slug) ?? {
+            slug,
+            name: slug,
+            description: '',
+            source: 'app' as const,
+            slash_command: `/${slug}`,
+          },
+      ),
+    [allSkillOptionsV2, turnSkillSlugs],
+  )
+
+  const pinnedSkillSlugs = useMemo(
+    () => allSkillOptionsV2.filter((s) => s.pinned).map((s) => s.slug),
+    [allSkillOptionsV2],
+  )
+
+  const turnOutlineEntries = useMemo<TurnOutlineEntryV2[]>(() => {
+    return messages
+      .filter((m) => m.role === 'user')
+      .map((m) => ({
+        key: String(m.id),
+        prompt: m.content.trim(),
+        mode: chatMode !== 'chat' ? chatMode : undefined,
+        weight: Math.min(1, Math.max(0.25, m.content.length / 280)),
+      }))
+  }, [chatMode, messages])
+
+  const deskResponders = useMemo<SideChatResponderV2[]>(
+    () =>
+      agents.map((ag) => ({
+        slug: ag.slug,
+        displayName: ag.display_name,
+        emoji: ag.emoji,
+        accent: ag.color,
+        roleHint: ag.description,
+      })),
+    [agents],
+  )
+
+  const activeCatalogEntry = useMemo(() => {
+    const activeModelId = turnModelOverride || roleSummary.smartModel
+    return modelCatalog.find((m) => m.model_id === activeModelId) ?? modelCatalog[0] ?? null
+  }, [modelCatalog, roleSummary.smartModel, turnModelOverride])
+
+  const contextBudget = useMemo(() => {
+    const activeModelId = turnModelOverride || roleSummary.smartModel
+    const windowTokens =
+      activeCatalogEntry?.detected_context_window ?? activeCatalogEntry?.context_window ?? 128000
+    const systemText = seatOrder
+      .map((a) => `${a.soul_md}\n${a.app_role_addendum_md}` || a.description)
+      .join('\n')
+    const skillsText = selectedSkillOptionsV2
+      .map((s) => s.skill_md || s.description || s.name)
+      .join('\n')
+    const memoryText = [
+      notesDraft,
+      safeMemoryGraph.l1_scratchpad,
+      ...safeMemoryGraph.nodes.map((n) => `${n.title}: ${n.content}`),
+    ]
+      .filter(Boolean)
+      .join('\n')
+    const sourcesText = [
+      ...(effectiveThreadScope.regions ?? []),
+      ...(effectiveThreadScope.topics ?? []),
+      turnScopeFilter.region,
+      turnScopeFilter.series,
+      turnScopeFilter.topic,
+      ...whiteboard.map((w) => w.content),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const conversationText = messages.map((m) => m.content).join('\n')
+    const enabledMcpCount = mcpNamespaces.filter((n) => n.enabled).length
+    return buildContextBudgetV2({
+      window: windowTokens,
+      model: activeModelId,
+      systemText,
+      appToolCount: 8,
+      mcpToolCount: Math.max(enabledMcpCount * 4, allowedMcpTools.length),
+      skillsText,
+      memoryText,
+      sourcesText,
+      conversationText,
+      composerDraft: composerText,
+    })
+  }, [
+    activeCatalogEntry,
+    allowedMcpTools.length,
+    composerText,
+    effectiveThreadScope.regions,
+    effectiveThreadScope.topics,
+    mcpNamespaces,
+    messages,
+    notesDraft,
+    roleSummary.smartModel,
+    safeMemoryGraph.l1_scratchpad,
+    safeMemoryGraph.nodes,
+    seatOrder,
+    selectedSkillOptionsV2,
+    turnModelOverride,
+    turnScopeFilter.region,
+    turnScopeFilter.series,
+    turnScopeFilter.topic,
+    whiteboard,
+  ])
+
+  const sessionActivity = useMemo(() => {
+    const toolNames: string[] = []
+    const citedIds = new Set<number>()
+    for (const m of messages) {
+      for (const tc of m.tool_calls ?? []) {
+        toolNames.push(tc.tool)
+      }
+      if (!m.tool_calls?.length && m.trace_steps?.length) {
+        for (const st of m.trace_steps) {
+          if (typeof st.tool === 'string') toolNames.push(st.tool)
+        }
+      }
+      const matches = m.content.matchAll(/#article-(\d+)/gi)
+      for (const match of matches) {
+        const num = Number(match[1])
+        if (Number.isFinite(num) && num > 0) citedIds.add(num)
+      }
+    }
+    for (const pill of streamState.toolPills) {
+      toolNames.push(pill.tool)
+    }
+
+    const kbs: string[] = ['Newsman FTS5 Reader', 'Declared Tax Calendar']
+    for (const ns of mcpNamespaces) {
+      if (ns.enabled) kbs.push(`MCP · ${ns.namespace}`)
+    }
+
+    const generatedFiles: SessionArtifactFileV2[] = []
+    for (const artId of citedIds) {
+      generatedFiles.push({
+        id: `article-${artId}`,
+        filename: `Article #${artId}.md`,
+        ext: 'md',
+        previewText: `# Cited Article #${artId}\n\nReferenced inside thread “${activeThread?.title ?? 'Newsroom Desk'}”.`,
+      })
+    }
+    for (const draft of cwHistory.slice(0, 4)) {
+      generatedFiles.push({
+        id: `cw-${draft.id}`,
+        filename: `${draft.title} (${draft.status}).md`,
+        ext: 'md',
+        previewText: `## ${draft.title}\n\n${draft.after_text}`,
+      })
+    }
+    for (const wb of whiteboard.slice(0, 5)) {
+      generatedFiles.push({
+        id: `wb-${wb.id}`,
+        filename: `Takeaway #${wb.id} (@${wb.author_slug ?? 'owner'}).md`,
+        ext: 'md',
+        previewText: wb.content,
+      })
+    }
+
+    const attachments: SessionArtifactFileV2[] = []
+    if (activeThread?.article_id) {
+      attachments.push({
+        id: `scoped-art-${activeThread.article_id}`,
+        filename: `Scoped Article #${activeThread.article_id}.md`,
+        ext: 'md',
+        previewText: `Thread is anchored to Newsman Article #${activeThread.article_id}.`,
+      })
+    }
+
+    return buildSessionActivityV2({
+      toolNames,
+      knowledgeBases: kbs,
+      personas: seatOrder.map((ag) => ({
+        slug: ag.slug,
+        name: `${ag.emoji} ${ag.display_name}`,
+        role: ag.description,
+      })),
+      regions: effectiveThreadScope.regions?.length
+        ? effectiveThreadScope.regions
+        : [c.salonScopeRegionsAll],
+      topics: effectiveThreadScope.topics?.length
+        ? effectiveThreadScope.topics.map((t) => `#${t}`)
+        : [c.salonScopeTopicsAll],
+      memoryItems:
+        safeMemoryGraph.nodes.length > 0
+          ? safeMemoryGraph.nodes.slice(0, 4).map((n) => ({
+              id: n.id,
+              title: n.title,
+              layer: n.layer,
+            }))
+          : [{ id: 'l1', title: notesDraft ? 'L1 Scratchpad active' : 'L1–L3 ready', layer: 'L1' }],
+      generatedFiles,
+      attachments,
+    })
+  }, [
+    activeThread?.article_id,
+    activeThread?.title,
+    c.salonScopeRegionsAll,
+    c.salonScopeTopicsAll,
+    cwHistory,
+    effectiveThreadScope.regions,
+    effectiveThreadScope.topics,
+    mcpNamespaces,
+    messages,
+    notesDraft,
+    safeMemoryGraph.nodes,
+    seatOrder,
+    streamState.toolPills,
+    whiteboard,
+  ])
+
+  const handleProseMouseUp = (msg: AgentMessage) => {
+    if (msg.role === 'user') return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed) return
+    const quote = sel.toString().trim()
+    if (quote.length < 3) return
+    const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null
+    if (!range) return
+    const rect = range.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return
+    setSelectionBar({
+      anchor: {
+        id: `msg-${msg.id}`,
+        quote: quote.slice(0, 600),
+        sourceTitle: msg.sender_slug ? `@${msg.sender_slug}` : 'assistant',
+      },
+      coords: {
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+      },
+    })
+  }
+
+  const handleQuoteIntoComposer = (quote: string) => {
+    const clean = quote
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    setComposerText((prev) => (prev.trim() ? `${clean}\n\n${prev}` : `${clean}\n\n`))
+    setSelectionBar(null)
+    window.getSelection()?.removeAllRanges()
+    composerRef.current?.focus()
+  }
+
+  const handleAskWithResponder = (anchor: SelectionAnchorV2, responderSlug?: string) => {
+    const targetSlug = responderSlug || selectedResponderSlug || seatOrder[0]?.slug || 'macro-argus'
+    const prompt = `@${targetSlug} ${
+      uiLang === 'vi' ? 'Phân tích đoạn trích này:' : 'Analyze this excerpt:'
+    }\n> ${anchor.quote.replace(/\n+/g, ' ')}`
+    setSelectionBar(null)
+    window.getSelection()?.removeAllRanges()
+    void handleSend(prompt)
   }
 
   const saveBridgeConfigPayload = (successMsg: string) => {
@@ -2524,6 +2945,183 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   </>
                 )}
 
+                {settingsTab === 'models' && (
+                  <>
+                    <section className="studio-section">
+                      <div className="ak-toolbar">
+                        <div>
+                          <h4>{c.v22SettingsModelsNav}</h4>
+                          <p className="muted-sub" style={{ marginTop: 2 }}>
+                            {uiLang === 'vi'
+                              ? 'Chọn vai trò Smart/Fast Model, nhập hàng loạt danh mục và ghi đè năng lực 3 trạng thái.'
+                              : 'Configure Smart/Fast model roles, bulk-import catalog entries, and set tri-state capability overrides.'}
+                          </p>
+                        </div>
+                        <div className="ak-btn-group">
+                          <button
+                            type="button"
+                            className="btn secondary btn-sm"
+                            disabled={fetchingCatalog}
+                            onClick={() => {
+                              setFetchingCatalog(true)
+                              setConnError('')
+                              void fetchModelCatalog()
+                                .then((res) =>
+                                  setConnNotice(
+                                    `${c.v2FetchCatalogBtn}: ${res.fetched_count ?? res.items?.length ?? 0}`,
+                                  ),
+                                )
+                                .catch((err) =>
+                                  setConnError(err instanceof Error ? err.message : 'Fetch failed'),
+                                )
+                                .finally(() => setFetchingCatalog(false))
+                            }}
+                          >
+                            {fetchingCatalog ? c.modelsProbing : `↻ ${c.v2FetchCatalogBtn}`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn primary btn-sm"
+                            onClick={() => setBulkImportOpen(true)}
+                          >
+                            {c.v22BulkImportBtn}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="catalog-form-row" style={{ marginTop: 10 }}>
+                        <div className="field">
+                          <span>{c.v2SmartModelLabel}</span>
+                          <AgentSelect
+                            ariaLabel={c.v2SmartModelLabel}
+                            value={smartRoleDraft}
+                            onChange={setSmartRoleDraft}
+                            options={selectableModels.map((m) => ({
+                              value: m,
+                              label: m,
+                              dots: [providerDotStatus],
+                            }))}
+                          />
+                        </div>
+                        <div className="field">
+                          <span>{c.v2FastModelLabel}</span>
+                          <AgentSelect
+                            ariaLabel={c.v2FastModelLabel}
+                            value={fastRoleDraft}
+                            onChange={setFastRoleDraft}
+                            options={selectableModels.map((m) => ({
+                              value: m,
+                              label: m,
+                              dots: [providerDotStatus],
+                            }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="btn-row" style={{ marginTop: 8 }}>
+                        <button
+                          type="button"
+                          className="btn primary btn-sm"
+                          onClick={() => {
+                            setConnError('')
+                            void saveModelRoles({
+                              default_smart_model: smartRoleDraft,
+                              fast_background_model: fastRoleDraft,
+                            })
+                              .then(() => setConnNotice(c.v2SaveRolesBtn))
+                              .catch((err) =>
+                                setConnError(err instanceof Error ? err.message : 'Save failed'),
+                              )
+                          }}
+                        >
+                          {c.v2SaveRolesBtn}
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="studio-section">
+                      <div className="ak-toolbar">
+                        <strong>
+                          Catalog ({modelCatalog.filter((m) => m.enabled).length}/{modelCatalog.length})
+                        </strong>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+                        {modelCatalog.map((entry) => {
+                          const overrides = entry.capability_overrides ?? {}
+                          const ctxWin = entry.detected_context_window ?? entry.context_window ?? 128000
+                          const triOptions: Array<{ value: CapabilityTriState; label: string }> = [
+                            { value: 'auto', label: c.v22CapOverrideAuto },
+                            { value: 'enabled', label: c.v22CapOverrideEnabled },
+                            { value: 'disabled', label: c.v22CapOverrideDisabled },
+                          ]
+                          const updateOverride = (
+                            capKey: 'reasoning' | 'vision' | 'tools',
+                            nextVal: CapabilityTriState,
+                          ) => {
+                            const nextOverrides = { ...overrides, [capKey]: nextVal }
+                            void upsertCatalogModel({
+                              provider_id: entry.provider_id,
+                              model_id: entry.model_id,
+                              display_name: entry.display_name,
+                              context_window: entry.context_window,
+                              enabled: entry.enabled,
+                              capability_overrides: nextOverrides,
+                            })
+                          }
+                          return (
+                            <div
+                              key={`${entry.provider_id}:${entry.model_id}`}
+                              className="probe-card"
+                              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+                            >
+                              <div className="probe-card-head">
+                                <div>
+                                  <strong>{entry.display_name || entry.model_id}</strong>
+                                  <div className="muted-sub">
+                                    <code>{entry.model_id}</code> · {entry.provider_id} · ctx:{' '}
+                                    {Math.round(ctxWin / 1000)}k
+                                    {entry.last_test_fingerprint ? (
+                                      <>
+                                        {' '}
+                                        · sha256:{' '}
+                                        <code>{entry.last_test_fingerprint.slice(0, 10)}</code>
+                                      </>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className={entry.enabled ? 'btn small primary' : 'btn small secondary'}
+                                  onClick={() =>
+                                    void toggleCatalogModels([
+                                      { model_id: entry.model_id, enabled: !entry.enabled },
+                                    ])
+                                  }
+                                >
+                                  {entry.enabled ? c.skillsEnableToggle : c.skillsDisableToggle}
+                                </button>
+                              </div>
+                              <div className="catalog-form-row">
+                                {(['reasoning', 'vision', 'tools'] as const).map((capKey) => (
+                                  <div key={capKey} className="field">
+                                    <span>{capKey}</span>
+                                    <AgentSelect
+                                      size="sm"
+                                      ariaLabel={`${entry.model_id} ${capKey}`}
+                                      value={(overrides[capKey] as CapabilityTriState | undefined) ?? 'auto'}
+                                      onChange={(v) => updateOverride(capKey, v as CapabilityTriState)}
+                                      options={triOptions}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  </>
+                )}
+
                 {settingsTab === 'mcp' && (
                   <>
                     <section className="studio-section">
@@ -3149,38 +3747,40 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     <button
                       type="button"
                       className={
-                        sidePanelOpen && sidePanelTab === 'trace'
+                        sidePanelOpen && activeDockTab?.id === 'activity'
                           ? 'btn small primary'
                           : 'btn small secondary'
                       }
                       onClick={() => {
-                        if (sidePanelOpen && sidePanelTab === 'trace') {
+                        if (sidePanelOpen && activeDockTab?.id === 'activity') {
                           setSidePanelOpen(false)
                         } else {
                           setSidePanelTab('trace')
+                          dockStash.selectTab(dockThreadKey, 'activity')
                           setSidePanelOpen(true)
                         }
                       }}
                     >
-                      {c.v2DrawerActivity} ({traceEntries.length})
+                      📈 {c.v2DrawerActivity} ({traceEntries.length})
                     </button>
                     <button
                       type="button"
                       className={
-                        sidePanelOpen && sidePanelTab === 'context'
+                        sidePanelOpen && activeDockTab?.id === 'notes'
                           ? 'btn small primary'
                           : 'btn small secondary'
                       }
                       onClick={() => {
-                        if (sidePanelOpen && sidePanelTab === 'context') {
+                        if (sidePanelOpen && activeDockTab?.id === 'notes') {
                           setSidePanelOpen(false)
                         } else {
                           setSidePanelTab('context')
+                          dockStash.selectTab(dockThreadKey, 'notes')
                           setSidePanelOpen(true)
                         }
                       }}
                     >
-                      📌 {c.v2DrawerNotes}
+                      📝 {c.v2DrawerNotes}
                       {whiteboard.length > 0 ? ` (${whiteboard.length})` : ''}
                     </button>
                   </div>
@@ -3264,7 +3864,25 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   </div>
                 )}
 
-                <div className="stage-messages" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                <div className="ak-stage-stream-wrap" style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+                  <AgentTurnNavigator
+                    entries={turnOutlineEntries}
+                    scrollRootRef={scrollRootRef}
+                    onJump={(turnKey) => {
+                      const root = scrollRootRef.current
+                      if (!root) return
+                      const el = root.querySelector<HTMLElement>(`[data-turn-key="${turnKey}"]`)
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }}
+                    onJumpToBottom={() =>
+                      listEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+                    }
+                  />
+                  <div
+                    ref={scrollRootRef}
+                    className="stage-messages"
+                    style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+                  >
                   {messages.length === 0 && (
                     <div className="starter-prompts-box">
                       <p className="muted-sub">{c.selectThreadPrompt}</p>
@@ -3319,6 +3937,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     return (
                       <div
                         key={m.id}
+                        data-turn-key={isUser ? String(m.id) : undefined}
                         className={
                           isUser
                             ? 'salon-turn salon-turn-user'
@@ -3382,7 +4001,12 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                             </details>
                           )}
 
-                          <div className="salon-turn-prose">{renderMessageContent(m.content)}</div>
+                          <div
+                            className="salon-turn-prose"
+                            onMouseUp={!isUser ? () => handleProseMouseUp(m) : undefined}
+                          >
+                            {renderMessageContent(m.content)}
+                          </div>
 
                           <footer className="seat-hover-actions">
                             <button
@@ -3536,11 +4160,32 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     )
                   })}
                   <div ref={listEndRef} />
+                  </div>
                 </div>
+
+                <AgentSelectionToolbar
+                  anchor={selectionBar?.anchor ?? null}
+                  coords={selectionBar?.coords ?? null}
+                  showListen={Boolean(caps?.voice_tts)}
+                  responders={deskResponders}
+                  selectedResponderSlug={selectedResponderSlug}
+                  onSelectResponder={setSelectedResponderSlug}
+                  onAddToChat={(anchor) => handleQuoteIntoComposer(anchor.quote)}
+                  onAsk={(anchor, slug) => handleAskWithResponder(anchor, slug)}
+                  onDismiss={() => setSelectionBar(null)}
+                />
 
                 {(error || streamState.lastError) && (
                   <p className="form-error">{error ?? streamState.lastError}</p>
                 )}
+
+                <AgentQueuedMessages
+                  messages={queuedMessages}
+                  isStreaming={sending}
+                  onWithdraw={(id) =>
+                    setQueuedMessages((prev) => prev.filter((item) => item.id !== id))
+                  }
+                />
 
                 <footer className="composer-tray">
                   <div className="ak-composer-t1">
@@ -3548,7 +4193,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                       [
                         ['scope', c.v2ScopeBtn],
                         ['mode', `${c.v2ModeBtn}: ${chatMode}`],
-                        ['skills', `${c.v2SkillsBtn}${turnSkillSlugs.length ? ` (${turnSkillSlugs.length})` : ''}`],
                         ['mcp', c.v2McpBtn],
                         ['style', `${c.v2StyleBtn}: ${personaStyle}`],
                         ['customize', c.v2CustomizeBtn],
@@ -3609,28 +4253,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                                     {m}
                                   </button>
                                 ))}
-                              </div>
-                            )}
-                            {popId === 'skills' && (
-                              <div className="chip-row">
-                                {grantedSkills.map((sk) => {
-                                  const on = turnSkillSlugs.includes(sk.slug)
-                                  return (
-                                    <button
-                                      key={sk.slug}
-                                      type="button"
-                                      className={on ? 'chip active' : 'chip'}
-                                      onClick={() =>
-                                        setTurnSkillSlugs((prev) =>
-                                          on ? prev.filter((x) => x !== sk.slug) : [...prev, sk.slug],
-                                        )
-                                      }
-                                    >
-                                      {on ? '✓ ' : ''}
-                                      {skillDisplayName(sk)}
-                                    </button>
-                                  )
-                                })}
                               </div>
                             )}
                             {popId === 'mcp' && (
@@ -3724,20 +4346,18 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     </div>
                   )}
 
-                  {turnSkillSlugs.length > 0 && (
-                    <div className="chip-row">
-                      {turnSkillSlugs.map((slug) => (
-                        <button
-                          key={slug}
-                          type="button"
-                          className="chip active"
-                          onClick={() => setTurnSkillSlugs((prev) => prev.filter((s) => s !== slug))}
-                        >
-                          🧩 /{slug} ×
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <AgentComposerLead
+                    modeLabel={chatMode !== 'chat' ? chatMode : null}
+                    onClearMode={() => {
+                      setChatMode('chat')
+                      if (activeThread) {
+                        void updateThread(activeThread.id, { chat_mode: 'chat' })
+                      }
+                    }}
+                    selectedSkills={selectedSkillOptionsV2}
+                    onRemoveSkill={(slug) => toggleTurnSkill(slug)}
+                    applyEveryTurn={applySkillEveryTurn}
+                  />
 
                   <textarea
                     ref={composerRef}
@@ -3806,16 +4426,41 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           {c.composerSkillBtn}
                         </button>
                       </div>
+                      <AgentSkillPicker
+                        size="sm"
+                        label={c.v2SkillsBtn}
+                        searchPlaceholder={c.skillsSearchPlaceholder}
+                        skills={allSkillOptionsV2}
+                        selectedSlugs={turnSkillSlugs}
+                        onToggleSkill={toggleTurnSkill}
+                        applyEveryTurn={applySkillEveryTurn}
+                        onToggleApplyEveryTurn={setApplySkillEveryTurn}
+                        pinnedSlugs={pinnedSkillSlugs}
+                        onTogglePin={(slug) =>
+                          void toggleSkillPin(slug, !pinnedSkillSlugs.includes(slug))
+                        }
+                        onCreateSkill={() => setCreateSkillOpen(true)}
+                        onDeleteCustomSkill={(slug) => void deleteCustomSkill(slug)}
+                      />
                       <AgentSelect
                         size="sm"
                         ariaLabel={c.composerModelLabel}
                         value={turnModelOverride}
                         onChange={setTurnModelOverride}
                         options={[
-                          { value: '', label: `${c.composerModelDefault} (${roleSummary.smartModel})` },
-                          ...selectableModels.map((m) => ({ value: m, label: m })),
+                          {
+                            value: '',
+                            label: `${c.composerModelDefault} (${roleSummary.smartModel})`,
+                            dots: [providerDotStatus],
+                          },
+                          ...selectableModels.map((m) => ({
+                            value: m,
+                            label: m,
+                            dots: [providerDotStatus],
+                          })),
                         ]}
                       />
+                      <AgentContextBudgetChip budget={contextBudget} />
                       {composerBytes > 0 && (
                         <span className="context-budget-chip" title={c.composerBudgetLabel}>
                           {composerBytes < 1024 ? '<1' : (composerBytes / 1024).toFixed(1)} / 16 KB
@@ -3825,190 +4470,442 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     <button
                       type="button"
                       className="btn primary"
-                      disabled={sending || !composerText.trim()}
+                      disabled={!composerText.trim()}
                       onClick={() => void handleSend()}
                     >
-                      {sending ? c.sendingTurnBtn : c.sendTurnBtn}
+                      {sending ? `+ ${c.sendTurnBtn}` : c.sendTurnBtn}
                     </button>
                   </div>
                 </footer>
               </section>
             }
             right={
-              <aside className="group-side-panel" style={{ width: '100%', border: 0 }}>
-                <div className="side-panel-tabs">
-                  <button
-                    type="button"
-                    className={sidePanelTab === 'trace' ? 'tab active' : 'tab'}
-                    onClick={() => setSidePanelTab('trace')}
-                  >
-                    {c.v2DrawerActivity}
-                  </button>
-                  <button
-                    type="button"
-                    className={sidePanelTab === 'context' ? 'tab active' : 'tab'}
-                    onClick={() => setSidePanelTab('context')}
-                  >
-                    {c.v2DrawerNotes}
-                  </button>
-                  <button
-                    type="button"
-                    className="side-panel-close"
-                    aria-label={c.cancelBtn}
-                    title={c.cancelBtn}
-                    onClick={() => setSidePanelOpen(false)}
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                {sidePanelTab === 'trace' && (
-                  <div className="side-panel-trace-list">
-                    {traceEntries.length === 0 ? (
-                      <p className="empty-hint">{c.panelNoTraceYet}</p>
-                    ) : (
-                      traceEntries.map(({ traceId, message, agent }) => (
-                        <article
-                          key={traceId}
-                          data-trace-id={traceId}
-                          className={selectedTraceId === traceId ? 'trace-card active' : 'trace-card'}
-                        >
-                          <header className="trace-card-head">
-                            <strong>
-                              {agent?.emoji ?? '📈'} {agent?.display_name ?? message.sender_slug ?? 'Agent'}
-                            </strong>
-                            {message.round_idx && <span className="round-tag">R{message.round_idx}</span>}
-                          </header>
-                          {message.reasoning && <pre className="trace-reasoning-pre">{message.reasoning}</pre>}
-                          {message.tool_calls && message.tool_calls.length > 0 && (
-                            <div className="salon-tool-list">
-                              {message.tool_calls.map((tc) => (
-                                <ToolInvocationPill key={tc.merge_id} pill={tc} lang={uiLang} />
-                              ))}
-                            </div>
-                          )}
-                        </article>
-                      ))
-                    )}
-                  </div>
-                )}
-
-                {sidePanelTab === 'context' && (
-                  <div className="side-panel-context-pane">
-                    {activeWorkspace && (
-                      <div className="workspace-ctx-summary">
-                        <strong>
-                          {activeWorkspace.emoji} {activeWorkspace.name}
-                        </strong>
-                        <p className="muted-sub">{activeWorkspace.description}</p>
-                        <div className="chip-row">
-                          <span className="scope-badge">
-                            ⌖{' '}
-                            {activeWorkspace.resource_ctx.regions?.length
-                              ? activeWorkspace.resource_ctx.regions.join(', ')
-                              : c.salonScopeRegionsAll}
-                          </span>
-                          <span className="scope-badge">
-                            #{' '}
-                            {activeWorkspace.resource_ctx.topics?.length
-                              ? activeWorkspace.resource_ctx.topics.join(', ')
-                              : c.salonScopeTopicsAll}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeThread && (
-                      <div className="studio-scope-box" style={{ marginBottom: 10 }}>
-                        <div className="ak-toolbar">
-                          <strong>{c.v2L1ScratchpadLabel}</strong>
-                          <button
-                            type="button"
-                            className="btn secondary btn-sm"
-                            disabled={notesSaving}
-                            onClick={() => {
-                              setNotesSaving(true)
-                              void updateThread(activeThread.id, { scratchpad_md: notesDraft }).finally(
-                                () => setNotesSaving(false),
-                              )
-                            }}
-                          >
-                            {c.v2SaveNotesBtn}
-                          </button>
-                        </div>
-                        <textarea
-                          className="ak-notes-editor"
-                          value={notesDraft}
-                          onChange={(e) => setNotesDraft(e.target.value)}
+              <AgentWorkspaceDock
+                embeddedInSplitPane
+                storageKey="newsman:chat-dock"
+                threadId={dockThreadKey}
+                open={sidePanelOpen}
+                onCloseDock={() => setSidePanelOpen(false)}
+                onBackToConversation={
+                  activeDockTab && activeDockTab.id !== 'activity' && activeDockTab.id !== 'notes'
+                    ? () => dockStash.selectTab(dockThreadKey, 'activity')
+                    : undefined
+                }
+                backLabel={c.v22DockBackBtn}
+                tabs={dockState.tabs}
+                activeTabId={dockState.activeId}
+                onSelectTab={(tabId) => {
+                  dockStash.selectTab(dockThreadKey, tabId)
+                  setSidePanelTab(tabId === 'notes' ? 'context' : 'trace')
+                }}
+                onCloseTab={(tabId) => dockStash.closeTab(dockThreadKey, tabId)}
+                launcherOptions={[
+                  {
+                    kind: 'activity',
+                    label: `📈 ${c.v2DrawerActivity}`,
+                    targetId: 'activity',
+                  },
+                  {
+                    kind: 'notes',
+                    label: `📝 ${c.v2DrawerNotes}`,
+                    targetId: 'notes',
+                  },
+                  {
+                    kind: 'custom',
+                    label: '✦ Summarize Round',
+                    targetId: 'prompt:summarize',
+                  },
+                ]}
+                onLaunchTab={(opt) => {
+                  if (opt.kind === 'activity') dockStash.selectTab(dockThreadKey, 'activity')
+                  else if (opt.kind === 'notes') dockStash.selectTab(dockThreadKey, 'notes')
+                  else if (opt.targetId === 'prompt:summarize') {
+                    setComposerText(
+                      uiLang === 'vi'
+                        ? 'Tóm tắt các điểm chính và rủi ro thuế/vĩ mô của phiên thảo luận này.'
+                        : 'Summarize the key macro and tax takeaways from this discussion round.',
+                    )
+                    composerRef.current?.focus()
+                  }
+                }}
+                recentlyClosed={dockState.closed}
+                onReopenClosed={(tab) => dockStash.reopenClosed(dockThreadKey, tab)}
+                onPromptTrigger={(prompt) => {
+                  setComposerText(prompt)
+                  composerRef.current?.focus()
+                }}
+                renderTabBody={(tab) => {
+                  if (tab.id === 'activity' || tab.kind === 'activity') {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <AgentSessionActivity
+                          activity={sessionActivity}
+                          onOpenFile={(file) => {
+                            dockStash.openFileTab(dockThreadKey, file)
+                            setSidePanelOpen(true)
+                          }}
+                          onNavigateSpace={(href) => {
+                            if (href === '#regions' && onOpenRegions) {
+                              onOpenRegions()
+                            } else if (href === '#memory') {
+                              setSurface('memory')
+                            } else if (href === '#studio') {
+                              setSurface('studio')
+                            }
+                          }}
+                          configSection={
+                            traceEntries.length > 0 ? (
+                              <div className="side-panel-trace-list">
+                                {traceEntries.map(({ traceId, message, agent }) => (
+                                  <article
+                                    key={traceId}
+                                    data-trace-id={traceId}
+                                    className={
+                                      selectedTraceId === traceId ? 'trace-card active' : 'trace-card'
+                                    }
+                                  >
+                                    <header className="trace-card-head">
+                                      <strong>
+                                        {agent?.emoji ?? '📈'}{' '}
+                                        {agent?.display_name ?? message.sender_slug ?? 'Agent'}
+                                      </strong>
+                                      {message.round_idx && (
+                                        <span className="round-tag">R{message.round_idx}</span>
+                                      )}
+                                    </header>
+                                    {message.reasoning && (
+                                      <pre className="trace-reasoning-pre">{message.reasoning}</pre>
+                                    )}
+                                    {message.tool_calls && message.tool_calls.length > 0 && (
+                                      <div className="salon-tool-list">
+                                        {message.tool_calls.map((tc) => (
+                                          <ToolInvocationPill
+                                            key={tc.merge_id}
+                                            pill={tc}
+                                            lang={uiLang}
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
+                                  </article>
+                                ))}
+                              </div>
+                            ) : undefined
+                          }
                         />
                       </div>
-                    )}
+                    )
+                  }
 
-                    <div className="wb-head">
-                      <div>
-                        <strong>{c.whiteboardTitle}</strong>
-                        <p>{c.whiteboardSub}</p>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn small secondary"
-                        disabled={summarizing || !selectedThreadId}
-                        onClick={() => {
-                          setSummarizing(true)
-                          void summarizeRound().finally(() => setSummarizing(false))
-                        }}
-                      >
-                        {summarizing ? c.whiteboardSummarizing : c.whiteboardSummarizeBtn}
-                      </button>
-                    </div>
-                    <div className="wb-list">
-                      {whiteboard.length === 0 && <p className="empty-hint">{c.whiteboardEmpty}</p>}
-                      {whiteboard.map((note) => (
-                        <div key={note.id} className="wb-note">
-                          <div className="wb-note-head">
-                            <span>
-                              {note.pinned && <span className="tier-badge">{c.whiteboardPinnedBadge}</span>}{' '}
-                              <b>@{note.author_slug ?? 'owner'}</b>
-                            </span>
-                            <button
-                              type="button"
-                              className="icon-del"
-                              aria-label={c.cancelBtn}
-                              title={c.cancelBtn}
-                              onClick={() => void deleteWhiteboardNote(note.id)}
-                            >
-                              🗑
-                            </button>
+                  if (tab.id === 'notes' || tab.kind === 'notes') {
+                    return (
+                      <div className="side-panel-context-pane">
+                        {activeWorkspace && (
+                          <div className="workspace-ctx-summary">
+                            <strong>
+                              {activeWorkspace.emoji} {activeWorkspace.name}
+                            </strong>
+                            <p className="muted-sub">{activeWorkspace.description}</p>
+                            <div className="chip-row">
+                              <span className="scope-badge">
+                                ⌖{' '}
+                                {activeWorkspace.resource_ctx.regions?.length
+                                  ? activeWorkspace.resource_ctx.regions.join(', ')
+                                  : c.salonScopeRegionsAll}
+                              </span>
+                              <span className="scope-badge">
+                                #{' '}
+                                {activeWorkspace.resource_ctx.topics?.length
+                                  ? activeWorkspace.resource_ctx.topics.join(', ')
+                                  : c.salonScopeTopicsAll}
+                              </span>
+                            </div>
                           </div>
-                          <p>{note.content}</p>
+                        )}
+
+                        {activeThread && (
+                          <div className="studio-scope-box" style={{ marginBottom: 10 }}>
+                            <div className="ak-toolbar">
+                              <strong>{c.v2L1ScratchpadLabel}</strong>
+                              <button
+                                type="button"
+                                className="btn secondary btn-sm"
+                                disabled={notesSaving}
+                                onClick={() => {
+                                  setNotesSaving(true)
+                                  void updateThread(activeThread.id, {
+                                    scratchpad_md: notesDraft,
+                                  }).finally(() => setNotesSaving(false))
+                                }}
+                              >
+                                {c.v2SaveNotesBtn}
+                              </button>
+                            </div>
+                            <textarea
+                              className="ak-notes-editor"
+                              value={notesDraft}
+                              onChange={(e) => setNotesDraft(e.target.value)}
+                            />
+                          </div>
+                        )}
+
+                        <div className="wb-head">
+                          <div>
+                            <strong>{c.whiteboardTitle}</strong>
+                            <p>{c.whiteboardSub}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn small secondary"
+                            disabled={summarizing || !selectedThreadId}
+                            onClick={() => {
+                              setSummarizing(true)
+                              void summarizeRound().finally(() => setSummarizing(false))
+                            }}
+                          >
+                            {summarizing ? c.whiteboardSummarizing : c.whiteboardSummarizeBtn}
+                          </button>
                         </div>
-                      ))}
+                        <div className="wb-list">
+                          {whiteboard.length === 0 && <p className="empty-hint">{c.whiteboardEmpty}</p>}
+                          {whiteboard.map((note) => (
+                            <div key={note.id} className="wb-note">
+                              <div className="wb-note-head">
+                                <span>
+                                  {note.pinned && (
+                                    <span className="tier-badge">{c.whiteboardPinnedBadge}</span>
+                                  )}{' '}
+                                  <b>@{note.author_slug ?? 'owner'}</b>
+                                </span>
+                                <button
+                                  type="button"
+                                  className="icon-del"
+                                  aria-label={c.cancelBtn}
+                                  title={c.cancelBtn}
+                                  onClick={() => void deleteWhiteboardNote(note.id)}
+                                >
+                                  🗑
+                                </button>
+                              </div>
+                              <p>{note.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="wb-add">
+                          <textarea
+                            rows={2}
+                            value={wbInput}
+                            placeholder={c.whiteboardPlaceholder}
+                            onChange={(e) => setWbInput(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="btn small primary"
+                            disabled={!wbInput.trim() || !selectedThreadId}
+                            onClick={() => {
+                              const txt = wbInput.trim()
+                              setWbInput('')
+                              void addWhiteboardNote(txt)
+                            }}
+                          >
+                            {c.whiteboardAddBtn}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  const artMatch = /^file:(?:scoped-art-|article-)(\d+)$/.exec(tab.id)
+                  const metaFile = tab.meta?.file as SessionArtifactFileV2 | undefined
+                  const previewBody = String(metaFile?.previewText ?? '')
+                  return (
+                    <div className="studio-section" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <strong>{tab.title}</strong>
+                      {previewBody ? (
+                        <pre className="skill-playbook-body" style={{ whiteSpace: 'pre-wrap' }}>
+                          {previewBody}
+                        </pre>
+                      ) : (
+                        <p className="muted-sub">—</p>
+                      )}
+                      {artMatch && onOpenArticle && (
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn primary btn-sm"
+                            onClick={() => onOpenArticle(Number(artMatch[1]))}
+                          >
+                            📰 {c.companionJumpArticle} #{artMatch[1]}
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <div className="wb-add">
-                      <textarea
-                        rows={2}
-                        value={wbInput}
-                        placeholder={c.whiteboardPlaceholder}
-                        onChange={(e) => setWbInput(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn small primary"
-                        disabled={!wbInput.trim() || !selectedThreadId}
-                        onClick={() => {
-                          const txt = wbInput.trim()
-                          setWbInput('')
-                          void addWhiteboardNote(txt)
-                        }}
-                      >
-                        {c.whiteboardAddBtn}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </aside>
+                  )
+                }}
+              />
             }
           />
+        </div>
+      )}
+
+      {createSkillOpen && (
+        <div className="modal-backdrop" role="dialog" aria-label={c.v22CreateSkillTitle}>
+          <div className="modal-card">
+            <h3>{c.v22CreateSkillTitle}</h3>
+            <div className="catalog-form-row">
+              <label className="field">
+                <span>{c.v22CreateSkillSlugLabel}</span>
+                <input
+                  value={createSkillForm.slug}
+                  placeholder="macro-flash-digest"
+                  onChange={(e) =>
+                    setCreateSkillForm((p) => ({
+                      ...p,
+                      slug: e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, '-'),
+                    }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>{c.v22CreateSkillNameLabel}</span>
+                <input
+                  value={createSkillForm.name}
+                  placeholder="Macro Flash Digest"
+                  onChange={(e) => setCreateSkillForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </label>
+            </div>
+            <label className="field">
+              <span>{c.v22CreateSkillDescLabel}</span>
+              <input
+                value={createSkillForm.description}
+                onChange={(e) => setCreateSkillForm((p) => ({ ...p, description: e.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>{c.v22CreateSkillMdLabel}</span>
+              <textarea
+                rows={6}
+                value={createSkillForm.skill_md}
+                placeholder="# Instructions\n1. Check primary RSS sources...\n2. Keep declared tax disclaimers..."
+                onChange={(e) => setCreateSkillForm((p) => ({ ...p, skill_md: e.target.value }))}
+              />
+            </label>
+            <div className="btn-row">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={createSkillBusy || !createSkillForm.slug.trim() || !createSkillForm.name.trim()}
+                onClick={() => {
+                  setCreateSkillBusy(true)
+                  void saveCustomSkill({
+                    slug: createSkillForm.slug.trim(),
+                    name: createSkillForm.name.trim(),
+                    description: createSkillForm.description.trim(),
+                    slash_command: `/${createSkillForm.slug.trim()}`,
+                    skill_md: createSkillForm.skill_md,
+                    pinned: true,
+                  })
+                    .then((created) => {
+                      if (created) {
+                        setTurnSkillSlugs((prev) =>
+                          prev.includes(created.slug) ? prev : [...prev, created.slug],
+                        )
+                      }
+                      setCreateSkillForm({
+                        slug: '',
+                        name: '',
+                        description: '',
+                        slash_command: '',
+                        skill_md: '',
+                      })
+                      setCreateSkillOpen(false)
+                    })
+                    .finally(() => setCreateSkillBusy(false))
+                }}
+              >
+                {c.v22CreateSkillSaveBtn}
+              </button>
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setCreateSkillOpen(false)}
+              >
+                {c.cancelBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkImportOpen && (
+        <div className="modal-backdrop" role="dialog" aria-label={c.v22BulkImportTitle}>
+          <div className="modal-card">
+            <h3>{c.v22BulkImportTitle}</h3>
+            <label className="field">
+              <span>{c.v22BulkProviderLabel}</span>
+              <input
+                value={bulkImportProvider}
+                placeholder="hub"
+                onChange={(e) => setBulkImportProvider(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>{c.v22BulkModelsInputLabel}</span>
+              <textarea
+                rows={5}
+                value={bulkImportRaw}
+                placeholder="gpt-5.4\nclaude-sonnet-4-6\ngemini-2.5-pro"
+                onChange={(e) => setBulkImportRaw(e.target.value)}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
+              <input
+                type="checkbox"
+                checked={bulkPreserveEnabled}
+                onChange={(e) => setBulkPreserveEnabled(e.target.checked)}
+              />
+              <span>{c.v22BulkPreserveEnabled}</span>
+            </label>
+            <div className="btn-row">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={bulkImportBusy || !bulkImportRaw.trim()}
+                onClick={() => {
+                  const ids = bulkImportRaw
+                    .split(/[\n,]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                  if (ids.length === 0) return
+                  setBulkImportBusy(true)
+                  void bulkUpsertCatalogModels({
+                    provider_id: bulkImportProvider.trim() || 'hub',
+                    preserve_existing_enabled: bulkPreserveEnabled,
+                    models: ids.map((model_id) => ({ model_id, enabled: true })),
+                  })
+                    .then((res) => {
+                      setConnNotice(`${c.v22BulkSubmitBtn}: ${res.upserted_count ?? 0}`)
+                      setBulkImportRaw('')
+                      setBulkImportOpen(false)
+                    })
+                    .catch((err) =>
+                      setConnError(err instanceof Error ? err.message : 'Bulk import failed'),
+                    )
+                    .finally(() => setBulkImportBusy(false))
+                }}
+              >
+                {c.v22BulkSubmitBtn}
+              </button>
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setBulkImportOpen(false)}
+              >
+                {c.cancelBtn}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

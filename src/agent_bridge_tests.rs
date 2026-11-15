@@ -3354,16 +3354,18 @@ async fn test_8_v2_manifest_catalog_providers_ask_user_branch_cowriter_memory_an
     let app = crate::router(state.clone());
     let cookie = login_cookie(&app).await;
 
-    // 8A. Manifest v2.0 contract + Newsroom capabilities & quick_actions
+    // 8A. Manifest v2.2 contract + Newsroom capabilities & quick_actions
     let (st, manifest) = authed_json(&app, &cookie, "GET", "/api/app-agents/manifest", None).await;
     assert_eq!(st, StatusCode::OK, "{manifest}");
-    assert_eq!(manifest["protocol_version"], "2.0");
+    assert_eq!(manifest["protocol_version"], "2.2");
     assert_eq!(manifest["app_id"], "lnc-newsman");
     assert_eq!(manifest["capabilities"]["voice_tts"], false);
     assert_eq!(manifest["capabilities"]["voice_stt"], false);
     assert_eq!(manifest["capabilities"]["image_gen"], false);
     assert_eq!(manifest["capabilities"]["co_writer"], true);
     assert_eq!(manifest["capabilities"]["memory_graph"], true);
+    assert_eq!(manifest["workspace_tabs"], json!(["activity", "notes", "preview", "artifact", "memory"]));
+    assert!(manifest["skills"].as_array().is_some_and(|arr| !arr.is_empty()));
     assert_eq!(manifest["scope_kinds"], json!(["region", "series", "topic"]));
     assert!(manifest["quick_actions"].as_array().unwrap().len() >= 4);
 
@@ -3895,4 +3897,218 @@ async fn test_8_v2_manifest_catalog_providers_ask_user_branch_cowriter_memory_an
     hub_task.abort();
     cp_task.abort();
     tg_task.abort();
+}
+
+#[tokio::test]
+async fn test_9_v22_bulk_upsert_fingerprint_embedding_guard_and_custom_skills() {
+    let dir = unique_temp_dir("t9_v22");
+    let db = Database::in_memory().unwrap();
+    let _seeded = seed_newsroom_fixture(&db);
+    let vault = secrets::SecretBox::from_bytes([0x77; 32], None);
+    let (hub_url, hub_st, hub_task) = spawn_mock_v2_hub().await;
+
+    let state = build_test_state(dir, db, Fetcher::allow_loopback_for_tests(), Some(vault));
+    // Verify idempotent re-run of ensure_v2_columns_and_tables
+    {
+        let guard = state.db.lock().unwrap();
+        crate::agent_v2::ensure_v2_columns_and_tables(&guard.conn).unwrap();
+        crate::agent_v2::ensure_v2_columns_and_tables(&guard.conn).unwrap();
+    }
+
+    // 9A. Unit checks: model_config_fingerprint determinism & secret safety + embedding guard
+    let fp_a = crate::agent_v2::model_config_fingerprint(
+        "hub",
+        "gpt-5.4",
+        "https://hub.example/v1/",
+        "sk-super-secret-xyz",
+        r#"{"reasoning":"enabled"}"#,
+    );
+    let fp_b = crate::agent_v2::model_config_fingerprint(
+        "hub",
+        "gpt-5.4",
+        "https://hub.example/v1",
+        "sk-super-secret-xyz",
+        r#"{"reasoning":"enabled"}"#,
+    );
+    let fp_c = crate::agent_v2::model_config_fingerprint(
+        "hub",
+        "gpt-5.4",
+        "https://hub.example/v1",
+        "sk-rotated-key-999",
+        r#"{"reasoning":"enabled"}"#,
+    );
+    assert_eq!(fp_a.len(), 64);
+    assert_eq!(fp_a, fp_b, "trailing slash normalized in fingerprint");
+    assert_ne!(fp_a, fp_c, "rotated secret changes fingerprint");
+    assert!(!fp_a.contains("sk-super-secret"));
+
+    assert!(crate::agent_v2::check_embedding_dimension_guard(None, 1536).is_ok());
+    assert!(crate::agent_v2::check_embedding_dimension_guard(Some(1536), 1536).is_ok());
+    assert!(crate::agent_v2::check_embedding_dimension_guard(Some(1536), 0).is_err());
+    let dim_err = crate::agent_v2::check_embedding_dimension_guard(Some(1536), 3072).unwrap_err();
+    assert!(dim_err.contains("1536") && dim_err.contains("3072"));
+
+    let app = crate::router(state.clone());
+    let cookie = login_cookie(&app).await;
+
+    let _ = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/bridge-config",
+        Some(json!({
+            "hub_url": hub_url,
+            "hub_token": "hub-v22-secret",
+            "allowed_hosts": ["127.0.0.1"],
+            "default_smart_model": "gpt-5.4"
+        })),
+    )
+    .await;
+
+    // 9B. Single model upsert with capability_overrides & detected_context_window (enabled = false)
+    let (st_up, up_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/models/upsert",
+        Some(json!({
+            "model_id": "claude-sonnet-4-5",
+            "display_name": "Claude Sonnet 4.5",
+            "provider": "hub",
+            "enabled": false,
+            "detected_context_window": 200000,
+            "capability_overrides": {
+                "reasoning": "enabled",
+                "vision": "disabled",
+                "tools": "auto"
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_up, StatusCode::OK, "{up_res}");
+    assert_eq!(up_res["model"]["enabled"], false);
+    assert_eq!(up_res["model"]["detected_context_window"], 200000);
+    assert_eq!(up_res["model"]["capability_overrides"]["reasoning"], "enabled");
+    assert_eq!(up_res["model"]["capability_overrides"]["vision"], "disabled");
+    assert_eq!(
+        up_res["model"]["last_test_fingerprint"].as_str().unwrap().len(),
+        64
+    );
+    assert!(!up_res.to_string().contains("hub-v22-secret"));
+
+    // 9C. Bulk upsert with preserve_existing_enabled = true (default) keeps `claude-sonnet-4-5` disabled!
+    let (st_bulk, bulk_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/models/bulk-upsert",
+        Some(json!({
+            "provider": "hub",
+            "preserve_existing_enabled": true,
+            "models": [
+                { "model_id": "claude-sonnet-4-5", "enabled": true },
+                { "model_id": "gemini-2.5-pro", "enabled": true },
+                { "model_id": "text-embedding-3-large", "enabled": true }
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(st_bulk, StatusCode::OK, "{bulk_res}");
+    assert_eq!(bulk_res["upserted_count"], 3);
+    let items = bulk_res["items"].as_array().unwrap();
+    let claude = items.iter().find(|m| m["model_id"] == "claude-sonnet-4-5").unwrap();
+    assert_eq!(claude["enabled"], false, "preserve_existing_enabled must keep prior disabled state");
+    assert_eq!(claude["capability_overrides"]["reasoning"], "enabled");
+    let gemini = items.iter().find(|m| m["model_id"] == "gemini-2.5-pro").unwrap();
+    assert_eq!(gemini["enabled"], true);
+    assert_eq!(gemini["context_window"], 1000000);
+    let embed = items.iter().find(|m| m["model_id"] == "text-embedding-3-large").unwrap();
+    assert_eq!(embed["capabilities"], json!(["embedding"]));
+
+    // 9D. Custom skills CRUD + pin toggle + prompt injection on turn
+    let (st_cs, cs_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/custom-skills",
+        Some(json!({
+            "name": "Macro FX Flash Playbook",
+            "description": "Custom FX desk checklist",
+            "skill_md": "ALWAYS include section header `### FX-DESK-CHECKLIST`.",
+            "tags": ["fx", "macro"],
+            "slash_command": "/fx-flash",
+            "pinned": true
+        })),
+    )
+    .await;
+    assert_eq!(st_cs, StatusCode::OK, "{cs_res}");
+    assert_eq!(cs_res["skill"]["slug"], "macro-fx-flash-playbook");
+    assert_eq!(cs_res["skill"]["pinned"], true);
+    assert_eq!(cs_res["skill"]["slash_command"], "/fx-flash");
+
+    // Verify custom skill appears in GET /api/app-agents/skills & manifest, and pin toggle works on builtin skill
+    let (st_pin, pin_res) = authed_json(
+        &app,
+        &cookie,
+        "PATCH",
+        "/api/app-agents/skills/editorial-factcheck-digest",
+        Some(json!({ "pinned": true })),
+    )
+    .await;
+    assert_eq!(st_pin, StatusCode::OK, "{pin_res}");
+    assert_eq!(pin_res["skill"]["pinned"], true);
+
+    // Create thread and run turn attaching custom skill -> verify system prompt injected custom `skill_md`
+    let (st_thr, thr_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/threads",
+        Some(json!({
+            "kind": "direct",
+            "member_slugs": ["macro-argus"],
+            "title": "FX Custom Skill Test"
+        })),
+    )
+    .await;
+    assert_eq!(st_thr, StatusCode::OK);
+    let tid = thr_res["thread"]["id"].as_str().unwrap().to_string();
+
+    let (st_turn, _turn_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/turns"),
+        Some(json!({
+            "text": "Đánh giá tỷ giá USD/VND hôm nay",
+            "skill_slugs": ["macro-fx-flash-playbook"]
+        })),
+    )
+    .await;
+    assert_eq!(st_turn, StatusCode::OK);
+    {
+        let reqs = hub_st.chat_requests.lock().unwrap();
+        let last_sys = reqs
+            .last()
+            .and_then(|r| r.2["messages"][0]["content"].as_str())
+            .unwrap_or("");
+        assert!(
+            last_sys.contains("FX-DESK-CHECKLIST"),
+            "custom skill_md must be injected into system prompt: {last_sys}"
+        );
+    }
+
+    // Delete custom skill
+    let (st_del, del_res) = authed_json(
+        &app,
+        &cookie,
+        "DELETE",
+        "/api/app-agents/custom-skills/macro-fx-flash-playbook",
+        None,
+    )
+    .await;
+    assert_eq!(st_del, StatusCode::OK, "{del_res}");
+    assert_eq!(del_res["items"].as_array().unwrap().len(), 0);
+
+    hub_task.abort();
 }

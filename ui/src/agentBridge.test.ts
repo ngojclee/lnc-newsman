@@ -1,6 +1,9 @@
 import {
   AGENT_COPY,
+  buildContextBudgetV2,
+  buildSessionActivityV2,
   DEFAULT_SEED_AGENTS,
+  foldVi,
   formatBridgeModeLabel,
   formatDiscussionModeShort,
   NEWSMAN_APP_TOOLS,
@@ -503,12 +506,12 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   assertEqual(sanitizedBridge.llm_base_url, '')
 }
 
-// 11. v2.0 contract tests: manifest surface gating, SSE v2 frames, Smart/Fast roles, AgentStudio hygiene
+// 11. v2.2 contract tests: manifest surface gating, SSE v2 frames, Smart/Fast roles, AgentStudio hygiene
 {
   const gate = filterSurfacesByManifest({
     app_id: 'lnc-newsman',
     display_name: 'LNC Newsman',
-    protocol_version: '2.0',
+    protocol_version: '2.2',
     capabilities: {
       voice_tts: false,
       voice_stt: false,
@@ -597,10 +600,120 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
 
   const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
     readFileSync: (p: URL | string, enc: string) => string
+    existsSync: (p: URL | string) => boolean
+    readdirSync: (p: URL | string) => string[]
   }
   const studioPath = new URL('./AgentStudio.tsx', import.meta.url)
   const studioCode = fsMod.readFileSync(studioPath, 'utf8')
   assertEqual(studioCode.includes('shelf-tabs'), false, 'AgentStudio must not use .shelf-tabs')
 }
 
-console.log('11/11 agentBridge tests passed')
+// 12. lnc-app-agents v2.2 parity: foldVi, context budget, session activity, 11-file agent-kit, Blueprint v3.0 guards
+{
+  assertEqual(foldVi('Đà Nẵng & Thuế TNDN'), 'da nang & thue tndn')
+  assertEqual(foldVi('ĐỒNG NAI — Lãi Suất'), 'dong nai — lai suat')
+
+  const budget = buildContextBudgetV2({
+    window: 128000,
+    model: 'gpt-5.4',
+    systemText: 'You are Macro Argus on the Newsman Desk.'.repeat(20),
+    appToolCount: 8,
+    mcpToolCount: 12,
+    skillsText: '# Macro Brief Skill\nVerify sources.'.repeat(10),
+    memoryText: 'L1 scratchpad + L2 canon rule',
+    sourcesText: 'vn · eu · #macro · #tax',
+    conversationText: 'User: Summarize SBV rate update.\nAssistant: Policy rates held steady.',
+  })
+  assertEqual(budget.window, 128000)
+  assertOk(budget.used_tokens > 0, 'budget used_tokens > 0')
+  assertOk(budget.free_tokens > 0, 'budget free_tokens > 0')
+  assertEqual(budget.used_tokens + budget.free_tokens, 128000)
+  assertEqual(budget.segments.length, 7)
+
+  const activity = buildSessionActivityV2({
+    toolNames: [
+      'newsman__latest_articles',
+      'newsman__tax_calendar',
+      'newsman__latest_articles',
+    ],
+    knowledgeBases: ['Newsman FTS5 Reader', 'Declared Tax Calendar', 'Newsman FTS5 Reader'],
+    personas: [{ slug: 'macro-argus', name: 'Macro Argus', role: 'Macro Analyst' }],
+    regions: ['vn'],
+    topics: ['#tax'],
+    memoryItems: [{ id: 'm1', title: 'Tax rule', layer: 'L2' }],
+    generatedFiles: [{ id: 'article-42', filename: 'Article #42.md', ext: 'md' }],
+    attachments: [],
+  })
+  assertEqual(activity.tools.length, 2)
+  assertEqual(activity.tools[0].name, 'newsman__latest_articles')
+  assertEqual(activity.tools[0].count, 2)
+  assertEqual(activity.knowledgeBases.length, 2)
+  assertEqual(activity.space.length, 3)
+
+  const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+    readFileSync: (p: URL | string, enc: string) => string
+    existsSync: (p: URL | string) => boolean
+    readdirSync: (p: URL | string) => string[]
+  }
+
+  const requiredKitFiles = [
+    'agentTypesV2.ts',
+    'AgentSelect.tsx',
+    'AgentSkillPicker.tsx',
+    'AgentWorkspaceDock.tsx',
+    'AgentSessionActivity.tsx',
+    'AgentQueuedMessages.tsx',
+    'AgentTurnNavigator.tsx',
+    'AgentContextBudgetChip.tsx',
+    'AgentSelectionToolbar.tsx',
+    'AgentSplitPane.tsx',
+    'agent-kit-hygiene.css',
+  ]
+  for (const fileName of requiredKitFiles) {
+    const fileUrl = new URL(`./agent-kit/${fileName}`, import.meta.url)
+    assertOk(fsMod.existsSync(fileUrl), `Missing v2.2 agent-kit file: ${fileName}`)
+  }
+
+  const hygieneCss = fsMod.readFileSync(
+    new URL('./agent-kit/agent-kit-hygiene.css', import.meta.url),
+    'utf8',
+  )
+  assertOk(
+    hygieneCss.includes('--ak-surface-elevated: var(--ak-soft);'),
+    'agent-kit-hygiene.css must preserve --ak-surface-elevated: var(--ak-soft);',
+  )
+
+  const workspaceCode = fsMod.readFileSync(new URL('./AgentsWorkspace.tsx', import.meta.url), 'utf8')
+  assertEqual(
+    workspaceCode.includes('type="password"'),
+    false,
+    'AgentsWorkspace.tsx must not re-introduce password inputs (Rule T2 / 5fde443)',
+  )
+  assertOk(
+    workspaceCode.includes('#mcp-connectors'),
+    'AgentsWorkspace.tsx must preserve #mcp-connectors link chip',
+  )
+  assertOk(
+    workspaceCode.includes('showListen={Boolean(caps?.voice_tts)}'),
+    'AgentsWorkspace.tsx must gate Listen action on voice_tts capability',
+  )
+
+  const agentUiFiles = [
+    new URL('./AgentsWorkspace.tsx', import.meta.url),
+    new URL('./AgentStudio.tsx', import.meta.url),
+    new URL('./CompanionDrawer.tsx', import.meta.url),
+    ...fsMod
+      .readdirSync(new URL('./agent-kit/', import.meta.url))
+      .filter((n) => n.endsWith('.tsx'))
+      .map((n) => new URL(`./agent-kit/${n}`, import.meta.url)),
+  ]
+  for (const fileUrl of agentUiFiles) {
+    const src = fsMod.readFileSync(fileUrl, 'utf8')
+    assertEqual(/<select\b/.test(src), false, `Forbidden <select> in ${fileUrl.pathname}`)
+    assertEqual(/<datalist\b/.test(src), false, `Forbidden <datalist> in ${fileUrl.pathname}`)
+    assertEqual(src.includes('sessionStorage'), false, `Forbidden sessionStorage in ${fileUrl.pathname}`)
+    assertEqual(src.includes('document.cookie'), false, `Forbidden document.cookie in ${fileUrl.pathname}`)
+  }
+}
+
+console.log('12/12 agentBridge tests passed')

@@ -500,9 +500,22 @@ fn router(state: SharedState) -> Router {
             get(agent_v2::get_models_catalog).patch(agent_v2::patch_models_catalog),
         )
         .route("/api/app-agents/models/fetch", post(agent_v2::post_models_fetch))
+        .route("/api/app-agents/models/upsert", post(agent_v2::post_models_upsert))
+        .route(
+            "/api/app-agents/models/bulk-upsert",
+            post(agent_v2::post_models_bulk_upsert),
+        )
         .route(
             "/api/app-agents/models/roles",
             axum::routing::put(agent_v2::put_models_roles),
+        )
+        .route(
+            "/api/app-agents/custom-skills",
+            get(agent_v2::get_custom_skills).post(agent_v2::post_custom_skill),
+        )
+        .route(
+            "/api/app-agents/custom-skills/{slug}",
+            axum::routing::delete(agent_v2::delete_custom_skill),
         )
         .route(
             "/api/app-agents/mcp-namespaces",

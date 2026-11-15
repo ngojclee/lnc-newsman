@@ -14,11 +14,14 @@ import {
   type AskUserPrompt,
   type BridgeRoutingSummary,
   type BridgeStatus,
+  type BulkModelImportRequestV2,
   type BusinessMcpNamespaceItem,
+  type CapabilityTriState,
   type CatalogModelItem,
   type ConnectionProbeReport,
   type CoWriterDraftRow,
   type CustomProviderItem,
+  type CustomSkillItemV2,
   type DiscussionMode,
   type HubCapabilityBundleSummary,
   type HubEffectiveBundleCache,
@@ -1094,6 +1097,7 @@ export function useAppAgents() {
   const [modelCatalog, setModelCatalog] = useState<CatalogModelItem[]>([])
   const [mcpNamespaces, setMcpNamespaces] = useState<BusinessMcpNamespaceItem[]>([])
   const [customProviders, setCustomProviders] = useState<CustomProviderItem[]>([])
+  const [customSkills, setCustomSkills] = useState<CustomSkillItemV2[]>([])
   const [memoryGraph, setMemoryGraph] = useState<MemoryGraphPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -1208,6 +1212,15 @@ export function useAppAgents() {
     try {
       const res = await appAgentsApi<{ items?: CustomProviderItem[] }>('/api/app-agents/custom-providers')
       if (Array.isArray(res.items)) setCustomProviders(res.items)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const loadCustomSkills = useCallback(async () => {
+    try {
+      const res = await appAgentsApi<{ items?: CustomSkillItemV2[] }>('/api/app-agents/custom-skills')
+      if (Array.isArray(res.items)) setCustomSkills(res.items)
     } catch {
       /* ignore */
     }
@@ -1368,6 +1381,7 @@ export function useAppAgents() {
         loadModelCatalog(),
         loadMcpNamespaces(),
         loadCustomProviders(),
+        loadCustomSkills(),
         loadMemoryGraph(),
       ])
     } catch (err) {
@@ -1380,6 +1394,7 @@ export function useAppAgents() {
     loadAgents,
     loadBridgeStatus,
     loadCustomProviders,
+    loadCustomSkills,
     loadManifest,
     loadMcpNamespaces,
     loadMemoryGraph,
@@ -1716,6 +1731,63 @@ export function useAppAgents() {
     }
   }, [])
 
+  const toggleSkillPin = useCallback(
+    async (slug: string, pinned: boolean) => {
+      const res = await appAgentsApi<{ skill?: HubSkillSummary; item?: HubSkillSummary }>(
+        `/api/app-agents/skills/${encodeURIComponent(slug)}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ pinned }),
+        },
+      )
+      const updated = res.skill ?? res.item
+      if (updated) {
+        setSkills((prev) => prev.map((s) => (s.slug === slug ? updated : s)))
+      } else {
+        setSkills((prev) => prev.map((s) => (s.slug === slug ? { ...s, pinned } : s)))
+      }
+      setCustomSkills((prev) => prev.map((c) => (c.slug === slug ? { ...c, pinned } : c)))
+      await loadManifest()
+    },
+    [loadManifest],
+  )
+
+  const saveCustomSkill = useCallback(
+    async (input: {
+      slug?: string
+      name: string
+      description?: string
+      skill_md: string
+      tags?: string[]
+      slash_command?: string
+      pinned?: boolean
+    }) => {
+      const res = await appAgentsApi<{ item?: CustomSkillItemV2; items?: CustomSkillItemV2[] }>(
+        '/api/app-agents/custom-skills',
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+      if (Array.isArray(res.items)) setCustomSkills(res.items)
+      await Promise.all([loadSkills(), loadManifest()])
+      return res.item ?? null
+    },
+    [loadManifest, loadSkills],
+  )
+
+  const deleteCustomSkill = useCallback(
+    async (slug: string) => {
+      const res = await appAgentsApi<{ items?: CustomSkillItemV2[] }>(
+        `/api/app-agents/custom-skills/${encodeURIComponent(slug)}`,
+        { method: 'DELETE' },
+      )
+      if (Array.isArray(res.items)) setCustomSkills(res.items)
+      await Promise.all([loadSkills(), loadManifest()])
+    },
+    [loadManifest, loadSkills],
+  )
+
   const requestSkillAccess = useCallback(
     async (input: {
       target_kind: AccessRequestTargetKind | string
@@ -1763,6 +1835,45 @@ export function useAppAgents() {
       })
       if (Array.isArray(res.items)) setModelCatalog(res.items)
       await loadModels()
+    },
+    [loadModels],
+  )
+
+  const upsertCatalogModel = useCallback(
+    async (input: {
+      provider_id?: string
+      model_id: string
+      display_name?: string
+      context_window?: number | null
+      detected_context_window?: number | null
+      enabled?: boolean
+      capability_overrides?: Record<string, CapabilityTriState>
+      capability_overrides_json?: string
+      last_test_fingerprint?: string
+    }) => {
+      const res = await appAgentsApi<{ items?: CatalogModelItem[] }>('/api/app-agents/models/upsert', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
+      if (Array.isArray(res.items)) setModelCatalog(res.items)
+      await loadModels()
+      return res
+    },
+    [loadModels],
+  )
+
+  const bulkUpsertCatalogModels = useCallback(
+    async (input: BulkModelImportRequestV2) => {
+      const res = await appAgentsApi<{ upserted_count?: number; items?: CatalogModelItem[] }>(
+        '/api/app-agents/models/bulk-upsert',
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+        },
+      )
+      if (Array.isArray(res.items)) setModelCatalog(res.items)
+      await loadModels()
+      return res
     },
     [loadModels],
   )
@@ -1992,6 +2103,7 @@ export function useAppAgents() {
     modelCatalog,
     mcpNamespaces,
     customProviders,
+    customSkills,
     memoryGraph,
     agents,
     models,
@@ -2021,6 +2133,7 @@ export function useAppAgents() {
     loadModelCatalog,
     loadMcpNamespaces,
     loadCustomProviders,
+    loadCustomSkills,
     loadMemoryGraph,
     loadThreads,
     loadWorkspaces,
@@ -2030,10 +2143,15 @@ export function useAppAgents() {
     probeConnections,
     fetchModelCatalog,
     toggleCatalogModels,
+    upsertCatalogModel,
+    bulkUpsertCatalogModels,
     saveModelRoles,
     saveMcpNamespaces,
     createCustomProvider,
     deleteCustomProvider,
+    saveCustomSkill,
+    deleteCustomSkill,
+    toggleSkillPin,
     saveAgent,
     deleteAgent,
     pullAgentFromHub,

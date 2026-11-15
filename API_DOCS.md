@@ -345,11 +345,16 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `DELETE /api/app-agents/telegram/routes/{id}` | Session + CSRF | Delete a conversational Telegram route |
 | `POST /api/app-agents/telegram/webhook/direct` | `X-Telegram-Bot-Api-Secret-Token` | Receive inbound Telegram Bot API webhook updates (constant-time secret check; separate from `src/telegram.rs` alert outbox) |
 | `POST /api/app-agents/telegram/webhook/cygnus` | `x-gateway-key` | Receive inbound Cygnus gateway webhook envelopes (constant-time key check; preserves `message_thread_id`) |
-| `GET /api/app-agents/manifest` | Session | Read `lnc-app-agents` `protocol_version: "2.0"` manifest (`capabilities`, `scope_kinds: ["region", "series", "topic"]`, `ui_defaults`, `surfaces`, Newsroom `quick_actions`) |
-| `GET /api/app-agents/models/catalog` | Session | List persisted model catalog entries (`enabled`, `source`, `capabilities`, default roles) |
+| `GET /api/app-agents/manifest` | Session | Read `lnc-app-agents` `protocol_version: "2.2"` manifest (`capabilities`, `features`, `workspace_tabs`, `skills`, `scope_kinds: ["region", "series", "topic"]`, `ui_defaults`, `surfaces`, Newsroom `quick_actions`) |
+| `GET /api/app-agents/models/catalog` | Session | List persisted model catalog entries (`enabled`, `source`, `capabilities`, `capability_overrides`, `last_test_fingerprint`, `detected_context_window`, default roles) |
 | `PATCH /api/app-agents/models/catalog` | Session + CSRF | Toggle per-model `enabled` flags in the catalog |
 | `POST /api/app-agents/models/fetch` | Session + CSRF | Discover models from Hub `/v1/models` and enabled custom providers via `fetch::Fetcher` (auto-enabling newly imported Hub models if catalog had zero enabled rows) |
+| `POST /api/app-agents/models/upsert` | Session + CSRF | Create, rename, or update a single model catalog row (`capability_overrides`, `detected_context_window`, `last_test_fingerprint`) |
+| `POST /api/app-agents/models/bulk-upsert` | Session + CSRF | Atomically bulk-import model catalog rows (`preserve_existing_enabled` defaults to `true`, with `infer_model_capabilities` fallback) |
 | `PUT /api/app-agents/models/roles` | Session + CSRF | Save `default_smart_model` and `fast_background_model` (`""` inherits Smart Model) |
+| `GET /api/app-agents/custom-skills` | Session | List owner-created local custom skills (`skill_md`, `slash_command`, `tags`, `pinned`) |
+| `POST /api/app-agents/custom-skills` | Session + CSRF | Create or update a local custom skill (`slug`, `name`, `description`, `skill_md`, `tags`, `slash_command`, `pinned`) |
+| `DELETE /api/app-agents/custom-skills/{slug}` | Session + CSRF | Delete a local custom skill by `slug` |
 | `GET /api/app-agents/mcp-namespaces` | Session | List Business MCP namespace toggles (`search`, `cortex`, `obsidian`, `library`, `notebooklm`, `cygnus`, `astraea`, `newsman`) |
 | `PUT /api/app-agents/mcp-namespaces` | Session + CSRF | Bulk update Business MCP namespace `enabled` states |
 | `GET /api/app-agents/custom-providers` | Session | List custom OpenAI-compatible providers (metadata + `has_secret`; keys stay sealed in `src/secrets.rs`) |

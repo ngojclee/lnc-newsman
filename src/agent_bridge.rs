@@ -416,7 +416,10 @@ CREATE TABLE IF NOT EXISTS app_agent_model_catalog (
     context_window INTEGER,
     enabled INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'hub',
-    last_fetched_at TEXT NOT NULL DEFAULT ''
+    last_fetched_at TEXT NOT NULL DEFAULT '',
+    capability_overrides_json TEXT NOT NULL DEFAULT '{}',
+    last_test_fingerprint TEXT NOT NULL DEFAULT '',
+    detected_context_window INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS app_agent_mcp_namespaces (
@@ -977,6 +980,8 @@ pub struct HubSkillSummary {
     pub granted: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -2254,32 +2259,45 @@ fn map_skill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<HubSkillSummary> {
         body_preview: r.get(7)?,
         granted: r.get::<_, i64>(8)? != 0,
         enabled: r.get::<_, i64>(9)? != 0,
+        pinned: r.get::<_, i64>(13).unwrap_or(0) != 0,
         version: r.get(10)?,
         source: r.get(11)?,
         updated_at: Some(r.get::<_, String>(12)?).filter(|s| !s.is_empty()),
     })
 }
 
-fn list_skills_db(conn: &Connection) -> Result<Vec<HubSkillSummary>> {
+pub(crate) fn list_skills_db(conn: &Connection) -> Result<Vec<HubSkillSummary>> {
     let mut st = conn.prepare(
         "SELECT slug, name, display_name, description, category, group_slugs_json, body_md, \
-                body_preview, granted, enabled, version, source, updated_at \
-         FROM app_agent_skills_cache ORDER BY granted DESC, slug ASC",
+                body_preview, granted, enabled, version, source, updated_at, COALESCE(pinned, 0) \
+         FROM app_agent_skills_cache ORDER BY granted DESC, COALESCE(pinned, 0) DESC, slug ASC",
     )?;
     let rows = st.query_map([], map_skill_row)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    if let Ok(customs) = crate::agent_v2::list_custom_skills_as_hub_summaries(conn) {
+        for c in customs {
+            if !out.iter().any(|x| x.slug == c.slug) {
+                out.push(c);
+            }
+        }
+    }
+    Ok(out)
 }
 
-fn get_skill_db(conn: &Connection, slug: &str) -> Result<Option<HubSkillSummary>> {
-    Ok(conn
+pub(crate) fn get_skill_db(conn: &Connection, slug: &str) -> Result<Option<HubSkillSummary>> {
+    let cached = conn
         .query_row(
             "SELECT slug, name, display_name, description, category, group_slugs_json, body_md, \
-                    body_preview, granted, enabled, version, source, updated_at \
+                    body_preview, granted, enabled, version, source, updated_at, COALESCE(pinned, 0) \
              FROM app_agent_skills_cache WHERE slug = ?1",
             [slug],
             map_skill_row,
         )
-        .optional()?)
+        .optional()?;
+    if cached.is_some() {
+        return Ok(cached);
+    }
+    crate::agent_v2::get_custom_skill_as_hub_summary(conn, slug)
 }
 
 pub(crate) fn default_skill_group_icon(slug: &str, category: &str) -> &'static str {
@@ -5873,7 +5891,7 @@ pub(crate) fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow)
     let fast_model = resolve_fast_model(cfg);
     json!({
         "ok": true,
-        "protocol_version": "2.0",
+        "protocol_version": "2.2",
         "mode": mode,
         "relay_connected": relay_connected,
         "astraea_reachable": astraea_reachable,
@@ -8000,6 +8018,7 @@ pub(crate) async fn get_skill(
 #[derive(Debug, Deserialize)]
 pub(crate) struct PatchSkillInput {
     enabled: Option<bool>,
+    pinned: Option<bool>,
 }
 
 pub(crate) async fn patch_skill(
@@ -8015,11 +8034,20 @@ pub(crate) async fn patch_skill(
             Ok(None) => return failure(StatusCode::NOT_FOUND, "not_found"),
             Err(err) => return internal_error(err),
         };
-        if let Some(enabled) = patch.enabled {
+        if patch.enabled.is_some() || patch.pinned.is_some() {
+            let next_enabled = patch.enabled.unwrap_or(existing.enabled);
+            let next_pinned = patch.pinned.unwrap_or(existing.pinned);
             let now = Utc::now().to_rfc3339();
-            if let Err(err) = db.conn.execute(
-                "UPDATE app_agent_skills_cache SET enabled = ?1, updated_at = ?2 WHERE slug = ?3",
-                params![if enabled { 1 } else { 0 }, now, clean],
+            if existing.source == "custom" {
+                if let Err(err) = db.conn.execute(
+                    "UPDATE app_agent_custom_skills SET enabled = ?1, pinned = ?2, updated_at = ?3 WHERE slug = ?4",
+                    params![if next_enabled { 1 } else { 0 }, if next_pinned { 1 } else { 0 }, now, clean],
+                ) {
+                    return internal_error(err);
+                }
+            } else if let Err(err) = db.conn.execute(
+                "UPDATE app_agent_skills_cache SET enabled = ?1, pinned = ?2, updated_at = ?3 WHERE slug = ?4",
+                params![if next_enabled { 1 } else { 0 }, if next_pinned { 1 } else { 0 }, now, clean],
             ) {
                 return internal_error(err);
             }

@@ -1,10 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { foldVi } from "./agentTypesV2";
+
+export type ProviderStatusDot = "connected" | "connecting" | "error" | "disabled";
 
 export interface AgentSelectOption {
   value: string;
   label: string;
   badge?: string;
+  dots?: ProviderStatusDot[];
+  keywords?: string;
 }
 
 export interface AgentSelectProps {
@@ -15,22 +20,28 @@ export interface AgentSelectProps {
   disabled?: boolean;
   ariaLabel?: string;
   className?: string;
+  /** Default `"auto"` enables inline search when `options.length > 6`. */
+  searchable?: boolean | "auto";
+  searchPlaceholder?: string;
+  /** Default `true`: filters via `foldVi()` (Vietnamese accent-insensitive). */
+  fold?: boolean;
 }
 
 type PortalRect = {
   left: number;
   top?: number;
   bottom?: number;
-  maxHeight: number;
   minWidth: number;
+  maxHeight: number;
   above: boolean;
 };
 
 /**
- * Custom rounded droplist for `lnc-app-agents v2.0`.
- * - Never uses native browser OS dropdown primitives.
- * - Portals into `.app-shell, .reader-shell, .reader, .login-page` (fallback `document.body`)
- *   so Newsman Paper/Sepia/Gray/Green/Night/Black theme CSS variables stay inherited.
+ * Custom rounded searchable combobox for `lnc-app-agents v2.2`.
+ * - Never renders native OS dropdown primitives.
+ * - Portals to `document.body` so overflow containers never clip it.
+ * - Preserves `5fde443` hidden-trigger auto-close + `hashchange` / `popstate` / `Escape` guards,
+ *   while adding `foldVi()` search (`[data-tray-search]`) and provider status `dots`.
  */
 export function AgentSelect({
   value,
@@ -40,12 +51,29 @@ export function AgentSelect({
   disabled = false,
   ariaLabel,
   className = "",
+  searchable = "auto",
+  searchPlaceholder = "Search...",
+  fold = true,
 }: AgentSelectProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [query, setQuery] = useState("");
   const [rect, setRect] = useState<PortalRect | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const isSearchable =
+    searchable === true || (searchable !== false && options.length > 6);
+
+  const visibleOptions = useMemo(() => {
+    const q = fold ? foldVi(query) : query.trim().toLowerCase();
+    if (!isSearchable || !q) return options;
+    return options.filter((o) => {
+      const raw = `${o.label} ${o.value} ${o.badge ?? ""} ${o.keywords ?? ""}`;
+      return (fold ? foldVi(raw) : raw.toLowerCase()).includes(q);
+    });
+  }, [options, isSearchable, query, fold]);
 
   const selectedIndex = Math.max(
     0,
@@ -60,28 +88,53 @@ export function AgentSelect({
       return;
     }
     const r = el.getBoundingClientRect();
-    const estHeight = Math.min(280, Math.max(1, options.length) * 34 + 12);
-    const below = window.innerHeight - r.bottom - 36;
-    const shouldFlip = below < estHeight && r.top > below;
-    const minWidth = Math.max(r.width, 180);
-    const maxLeft = Math.max(8, window.innerWidth - minWidth - 8);
-    setRect({
-      left: Math.min(Math.max(8, r.left), maxLeft),
-      top: shouldFlip ? undefined : r.bottom + 6,
-      bottom: shouldFlip ? Math.max(32, window.innerHeight - r.top + 6) : undefined,
-      maxHeight: Math.max(96, Math.min(280, shouldFlip ? r.top - 18 : Math.max(96, below))),
-      minWidth,
-      above: shouldFlip,
-    });
+    const SAFE_MARGIN = 32;
+    const GAP = 6;
+    const rowCount = Math.max(1, visibleOptions.length) + (isSearchable ? 1 : 0);
+    const estHeight = Math.min(310, Math.max(88, rowCount * 36 + 16));
+    const spaceBelow = window.innerHeight - r.bottom - SAFE_MARGIN;
+    const spaceAbove = r.top - 16;
+    const openUpward =
+      (spaceBelow < estHeight && spaceAbove > spaceBelow) ||
+      r.bottom > window.innerHeight - 190;
+    const minWidth = Math.max(Math.ceil(r.width), 184);
+    const panelWidth = panelRef.current?.offsetWidth || minWidth;
+    const clampedLeft = Math.max(
+      12,
+      Math.min(Math.round(r.left), window.innerWidth - panelWidth - 12),
+    );
+    if (openUpward) {
+      setRect({
+        left: clampedLeft,
+        bottom: Math.max(SAFE_MARGIN, Math.round(window.innerHeight - r.top + GAP)),
+        minWidth,
+        maxHeight: Math.max(120, Math.min(300, Math.floor(spaceAbove - GAP))),
+        above: true,
+      });
+    } else {
+      setRect({
+        left: clampedLeft,
+        top: Math.round(r.bottom + GAP),
+        minWidth,
+        maxHeight: Math.max(120, Math.min(300, Math.floor(spaceBelow - GAP))),
+        above: false,
+      });
+    }
   };
 
   useLayoutEffect(() => {
     if (open) computeRect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, options.length]);
+  }, [open, visibleOptions.length, isSearchable]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setQuery("");
+      return;
+    }
+    const raf = isSearchable
+      ? requestAnimationFrame(() => searchInputRef.current?.focus())
+      : 0;
     const sync = () => computeRect();
     const onRouteOrHash = () => setOpen(false);
     window.addEventListener("scroll", sync, true);
@@ -99,6 +152,7 @@ export function AgentSelect({
     document.addEventListener("mousedown", onOutside);
     window.addEventListener("keydown", onKey);
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("scroll", sync, true);
       window.removeEventListener("resize", sync);
       window.removeEventListener("hashchange", onRouteOrHash);
@@ -107,7 +161,11 @@ export function AgentSelect({
       window.removeEventListener("keydown", onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, isSearchable]);
+
+  useEffect(() => {
+    setActive((cur) => Math.max(0, Math.min(cur, Math.max(0, visibleOptions.length - 1))));
+  }, [visibleOptions.length]);
 
   const commit = (nextVal: string) => {
     onChange(nextVal);
@@ -141,13 +199,13 @@ export function AgentSelect({
             setOpen(false);
           } else if (open && e.key === "ArrowDown") {
             e.preventDefault();
-            setActive((i) => Math.min(options.length - 1, i + 1));
+            setActive((i) => Math.min(visibleOptions.length - 1, i + 1));
           } else if (open && e.key === "ArrowUp") {
             e.preventDefault();
             setActive((i) => Math.max(0, i - 1));
           } else if (open && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
-            if (options[active]) commit(options[active].value);
+            if (visibleOptions[active]) commit(visibleOptions[active].value);
           }
         }}
         className={`engine-select-trigger ak-select-trigger ${
@@ -155,6 +213,13 @@ export function AgentSelect({
         }${open ? " open" : ""} ${className}`.trim()}
       >
         <span className="engine-select-value ak-truncate">{current?.label ?? ""}</span>
+        {current?.dots?.length ? (
+          <span className="ak-status-dots" aria-hidden="true">
+            {current.dots.map((d, di) => (
+              <span key={di} className="ak-status-dot" data-status={d} />
+            ))}
+          </span>
+        ) : null}
         {current?.badge ? <span className="ak-select-badge">{current.badge}</span> : null}
         <span className="engine-select-arrow" aria-hidden="true" />
       </button>
@@ -167,27 +232,73 @@ export function AgentSelect({
               className={`engine-select-panel engine-select-panel--portal ak-select-panel${rect.above ? " above" : ""}`}
               style={{
                 left: rect.left,
+                ...(rect.bottom !== undefined ? { bottom: rect.bottom } : { top: rect.top }),
                 minWidth: rect.minWidth,
+                width: "max-content",
+                maxWidth: "min(440px, calc(100vw - 24px))",
                 maxHeight: rect.maxHeight,
-                ...(rect.above ? { bottom: rect.bottom } : { top: rect.top }),
               }}
             >
-              {options.map((opt, idx) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  role="option"
-                  aria-selected={opt.value === value}
-                  onMouseEnter={() => setActive(idx)}
-                  onClick={() => commit(opt.value)}
-                  className={`engine-select-option ak-select-option${
-                    opt.value === value ? " selected" : ""
-                  }${idx === active ? " is-active" : ""}`}
-                >
-                  <span className="ak-truncate">{opt.label}</span>
-                  {opt.badge ? <span className="ak-select-badge">{opt.badge}</span> : null}
-                </button>
-              ))}
+              {isSearchable ? (
+                <div className="ak-select-search-wrap">
+                  <input
+                    ref={searchInputRef}
+                    data-tray-search=""
+                    type="search"
+                    className="ak-select-search"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setActive(0);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setOpen(false);
+                        triggerRef.current?.focus();
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setActive((i) => Math.min(visibleOptions.length - 1, i + 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setActive((i) => Math.max(0, i - 1));
+                      } else if (e.key === "Enter" && visibleOptions[active]) {
+                        e.preventDefault();
+                        commit(visibleOptions[active].value);
+                      }
+                    }}
+                    placeholder={searchPlaceholder}
+                    aria-label={searchPlaceholder}
+                  />
+                </div>
+              ) : null}
+              {visibleOptions.length === 0 ? (
+                <div className="ak-select-empty">No matching options</div>
+              ) : (
+                visibleOptions.map((opt, idx) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="option"
+                    aria-selected={opt.value === value}
+                    onMouseEnter={() => setActive(idx)}
+                    onClick={() => commit(opt.value)}
+                    className={`engine-select-option ak-select-option${
+                      opt.value === value ? " selected" : ""
+                    }${idx === active ? " is-active" : ""}`}
+                  >
+                    <span className="ak-truncate">{opt.label}</span>
+                    {opt.dots?.length ? (
+                      <span className="ak-status-dots" aria-hidden="true">
+                        {opt.dots.map((d, di) => (
+                          <span key={di} className="ak-status-dot" data-status={d} />
+                        ))}
+                      </span>
+                    ) : null}
+                    {opt.badge ? <span className="ak-select-badge">{opt.badge}</span> : null}
+                  </button>
+                ))
+              )}
             </div>,
             portalHost,
           )
