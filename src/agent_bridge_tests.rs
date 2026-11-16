@@ -3354,10 +3354,10 @@ async fn test_8_v2_manifest_catalog_providers_ask_user_branch_cowriter_memory_an
     let app = crate::router(state.clone());
     let cookie = login_cookie(&app).await;
 
-    // 8A. Manifest v2.2 contract + Newsroom capabilities & quick_actions
+    // 8A. Manifest v2.3 contract + Newsroom capabilities & quick_actions
     let (st, manifest) = authed_json(&app, &cookie, "GET", "/api/app-agents/manifest", None).await;
     assert_eq!(st, StatusCode::OK, "{manifest}");
-    assert_eq!(manifest["protocol_version"], "2.2");
+    assert_eq!(manifest["protocol_version"], "2.3");
     assert_eq!(manifest["app_id"], "lnc-newsman");
     assert_eq!(manifest["capabilities"]["voice_tts"], false);
     assert_eq!(manifest["capabilities"]["voice_stt"], false);
@@ -4109,6 +4109,117 @@ async fn test_9_v22_bulk_upsert_fingerprint_embedding_guard_and_custom_skills() 
     .await;
     assert_eq!(st_del, StatusCode::OK, "{del_res}");
     assert_eq!(del_res["items"].as_array().unwrap().len(), 0);
+
+    hub_task.abort();
+}
+
+#[tokio::test]
+async fn test_10_v23_roleplay_responder_and_partner_consult() {
+    let dir = unique_temp_dir("t10_v23");
+    let db = Database::in_memory().unwrap();
+    let _seeded = seed_newsroom_fixture(&db);
+    let vault = secrets::SecretBox::from_bytes([0x55; 32], None);
+    let (hub_url, hub_st, hub_task) = spawn_mock_v2_hub().await;
+
+    let state = build_test_state(dir, db, Fetcher::allow_loopback_for_tests(), Some(vault));
+    let app = crate::router(state.clone());
+    let cookie = login_cookie(&app).await;
+
+    // 10A. Verify protocol_version == "2.3" in both manifest and bridge-config
+    let (st_m, manifest) = authed_json(&app, &cookie, "GET", "/api/app-agents/manifest", None).await;
+    assert_eq!(st_m, StatusCode::OK, "{manifest}");
+    assert_eq!(manifest["protocol_version"], "2.3");
+
+    let (st_bc, bc_get) = authed_json(&app, &cookie, "GET", "/api/app-agents/bridge-config", None).await;
+    assert_eq!(st_bc, StatusCode::OK, "{bc_get}");
+    assert_eq!(bc_get["protocol_version"], "2.3");
+
+    let _ = authed_json(
+        &app,
+        &cookie,
+        "PUT",
+        "/api/app-agents/bridge-config",
+        Some(json!({
+            "hub_url": hub_url,
+            "hub_token": "hub-v23-secret",
+            "allowed_hosts": ["127.0.0.1"],
+            "default_smart_model": "gpt-5.4"
+        })),
+    )
+    .await;
+
+    // 10B. Create a 1:1 thread with ONLY `macro-argus` in member_slugs
+    let (st_thr, thr_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        "/api/app-agents/threads",
+        Some(json!({
+            "kind": "direct",
+            "member_slugs": ["macro-argus"],
+            "title": "V2.3 Role-Play & Partner Consult"
+        })),
+    )
+    .await;
+    assert_eq!(st_thr, StatusCode::OK, "{thr_res}");
+    let tid = thr_res["thread"]["id"].as_str().unwrap().to_string();
+
+    // 10C. Direct Role-Play (`responder_agent_slug`: "tax-linh") + Behind-the-Scenes Consult (`consult_partner_slugs`: ["editor-minh"])
+    // Even though `tax-linh` is NOT in `thread.member_slugs`, `tax-linh` must answer directly in first person,
+    // after consulting `editor-minh` behind the scenes (without creating a separate visible message row for `editor-minh`).
+    let (st_turn, turn_res) = authed_json(
+        &app,
+        &cookie,
+        "POST",
+        &format!("/api/app-agents/threads/{tid}/turns"),
+        Some(json!({
+            "text": "Rà soát kỳ kê khai thuế TNDN quý này",
+            "responder_agent_slug": "tax-linh",
+            "consult_partner_slugs": ["editor-minh"],
+            "chat_mode": "tax_compliance",
+            "persona_style": "concise"
+        })),
+    )
+    .await;
+    assert_eq!(st_turn, StatusCode::OK, "{turn_res}");
+    assert_eq!(turn_res["mode"], "hub_standby");
+
+    let msgs = turn_res["messages"].as_array().unwrap();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "behind-the-scenes consult must NOT emit extra visible assistant rows: {turn_res}"
+    );
+    assert_eq!(
+        msgs[0]["sender_slug"], "tax-linh",
+        "responder_agent_slug must answer directly as tax-linh"
+    );
+
+    let tool_calls = msgs[0]["tool_calls"].as_array().unwrap();
+    assert!(
+        tool_calls
+            .iter()
+            .any(|tc| tc["tool"] == "consult_partner" && tc["arguments"]["partner_slug"] == "editor-minh"),
+        "consult_partner tool call must be recorded on the responder message: {tool_calls:?}"
+    );
+
+    // Verify outbound LLM requests included behind-the-scenes consult + synthesized responder prompt
+    {
+        let reqs = hub_st.chat_requests.lock().unwrap();
+        assert!(
+            reqs.len() >= 2,
+            "expected consult call + responder synthesis call via Fetcher, got {}",
+            reqs.len()
+        );
+        let responder_prompt = reqs
+            .last()
+            .map(|r| r.2["messages"].to_string())
+            .unwrap_or_default();
+        assert!(
+            responder_prompt.contains("consult_partner") || responder_prompt.contains("editor-minh"),
+            "responder prompt must incorporate specialist consultation notes: {responder_prompt}"
+        );
+    }
 
     hub_task.abort();
 }

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AgentExecutionTrace } from './agent-kit/AgentExecutionTrace.tsx'
+import { AgentMarkdown } from './agent-kit/AgentMarkdown.tsx'
 import { AgentSelect, type ProviderStatusDot } from './agent-kit/AgentSelect.tsx'
 import { AgentSelectionToolbar } from './agent-kit/AgentSelectionToolbar.tsx'
 import { AgentComposerLead, AgentSkillPicker } from './agent-kit/AgentSkillPicker.tsx'
@@ -14,7 +16,9 @@ import {
 import {
   appAgentsApi,
   boundActiveViewContext,
+  deriveAgentStreamPhaseV2,
   extractMentions,
+  mapToolToTraceStepV2,
   MAX_ACTIVE_VIEW_CONTEXT_BYTES,
   skillDisplayName,
   useAppAgents,
@@ -193,7 +197,9 @@ export function CompanionDrawer({
     }
   }, [matchingThreads, open, threadId])
 
-  const { messages, streamState, sending, error, sendTurn } = useThreadStream(open ? threadId : null)
+  const { messages, streamState, reconnectNotice, sending, error, sendTurn } = useThreadStream(
+    open ? threadId : null,
+  )
 
   useEffect(() => {
     const el = listRef.current
@@ -295,27 +301,6 @@ export function CompanionDrawer({
   const contextUsageLabel = hasRichText
     ? `✓ ${c.companionContextReadyLoaded} (${contextBytes < 1024 ? '<1' : (contextBytes / 1024).toFixed(1)} KB)`
     : c.companionContextReadyTitle
-
-  const renderWithCitations = (text: string) => {
-    const parts = text.split(/(#article-\d+)/gi)
-    return parts.map((part, idx) => {
-      const m = /^#article-(\d+)$/i.exec(part)
-      if (m && onOpenArticle) {
-        const id = Number(m[1])
-        return (
-          <button
-            key={idx}
-            type="button"
-            className="agent-citation-link"
-            onClick={() => onOpenArticle(id)}
-          >
-            📰 {c.companionJumpArticle} #{id}
-          </button>
-        )
-      }
-      return <span key={idx}>{part}</span>
-    })
-  }
 
   return (
     <aside className="companion-drawer ak-scope" role="dialog" aria-label={c.companionHeaderTitle}>
@@ -430,8 +415,17 @@ export function CompanionDrawer({
         {messages.map((m) => {
           const isUser = m.role === 'user'
           const ag = m.sender_slug ? agentMap.get(m.sender_slug) : undefined
+          const toolCalls = m.tool_calls ?? []
+          const traceSteps = toolCalls.map((tc) => mapToolToTraceStepV2(tc))
+          const approvalPills = toolCalls.filter((tc) => Boolean(tc.approval_required))
+          const hasTrace = Boolean(m.reasoning) || traceSteps.length > 0
           return (
-            <div key={m.id} className={isUser ? 'salon-turn salon-turn-user' : 'salon-turn salon-turn-agent'}>
+            <div
+              key={m.id}
+              className={
+                isUser ? 'salon-turn salon-turn-user ak-msg--user' : 'salon-turn salon-turn-agent'
+              }
+            >
               <div className="salon-turn-card">
                 <header className="salon-turn-meta">
                   <b>
@@ -451,15 +445,24 @@ export function CompanionDrawer({
                     </button>
                   )}
                 </header>
-                {m.reasoning && (
-                  <details className="salon-reasoning">
-                    <summary>{c.reasoningTraceSummary}</summary>
-                    <pre>{m.reasoning}</pre>
-                  </details>
+                {!isUser && hasTrace && (
+                  <AgentExecutionTrace
+                    phase={deriveAgentStreamPhaseV2({
+                      isLive: false,
+                      hasReasoning: Boolean(m.reasoning),
+                      hasText: Boolean(m.content),
+                      doneToolCount: traceSteps.length,
+                    })}
+                    thinkingText={m.reasoning ?? undefined}
+                    steps={traceSteps}
+                    responderLabel={ag?.display_name ?? m.sender_slug ?? undefined}
+                    responderAvatar={ag?.emoji}
+                    onCitationClick={onOpenArticle}
+                  />
                 )}
-                {m.tool_calls && m.tool_calls.length > 0 && (
+                {approvalPills.length > 0 && (
                   <div className="salon-tool-list">
-                    {m.tool_calls.map((tc) => (
+                    {approvalPills.map((tc) => (
                       <ToolInvocationPill key={tc.merge_id} pill={tc} lang={lang} />
                     ))}
                   </div>
@@ -468,37 +471,81 @@ export function CompanionDrawer({
                   className="salon-turn-prose"
                   onMouseUp={!isUser ? () => handleAssistantMouseUp(m) : undefined}
                 >
-                  {renderWithCitations(m.content)}
+                  <AgentMarkdown content={m.content} onCitationClick={onOpenArticle} />
                 </div>
               </div>
             </div>
           )
         })}
 
-        {streamState.toolPills.length > 0 && (
-          <div className="salon-live-tools">
-            {streamState.toolPills.map((pill) => (
-              <ToolInvocationPill key={pill.merge_id} pill={pill} lang={lang} />
-            ))}
-          </div>
-        )}
-
-        {Object.values(streamState.drafts).map((d) => {
-          const ag = agentMap.get(d.agent_slug)
-          return (
-            <div key={d.agent_slug} className="salon-turn salon-turn-agent streaming">
-              <div className="salon-turn-card">
-                <header className="salon-turn-meta">
-                  <b>
-                    {ag?.emoji ?? '📈'} {ag?.display_name ?? `@${d.agent_slug}`}
-                  </b>
-                  <em>{c.seatSpeaking}</em>
-                </header>
-                <div className="salon-turn-prose">{d.text}</div>
-              </div>
-            </div>
-          )
-        })}
+        {(sending ||
+          streamState.toolPills.length > 0 ||
+          Object.keys(streamState.drafts).length > 0 ||
+          Boolean(reconnectNotice)) &&
+          (() => {
+            const draftsList = Object.values(streamState.drafts)
+            if (draftsList.length === 0) {
+              const liveSteps = streamState.toolPills.map((p) => mapToolToTraceStepV2(p))
+              const runningCount = liveSteps.filter((s) => s.state === 'running').length
+              const doneCount = liveSteps.length - runningCount
+              const selectedAg = agentMap.get(selectedAgentSlug)
+              return (
+                <AgentExecutionTrace
+                  phase={deriveAgentStreamPhaseV2({
+                    isLive: sending,
+                    hasError: Boolean(streamState.lastError),
+                    runningToolCount: runningCount,
+                    doneToolCount: doneCount,
+                  })}
+                  steps={liveSteps}
+                  responderLabel={selectedAg?.display_name}
+                  responderAvatar={selectedAg?.emoji}
+                  reconnectNotice={reconnectNotice}
+                  onCitationClick={onOpenArticle}
+                />
+              )
+            }
+            return draftsList.map((d) => {
+              const ag = agentMap.get(d.agent_slug)
+              const seatPills = streamState.toolPills.filter(
+                (p) => !p.agent_slug || p.agent_slug === d.agent_slug,
+              )
+              const liveSteps = seatPills.map((p) => mapToolToTraceStepV2(p))
+              const runningCount = liveSteps.filter((s) => s.state === 'running').length
+              const doneCount = liveSteps.length - runningCount
+              return (
+                <div key={d.agent_slug} className="salon-turn salon-turn-agent streaming">
+                  <div className="salon-turn-card">
+                    <header className="salon-turn-meta">
+                      <b>
+                        {ag?.emoji ?? '📈'} {ag?.display_name ?? `@${d.agent_slug}`}
+                      </b>
+                      <em>{c.seatSpeaking}</em>
+                    </header>
+                    <AgentExecutionTrace
+                      phase={deriveAgentStreamPhaseV2({
+                        isLive: true,
+                        hasError: Boolean(streamState.lastError),
+                        hasText: Boolean(d.text),
+                        hasReasoning: Boolean(d.reasoning),
+                        runningToolCount: runningCount,
+                        doneToolCount: doneCount,
+                      })}
+                      thinkingText={d.reasoning || undefined}
+                      steps={liveSteps}
+                      responderLabel={ag?.display_name ?? d.agent_slug}
+                      responderAvatar={ag?.emoji}
+                      reconnectNotice={reconnectNotice}
+                      onCitationClick={onOpenArticle}
+                    />
+                    <div className="salon-turn-prose">
+                      <AgentMarkdown content={d.text} onCitationClick={onOpenArticle} />
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          })()}
       </div>
 
       <AgentSelectionToolbar
@@ -540,27 +587,35 @@ export function CompanionDrawer({
           }
           applyEveryTurn={applyEveryTurn}
         />
-        <div className="chat-input-row">
-          <textarea
-            ref={draftRef}
-            rows={2}
-            value={draft}
-            placeholder={c.composerPlaceholder}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void ensureThreadAndSend(draft)
-              }
-            }}
-          />
+        <textarea
+          ref={draftRef}
+          rows={2}
+          value={draft}
+          placeholder={c.composerPlaceholder}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              void ensureThreadAndSend(draft)
+            }
+          }}
+        />
+        <div className="companion-footer-bar">
+          <span className="muted-sub" style={{ fontSize: 12 }}>
+            {c.companionComposerHint}
+          </span>
           <button
             type="button"
-            className="btn primary"
+            className="pplx-submit-btn"
+            aria-label={sending || creatingThread ? c.sendingTurnBtn : c.sendTurnBtn}
+            title={sending || creatingThread ? c.sendingTurnBtn : c.sendTurnBtn}
             disabled={sending || creatingThread || !draft.trim()}
             onClick={() => void ensureThreadAndSend(draft)}
           >
-            {sending || creatingThread ? c.sendingTurnBtn : c.sendTurnBtn}
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
           </button>
         </div>
       </footer>

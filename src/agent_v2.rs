@@ -836,7 +836,7 @@ pub(crate) async fn get_manifest(State(state): State<SharedState>) -> Response {
     });
     Json(json!({
         "ok": true,
-        "protocol_version": "2.2",
+        "protocol_version": "2.3",
         "app_id": "lnc-newsman",
         "app_name": "LNC Newsman",
         "display_name": "LNC Newsman",

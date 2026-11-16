@@ -192,9 +192,9 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
   return <section className="catalog" aria-labelledby="catalog-title">
     <div className="section-heading"><div><span className="eyebrow">{lang === 'vi' ? 'Quản trị danh mục' : 'Catalog administration'}</span><h2 id="catalog-title">{t.title}</h2><p>{t.subtitle}</p></div></div>
     <p className="catalog-notice">{t.notice}</p>
-    <div className="catalog-tabs" role="group" aria-label={t.title}>
-      <button type="button" aria-pressed={tab === 'topics'} className={tab === 'topics' ? 'active' : ''} onClick={() => { setTab('topics'); clear() }}>{t.topics} <span>{topics.length}</span></button>
-      <button type="button" aria-pressed={tab === 'sources'} className={tab === 'sources' ? 'active' : ''} onClick={() => { setTab('sources'); clear() }}>{t.sources} <span>{sources.length}</span></button>
+    <div className="pplx-tabs catalog-tabs" role="tablist" aria-label={t.title}>
+      <button type="button" role="tab" aria-selected={tab === 'topics'} className={tab === 'topics' ? 'pplx-tab active' : 'pplx-tab'} onClick={() => { setTab('topics'); clear() }}>{t.topics} <span>{topics.length}</span></button>
+      <button type="button" role="tab" aria-selected={tab === 'sources'} className={tab === 'sources' ? 'pplx-tab active' : 'pplx-tab'} onClick={() => { setTab('sources'); clear() }}>{t.sources} <span>{sources.length}</span></button>
     </div>
     {error && <div className="form-error" role="alert">{errorMessage}</div>}
     {notice && <div className="save-state" role="status">✓ {notice}</div>}
@@ -203,7 +203,7 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
         {topics.length === 0 && <p className="muted">{t.noTopics}</p>}
         {topics.map((topic) => <article className="catalog-entry" key={topic.slug}>
           <div className="catalog-entry-main"><strong>{lang === 'vi' ? topic.label_vi : topic.label_en}</strong><span>{topic.slug}{topic.parent_slug ? ` · ↳ ${topic.parent_slug}` : ''}</span><span className={topic.enabled ? 'catalog-status' : 'catalog-status inactive'}>{topic.enabled ? t.enabled : t.disabled}</span></div>
-          <div className="catalog-entry-actions"><button type="button" className="text-button" disabled={busy} onClick={() => { setTopicForm(topic); setEditingTopic(true); clear() }}>{t.edit}</button><button type="button" className="text-button" disabled={busy} onClick={() => void toggleTopic(topic)}>{topic.enabled ? t.disable : t.enable}</button></div>
+          <div className="catalog-entry-actions"><button type="button" className="btn secondary btn-sm" disabled={busy} onClick={() => { setTopicForm(topic); setEditingTopic(true); clear() }}>{t.edit}</button><button type="button" className="btn secondary btn-sm" disabled={busy} onClick={() => void toggleTopic(topic)}>{topic.enabled ? t.disable : t.enable}</button></div>
         </article>)}
       </div>
       <form className="catalog-form" onSubmit={saveTopic}>
@@ -246,11 +246,11 @@ export function CatalogManager({ lang, api, regions, onChanged }: Props) {
             <div className="catalog-entry-actions">
               {/* Pack content is file-managed, so "fetch now" is the only action
                   beyond enable/disable; hand-added sources keep the full editor. */}
-              {!source.pack_key && <button type="button" className="text-button" disabled={busy} onClick={() => { setSourceForm(sourceInput(source)); setEditingSource(source.id); setPreview(null); setPreviewError(''); clear() }}>{t.edit}</button>}
-              <button type="button" className="text-button" disabled={busy || fetchingId !== null} onClick={() => void fetchSource(source)}>{fetchingId === source.id ? t.fetching : t.fetchNow}</button>
-              {source.paused_reason && <button type="button" className="text-button" disabled={busy} onClick={() => void resumeSource(source)}>{t.resume}</button>}
+              {!source.pack_key && <button type="button" className="btn secondary btn-sm" disabled={busy} onClick={() => { setSourceForm(sourceInput(source)); setEditingSource(source.id); setPreview(null); setPreviewError(''); clear() }}>{t.edit}</button>}
+              <button type="button" className="btn secondary btn-sm" disabled={busy || fetchingId !== null} onClick={() => void fetchSource(source)}>{fetchingId === source.id ? t.fetching : t.fetchNow}</button>
+              {source.paused_reason && <button type="button" className="btn secondary btn-sm" disabled={busy} onClick={() => void resumeSource(source)}>{t.resume}</button>}
 
-              <button type="button" className="text-button" disabled={busy} onClick={() => void toggleSource(source)}>{source.enabled ? t.disable : t.enable}</button>
+              <button type="button" className="btn secondary btn-sm" disabled={busy} onClick={() => void toggleSource(source)}>{source.enabled ? t.disable : t.enable}</button>
             </div>
           </article>
         })}

@@ -13,6 +13,8 @@ export interface AgentSplitLayoutProps {
   center: React.ReactNode;
   /** Optional right drawer (Activity/Notes drawer, Co-Writer companion). */
   right?: React.ReactNode;
+  /** Optional self-resizing right dock (e.g. `AgentWorkspaceDock`) rendered INSIDE `.ak-split-shell` so all 3 columns share a single outer border with zero double seam. */
+  dock?: React.ReactNode;
   rightDefaultWidth?: number;
   rightMinWidth?: number;
   rightMaxWidth?: number;
@@ -55,6 +57,7 @@ export const AgentSplitLayout: React.FC<AgentSplitLayoutProps> = ({
   leftCollapsed = false,
   center,
   right,
+  dock,
   rightDefaultWidth = 308,
   rightMinWidth = 220,
   rightMaxWidth = 500,
@@ -211,6 +214,8 @@ export const AgentSplitLayout: React.FC<AgentSplitLayoutProps> = ({
           </aside>
         </>
       )}
+
+      {dock}
     </div>
   );
 };

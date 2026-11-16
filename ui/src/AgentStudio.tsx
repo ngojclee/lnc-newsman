@@ -67,7 +67,7 @@ const RUNTIME_KINDS: readonly {
   },
 ] as const
 
-const COLOR_PRESETS = ['#236466', '#ba7044', '#4a5470', '#8c4a3a', '#2f6a4a', '#6b5a3e'] as const
+const COLOR_PRESETS = ['#016a71', '#ba7044', '#4a5470', '#8c4a3a', '#2f6a4a', '#6b5a3e'] as const
 const EMOJI_PRESETS = ['📈', '⚖️', '🗞️', '🌐', '🏦', '📊', '🏛️', '🧭'] as const
 
 function parseSlugList(input: string): string[] {
@@ -182,7 +182,7 @@ export function AgentStudio({
     display_name: '',
     description: '',
     emoji: '📈',
-    color: '#236466',
+    color: '#016a71',
     avatar_url: null,
     reply_language: 'vi',
     soul_md: '',
@@ -605,14 +605,14 @@ export function AgentStudio({
         </aside>
 
         <div className="studio-editor">
-          <div className="catalog-tabs studio-tabs" role="tablist">
+          <div className="pplx-tabs studio-tabs" role="tablist">
             {tabs.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 role="tab"
                 aria-selected={activeTab === t.id}
-                className={activeTab === t.id ? 'active' : ''}
+                className={activeTab === t.id ? 'pplx-tab active' : 'pplx-tab'}
                 onClick={() => setActiveTab(t.id)}
               >
                 {t.label}

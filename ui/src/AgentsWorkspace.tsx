@@ -1,6 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentStudio } from './AgentStudio.tsx'
+import { AgentChatHeaderBar } from './agent-kit/AgentChatHeaderBar.tsx'
 import { AgentContextBudgetChip } from './agent-kit/AgentContextBudgetChip.tsx'
+import { AgentExecutionTrace } from './agent-kit/AgentExecutionTrace.tsx'
+import { AgentMarkdown } from './agent-kit/AgentMarkdown.tsx'
+import {
+  AgentFoldableComposerTray,
+  AgentModePopover,
+  AgentPartnersConsultPopover,
+  AgentResourcesPopover,
+  AgentRoleplayPreferencesPopover,
+} from './agent-kit/AgentPersonaRoleplayMenus.tsx'
 import { AgentQueuedMessages } from './agent-kit/AgentQueuedMessages.tsx'
 import { AgentSelect, type ProviderStatusDot } from './agent-kit/AgentSelect.tsx'
 import { AgentSelectionToolbar } from './agent-kit/AgentSelectionToolbar.tsx'
@@ -21,12 +31,17 @@ import {
   type AgentWorkspace,
   type AppAgentConfig,
   type CapabilityTriState,
+  type ChatHeaderControlsConfigV2,
+  type ComposerModeOptionV2,
   type CoWriterDraftRow,
+  type DeclaredAppAgentV2,
   type DiscussionMode,
   type ExecutionTraceStep,
   type MemoryGraphNode,
   type MergedToolInvocation,
   type QueuedMessageV2,
+  type ResourceCategoryItemV2,
+  type ResponseStyleOptionV2,
   type SelectionAnchorV2,
   type SessionArtifactFileV2,
   type SideChatResponderV2,
@@ -36,9 +51,11 @@ import {
 } from './agentTypes.ts'
 import {
   computeEffectiveScope,
+  deriveAgentStreamPhaseV2,
   extractMentions,
   buildSeatTraceId,
   filterSurfacesByManifest,
+  mapToolToTraceStepV2,
   parseComposerTrigger,
   resolveModelRoles,
   skillDisplayName,
@@ -52,6 +69,8 @@ export interface AgentsWorkspaceProps {
   lang: 'vi' | 'en'
   onOpenArticle?: (articleId: number) => void
   onOpenRegions?: () => void
+  initialPrompt?: string | null
+  onConsumeInitialPrompt?: () => void
 }
 
 type NewsmanSettingsTab = 'connections' | 'models' | 'mcp' | 'memory' | 'general' | 'telegram'
@@ -144,7 +163,13 @@ function emptyWorkspaceDraft(): AgentWorkspace {
   }
 }
 
-export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWorkspaceProps) {
+export function AgentsWorkspace({
+  lang,
+  onOpenArticle,
+  onOpenRegions,
+  initialPrompt,
+  onConsumeInitialPrompt,
+}: AgentsWorkspaceProps) {
   const {
     bridgeStatus,
     manifest,
@@ -213,8 +238,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     generateTelegramLinkCode,
   } = useAppAgents()
 
-  const uiLang: 'vi' | 'en' = bridgeStatus.interface_language === 'vi' ? 'vi' : 'en'
-  void lang
+  const uiLang: 'vi' | 'en' = lang === 'en' ? 'en' : 'vi'
   const c = AGENT_COPY[uiLang]
   const surfaceGate = useMemo(() => filterSurfacesByManifest(manifest), [manifest])
   const safeMemoryGraph = useMemo(
@@ -253,15 +277,65 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [applySkillEveryTurn, setApplySkillEveryTurn] = useState(true)
   const [turnModelOverride, setTurnModelOverride] = useState('')
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null)
-  const [composerPopover, setComposerPopover] = useState<
-    null | 'scope' | 'mode' | 'mcp' | 'style' | 'customize'
-  >(null)
+  const [composerPopover, setComposerPopover] = useState<null | 'scope' | 'mcp'>(null)
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessageV2[]>([])
   const [selectionBar, setSelectionBar] = useState<{
     anchor: SelectionAnchorV2
     coords: { x: number; y: number }
   } | null>(null)
   const [selectedResponderSlug, setSelectedResponderSlug] = useState<string>('macro-argus')
+  const [activeResponderSlug, setActiveResponderSlug] = useState<string | null>(null)
+  const [prefsEveryTurn, setPrefsEveryTurn] = useState(true)
+  const [consultPartnerSlugs, setConsultPartnerSlugs] = useState<string[]>([])
+  const [partnersEveryTurn, setPartnersEveryTurn] = useState(false)
+  const [controlsConfig, setControlsConfig] = useState<ChatHeaderControlsConfigV2>(() => {
+    const defaults: ChatHeaderControlsConfigV2 = {
+      showSkills: true,
+      showMcp: true,
+      showPartners: true,
+      showPreferences: true,
+      showContextRing: true,
+    }
+    try {
+      const raw = window.localStorage.getItem('lnc-ak-hdr-controls:newsman')
+      if (!raw) return defaults
+      const parsed = JSON.parse(raw) as Partial<ChatHeaderControlsConfigV2>
+      return { ...defaults, ...parsed }
+    } catch {
+      return defaults
+    }
+  })
+  const updateControlsConfig = (next: ChatHeaderControlsConfigV2) => {
+    setControlsConfig(next)
+    try {
+      window.localStorage.setItem('lnc-ak-hdr-controls:newsman', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+  }
+  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 960 : false,
+  )
+  useEffect(() => {
+    const onResize = () => setIsCompactViewport(window.innerWidth < 960)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  useEffect(() => {
+    if (!composerPopover) return
+    const closePop = () => setComposerPopover(null)
+    const onEsc = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') closePop()
+    }
+    window.addEventListener('keydown', onEsc)
+    window.addEventListener('hashchange', closePop)
+    window.addEventListener('popstate', closePop)
+    return () => {
+      window.removeEventListener('keydown', onEsc)
+      window.removeEventListener('hashchange', closePop)
+      window.removeEventListener('popstate', closePop)
+    }
+  }, [composerPopover])
   const [createSkillOpen, setCreateSkillOpen] = useState(false)
   const [createSkillForm, setCreateSkillForm] = useState({
     slug: '',
@@ -279,7 +353,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const [fetchingCatalog, setFetchingCatalog] = useState(false)
   const [smartRoleDraft, setSmartRoleDraft] = useState('')
   const [fastRoleDraft, setFastRoleDraft] = useState('')
-  const [chatMode, setChatMode] = useState<'chat' | 'co_writer' | 'research' | 'brief'>('chat')
+  const [chatMode, setChatMode] = useState<string>('')
   const [personaStyle, setPersonaStyle] = useState<string>('analytical')
   const [turnScopeFilter, setTurnScopeFilter] = useState({ region: '', series: '', topic: '' })
   const [ghostHint, setGhostHint] = useState('')
@@ -411,6 +485,17 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
+  useEffect(() => {
+    if (!initialPrompt || !initialPrompt.trim()) return
+    setSurface('chat')
+    setComposerText(initialPrompt.trim())
+    onConsumeInitialPrompt?.()
+    const timer = window.setTimeout(() => {
+      composerRef.current?.focus()
+    }, 30)
+    return () => window.clearTimeout(timer)
+  }, [initialPrompt, onConsumeInitialPrompt])
+
   const activeWorkspace = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) ?? null,
     [activeWorkspaceId, workspaces],
@@ -503,10 +588,8 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
   useEffect(() => {
     setNotesDraft(activeThread?.scratchpad_md ?? '')
-    const cm = activeThread?.chat_mode
-    if (cm === 'co_writer' || cm === 'research' || cm === 'brief' || cm === 'chat') {
-      setChatMode(cm)
-    }
+    const cm = activeThread?.chat_mode ?? ''
+    setChatMode(cm === 'chat' ? '' : cm)
     if (activeThread?.persona_style) {
       setPersonaStyle(activeThread.persona_style)
     }
@@ -518,6 +601,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     askUserPrompts,
     streamState,
     streamConnected,
+    reconnectNotice,
     sending,
     error,
     sendTurn,
@@ -688,13 +772,16 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
         e.preventDefault()
         setPaletteOpen((v) => !v)
         setPaletteQuery('')
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j' && surface === 'chat') {
+        e.preventDefault()
+        setSidePanelOpen((v) => !v)
       } else if (e.key === 'Escape' && paletteOpen) {
         setPaletteOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [paletteOpen])
+  }, [paletteOpen, surface])
 
   useEffect(() => {
     const trimmed = composerText.trim()
@@ -859,6 +946,8 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     const knownSlugs = agents.map((a) => a.slug)
     const mentions = extractMentions(raw, knownSlugs)
     const activeSkillsSnapshot = [...turnSkillSlugs]
+    const responderSnapshot = activeResponderSlug
+    const consultPartnersSnapshot = [...consultPartnerSlugs]
     if (!overrideText) {
       setComposerText('')
       setGhostHint('')
@@ -866,12 +955,20 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     if (!applySkillEveryTurn && activeSkillsSnapshot.length > 0) {
       setTurnSkillSlugs([])
     }
+    if (!prefsEveryTurn && responderSnapshot) {
+      setActiveResponderSlug(null)
+    }
+    if (!partnersEveryTurn && consultPartnersSnapshot.length > 0) {
+      setConsultPartnerSlugs([])
+    }
     await sendTurn(raw, {
       mentions,
       skillSlugs: activeSkillsSnapshot,
       modelOverride: turnModelOverride || null,
-      chatMode,
+      chatMode: chatMode || 'chat',
       personaStyle,
+      responderAgentSlug: responderSnapshot,
+      consultPartnerSlugs: consultPartnersSnapshot,
     })
   }
 
@@ -904,21 +1001,182 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
     URL.revokeObjectURL(url)
   }
 
-  const renderMessageContent = (content: string) => {
-    const parts = content.split(/(#article-\d+)/gi)
-    return parts.map((part, idx) => {
-      const m = /^#article-(\d+)$/i.exec(part)
-      if (m && onOpenArticle) {
-        const id = Number(m[1])
-        return (
-          <button key={idx} type="button" className="agent-citation-link" onClick={() => onOpenArticle(id)}>
-            📰 #{id}
-          </button>
-        )
-      }
-      return <span key={idx}>{part}</span>
-    })
+  const handleExportThreadMd = () => {
+    if (!activeThread) return
+    const lines: string[] = [
+      `# ${activeThread.title}`,
+      '',
+      ...messages.map((m) => {
+        const who =
+          m.role === 'user'
+            ? uiLang === 'vi'
+              ? 'Biên tập viên'
+              : 'Editor'
+            : `@${m.sender_slug ?? 'analyst'}`
+        return `### ${who}\n\n${m.content}`
+      }),
+    ]
+    if (whiteboard.length > 0) {
+      lines.push('', `## ${c.whiteboardTitle}`, ...whiteboard.map((w) => `- ${w.content}`))
+    }
+    const blob = new Blob([lines.join('\n\n')], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `newsman-thread-${activeThread.id}.md`
+    a.click()
+    URL.revokeObjectURL(url)
   }
+
+  const declaredAgentsV2 = useMemo<DeclaredAppAgentV2[]>(
+    () =>
+      agents.map((ag) => ({
+        id: ag.slug,
+        name: ag.display_name,
+        kind: ag.runtime_kind === 'partner_fast' ? 'partner' : 'subagent',
+        description: ag.description.slice(0, 80),
+        emoji: ag.emoji,
+        color: ag.color,
+      })),
+    [agents],
+  )
+
+  const composerModesV2 = useMemo<ComposerModeOptionV2[]>(
+    () => [
+      {
+        value: 'morning_brief',
+        title: c.v23ModeMorningBrief,
+        description: c.v23ModeMorningBriefSub,
+        icon: '☀️',
+      },
+      {
+        value: 'macro_rates',
+        title: c.v23ModeMacroRates,
+        description: c.v23ModeMacroRatesSub,
+        icon: '📈',
+      },
+      {
+        value: 'tax_compliance',
+        title: c.v23ModeTaxCheck,
+        description: c.v23ModeTaxCheckSub,
+        icon: '⚖️',
+      },
+      {
+        value: 'cross_source',
+        title: c.v23ModeCrossSource,
+        description: c.v23ModeCrossSourceSub,
+        icon: '🌐',
+      },
+    ],
+    [
+      c.v23ModeCrossSource,
+      c.v23ModeCrossSourceSub,
+      c.v23ModeMacroRates,
+      c.v23ModeMacroRatesSub,
+      c.v23ModeMorningBrief,
+      c.v23ModeMorningBriefSub,
+      c.v23ModeTaxCheck,
+      c.v23ModeTaxCheckSub,
+    ],
+  )
+
+  const responseStylesV2 = useMemo<ResponseStyleOptionV2[]>(
+    () => [
+      {
+        id: 'analytical',
+        name: uiLang === 'vi' ? 'Phân tích dẫn nguồn' : 'Analytical & Cited',
+        description:
+          uiLang === 'vi' ? 'Đối chiếu số liệu & nguồn gốc' : 'Data-backed with source links',
+      },
+      {
+        id: 'concise',
+        name: uiLang === 'vi' ? 'Ngắn gọn · Điểm chính' : 'Concise Bullet Brief',
+        description: uiLang === 'vi' ? 'Tóm lược ý cốt lõi' : 'Tight executive bullets',
+      },
+      {
+        id: 'executive',
+        name: uiLang === 'vi' ? 'Tổng thuật Tòa soạn' : 'Executive Memo',
+        description:
+          uiLang === 'vi' ? 'Bối cảnh, kịch bản & rủi ro' : 'Context, scenarios & key risks',
+      },
+      {
+        id: 'neutral',
+        name: uiLang === 'vi' ? 'Trung lập khách quan' : 'Neutral Wire Style',
+        description:
+          uiLang === 'vi' ? 'Tách biệt sự kiện và nhận định' : 'Strict fact vs inference split',
+      },
+    ],
+    [uiLang],
+  )
+
+  const resourceCategoriesV2 = useMemo<ResourceCategoryItemV2[]>(
+    () => [
+      {
+        key: 'articles',
+        label: `📰 ${c.v23ResArticles}`,
+        group: 'reference',
+      },
+      {
+        key: 'regions',
+        label: `🌍 ${c.v23ResRegions}`,
+        group: 'reference',
+      },
+      {
+        key: 'series',
+        label: `📊 ${c.v23ResSeries}`,
+        group: 'reference',
+      },
+      {
+        key: 'tax_calendar',
+        label: `📅 ${c.v23ResTax}`,
+        group: 'reference',
+      },
+      {
+        key: 'history',
+        label: `💬 ${c.v23ResHistory}`,
+        group: 'reference',
+        selectedCount: threads.length > 0 ? threads.length : undefined,
+      },
+      {
+        key: 'desk_notes',
+        label: `📝 ${c.v23ResNotes}`,
+        group: 'reference',
+        selectedCount: whiteboard.length > 0 ? whiteboard.length : undefined,
+      },
+      {
+        key: 'active_desk_scope',
+        label: `${activeWorkspace?.emoji ?? '🗂️'} ${activeWorkspace?.name ?? c.salonScopeNoWorkspace}`,
+        group: 'linked',
+        fullRow: true,
+        summary: effectiveThreadScope.regions?.join(', ') || c.salonScopeRegionsAll,
+      },
+    ],
+    [
+      activeWorkspace?.emoji,
+      activeWorkspace?.name,
+      c.salonScopeNoWorkspace,
+      c.salonScopeRegionsAll,
+      c.v23ResArticles,
+      c.v23ResHistory,
+      c.v23ResNotes,
+      c.v23ResRegions,
+      c.v23ResSeries,
+      c.v23ResTax,
+      effectiveThreadScope.regions,
+      threads.length,
+      whiteboard.length,
+    ],
+  )
+
+  const activeModeOption = useMemo(
+    () => composerModesV2.find((m) => m.value === chatMode) ?? null,
+    [chatMode, composerModesV2],
+  )
+
+  const activeResponderAgent = useMemo(
+    () => (activeResponderSlug ? agentMap.get(activeResponderSlug) ?? null : null),
+    [activeResponderSlug, agentMap],
+  )
 
   const selectWorkspaceForEdit = (ws: AgentWorkspace) => {
     setWsDraft({ ...ws })
@@ -1409,14 +1667,14 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
   return (
     <div className="agents-workspace ak-scope">
       <div className="ak-surface-bar">
-        <nav className="ak-tab-strip" role="tablist" aria-label={c.agentsWorkspaceTitle}>
+        <nav className="pplx-tabs ak-tab-strip" role="tablist" aria-label={c.agentsWorkspaceTitle}>
           {surfaceGate.surfaces.map((id) => (
             <button
               key={id}
               type="button"
               role="tab"
               aria-selected={surface === id}
-              className={surface === id ? 'ak-tab-btn active' : 'ak-tab-btn'}
+              className={surface === id ? 'pplx-tab ak-tab-btn active' : 'pplx-tab ak-tab-btn'}
               onClick={() => setSurface(id)}
             >
               {surfaceLabelMap[id]}
@@ -1426,7 +1684,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
         <div className="ak-btn-group">
           <button
             type="button"
-            className="btn secondary btn-sm"
+            className="ak-top-pill-btn"
             onClick={() => {
               setPaletteOpen(true)
               setPaletteQuery('')
@@ -1437,6 +1695,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
           </button>
           <AgentSelect
             size="sm"
+            className="ak-top-pill-select"
             ariaLabel={c.workspaceActiveLabel}
             value={activeWorkspaceId ?? ''}
             onChange={(v) => setActiveWorkspaceId(v || null)}
@@ -1445,6 +1704,9 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
               ...workspaces.map((ws) => ({ value: ws.id, label: `${ws.emoji} ${ws.name}` })),
             ]}
           />
+          <a href="#mcp-connectors" className="ak-top-pill-link">
+            🔌 {c.mcpConnectorsShort}
+          </a>
           <span className={`bridge-status-pill mode-${bridgeStatus.mode}`}>
             <span className="dot" />
             {statusLabel}
@@ -1489,7 +1751,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
 
       {surface === 'studio' && (
         <>
-          <div className="ak-subtabs">
+          <div className="pplx-tabs ak-subtabs">
             {(
               [
                 ['agents', c.surfaceAgents],
@@ -1500,7 +1762,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
               <button
                 key={subId}
                 type="button"
-                className={studioSubTab === subId ? 'ak-tab-btn active' : 'ak-tab-btn'}
+                className={studioSubTab === subId ? 'pplx-tab ak-tab-btn active' : 'pplx-tab ak-tab-btn'}
                 onClick={() => setStudioSubTab(subId)}
               >
                 {subLabel}
@@ -3435,13 +3697,12 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
           <AgentSplitLayout
             storageKey="newsman:chat"
             leftCollapsed={!railOpen}
-            rightCollapsed={!sidePanelOpen}
             left={
               <aside className="agents-rail" style={{ width: '100%', border: 0 }}>
                 <div className="rail-actions">
                   <button
                     type="button"
-                    className="btn small secondary"
+                    className="btn primary rail-pill-btn"
                     onClick={() => {
                       setNewRoomKind('direct')
                       setNewRoomMembers([
@@ -3454,7 +3715,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   </button>
                   <button
                     type="button"
-                    className="btn small primary"
+                    className="btn secondary rail-pill-btn"
                     onClick={() => {
                       setNewRoomKind('group')
                       setNewRoomMembers(
@@ -3664,127 +3925,78 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
             }
             center={
               <section className="agents-stage" style={{ height: '100%', minWidth: 0 }}>
-                <header className="stage-head">
-                  <div className="stage-head-main">
-                    <button
-                      type="button"
-                      className={railOpen ? 'rail-toggle-btn active' : 'rail-toggle-btn'}
-                      aria-label={railOpen ? c.railHideBtn : c.railShowBtn}
-                      aria-expanded={railOpen}
-                      title={railOpen ? c.railHideBtn : c.railShowBtn}
-                      onClick={() => setRailOpen((v) => !v)}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                        <rect
-                          x="1.75"
-                          y="2.5"
-                          width="12.5"
-                          height="11"
-                          rx="2.2"
-                          stroke="currentColor"
-                          strokeWidth="1.4"
-                        />
-                        <path d="M5.75 2.5v11" stroke="currentColor" strokeWidth="1.4" />
-                      </svg>
-                    </button>
-                    <div className="stage-head-title-wrap">
-                      <strong>
-                        {activeThread
-                          ? `${activeThread.parent_thread_id ? '↳ ' : ''}${activeThread.title}`
-                          : c.selectThreadPrompt}
-                      </strong>
-                      {activeThread && (
-                        <div className="stage-seats-bar">
-                          {seatOrder.map((ag) => {
-                            const state = streamState.seatStates[ag.slug] ?? 'idle'
-                            return (
-                              <span
-                                key={ag.slug}
-                                className={`seat-pill state-${state}`}
-                                style={{ borderColor: ag.color }}
-                              >
-                                {ag.emoji} {ag.display_name}
-                                {state !== 'idle' && (
-                                  <em>
-                                    {' '}
-                                    ·{' '}
-                                    {state === 'thinking'
-                                      ? c.seatThinking
-                                      : state === 'speaking'
-                                        ? c.seatSpeaking
-                                        : state === 'tool_calling'
-                                          ? c.seatToolCalling
-                                          : state === 'error'
-                                            ? c.seatError
-                                            : c.seatDone}
-                                  </em>
-                                )}
-                              </span>
-                            )
-                          })}
-                          {streamConnected && <span className="sse-badge">● {c.liveStreamBadge}</span>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="stage-head-controls">
-                    {activeThread?.kind === 'group' && (
-                      <div className="mode-pill-row">
-                        {DISCUSSION_MODES.map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className={activeThread.discussion_mode === m.id ? 'chip active' : 'chip'}
-                            title={`${c[m.labelKey]} — ${c[m.descKey]}`}
-                            onClick={() => void updateThread(activeThread.id, { discussion_mode: m.id })}
-                          >
-                            {formatDiscussionModeShort(m.id, c)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className={
-                        sidePanelOpen && activeDockTab?.id === 'activity'
-                          ? 'btn small primary'
-                          : 'btn small secondary'
-                      }
-                      onClick={() => {
-                        if (sidePanelOpen && activeDockTab?.id === 'activity') {
-                          setSidePanelOpen(false)
-                        } else {
-                          setSidePanelTab('trace')
-                          dockStash.selectTab(dockThreadKey, 'activity')
-                          setSidePanelOpen(true)
-                        }
-                      }}
-                    >
-                      📈 {c.v2DrawerActivity} ({traceEntries.length})
-                    </button>
-                    <button
-                      type="button"
-                      className={
-                        sidePanelOpen && activeDockTab?.id === 'notes'
-                          ? 'btn small primary'
-                          : 'btn small secondary'
-                      }
-                      onClick={() => {
-                        if (sidePanelOpen && activeDockTab?.id === 'notes') {
-                          setSidePanelOpen(false)
-                        } else {
-                          setSidePanelTab('context')
-                          dockStash.selectTab(dockThreadKey, 'notes')
-                          setSidePanelOpen(true)
-                        }
-                      }}
-                    >
-                      📝 {c.v2DrawerNotes}
-                      {whiteboard.length > 0 ? ` (${whiteboard.length})` : ''}
-                    </button>
-                  </div>
-                </header>
+                <AgentChatHeaderBar
+                  lang={uiLang}
+                  title={
+                    activeThread
+                      ? `${activeThread.parent_thread_id ? '↳ ' : ''}${activeThread.title}`
+                      : c.newResearchThreadTitle
+                  }
+                  subtitle={
+                    activeResponderAgent
+                      ? `${activeResponderAgent.emoji} ${activeResponderAgent.display_name} · Role-play`
+                      : activeThread
+                        ? `${seatOrder.map((ag) => `${ag.emoji} ${ag.display_name}`).join(' · ')}${streamConnected ? ` · ● ${c.liveStreamBadge}` : ''}`
+                        : undefined
+                  }
+                  leftSidebarOpen={railOpen}
+                  onToggleLeftSidebar={() => setRailOpen((v) => !v)}
+                  rightDockOpen={sidePanelOpen}
+                  onToggleRightDock={() => setSidePanelOpen((v) => !v)}
+                  onOpenNoteTab={() => {
+                    setSidePanelTab('context')
+                    dockStash.selectTab(dockThreadKey, 'notes')
+                    setSidePanelOpen(true)
+                  }}
+                  controlsConfig={controlsConfig}
+                  onChangeControlsConfig={updateControlsConfig}
+                  moreActions={
+                    activeThread
+                      ? [
+                          {
+                            key: 'pin',
+                            label: activeThread.pinned ? c.v2UnpinThreadBtn : c.v2PinThreadBtn,
+                            onSelect: () =>
+                              void updateThread(activeThread.id, { pinned: !activeThread.pinned }),
+                          },
+                          {
+                            key: 'rename',
+                            label: c.v23RenameThreadBtn,
+                            onSelect: () => {
+                              const nextTitle = window.prompt(
+                                c.v23RenameThreadPrompt,
+                                activeThread.title,
+                              )
+                              if (nextTitle && nextTitle.trim()) {
+                                void updateThread(activeThread.id, { title: nextTitle.trim() })
+                              }
+                            },
+                          },
+                          ...(messages.length > 0
+                            ? [
+                                {
+                                  key: 'branch',
+                                  label: c.v2BranchBtn,
+                                  onSelect: () =>
+                                    void handleBranchFromMessage(messages[messages.length - 1].id),
+                                },
+                              ]
+                            : []),
+                          {
+                            key: 'export_md',
+                            label: c.v23ExportMdBtn,
+                            onSelect: handleExportThreadMd,
+                          },
+                          {
+                            key: 'delete',
+                            label: c.deleteThreadLabel,
+                            danger: true,
+                            onSelect: () => handleDeleteThread(activeThread),
+                          },
+                        ]
+                      : []
+                  }
+                />
 
                 {activeThread && (
                   <div className="stage-scope-bar">
@@ -3801,6 +4013,22 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                         ...workspaces.map((ws) => ({ value: ws.id, label: `${ws.emoji} ${ws.name}` })),
                       ]}
                     />
+
+                    {activeThread.kind === 'group' && (
+                      <div className="mode-pill-row">
+                        {DISCUSSION_MODES.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={activeThread.discussion_mode === m.id ? 'chip active' : 'chip'}
+                            title={`${c[m.labelKey]} — ${c[m.descKey]}`}
+                            onClick={() => void updateThread(activeThread.id, { discussion_mode: m.id })}
+                          >
+                            {formatDiscussionModeShort(m.id, c)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
                     <span
                       className={
@@ -3884,25 +4112,42 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
                   >
                   {messages.length === 0 && (
-                    <div className="starter-prompts-box">
-                      <p className="muted-sub">{c.selectThreadPrompt}</p>
-                      <div className="chip-row">
-                        {(manifest?.quick_actions && manifest.quick_actions.length > 0
-                          ? manifest.quick_actions.map((qa) => ({
-                              label: (uiLang === 'vi' ? qa.label_vi : qa.label_en) ?? qa.label ?? qa.id,
-                              prompt: qa.prompt ?? qa.prompt_template ?? '',
-                            }))
-                          : [c.starterMacroToday, c.starterTaxReview, c.starterPolicyWatch].map(
-                              (p) => ({ label: p, prompt: p }),
-                            )
-                        ).map((item) => (
+                    <div className="pplx-empty-hero">
+                      <div className="pplx-empty-head">
+                        <h3>{c.emptyHeroTitle}</h3>
+                        <p>{c.emptyHeroSub}</p>
+                      </div>
+                      <div className="pplx-starter-grid">
+                        {[
+                          {
+                            title: c.starterCardMacroTitle,
+                            desc: c.starterCardMacroDesc,
+                            prompt: c.starterCardMacroPrompt,
+                          },
+                          {
+                            title: c.starterCardTaxTitle,
+                            desc: c.starterCardTaxDesc,
+                            prompt: c.starterCardTaxPrompt,
+                          },
+                          {
+                            title: c.starterCardCowriterTitle,
+                            desc: c.starterCardCowriterDesc,
+                            prompt: c.starterCardCowriterPrompt,
+                          },
+                          {
+                            title: c.starterCardFactTitle,
+                            desc: c.starterCardFactDesc,
+                            prompt: c.starterCardFactPrompt,
+                          },
+                        ].map((card) => (
                           <button
-                            key={item.label}
+                            key={card.title}
                             type="button"
-                            className="chip"
-                            onClick={() => void handleSend(item.prompt)}
+                            className="pplx-starter-card"
+                            onClick={() => void handleSend(card.prompt)}
                           >
-                            ✦ {item.label}
+                            <strong>{card.title}</strong>
+                            <span>{card.desc}</span>
                           </button>
                         ))}
                       </div>
@@ -3913,34 +4158,31 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     const isUser = m.role === 'user'
                     const ag = m.sender_slug ? agentMap.get(m.sender_slug) : undefined
                     const traceId = buildSeatTraceId(m)
-                    const steps: ExecutionTraceStep[] =
-                      m.trace_steps && m.trace_steps.length > 0
-                        ? m.trace_steps.map((raw) => ({
-                            merge_id: typeof raw.merge_id === 'string' ? raw.merge_id : undefined,
-                            tool: typeof raw.tool === 'string' ? raw.tool : 'tool',
-                            origin:
-                              typeof raw.origin === 'string'
-                                ? (raw.origin as ExecutionTraceStep['origin'])
-                                : undefined,
-                            status: typeof raw.status === 'string' ? raw.status : undefined,
-                            duration_ms:
-                              typeof raw.duration_ms === 'number' ? raw.duration_ms : undefined,
-                          }))
-                        : (m.tool_calls ?? []).map((tc) => ({
-                            merge_id: tc.merge_id,
-                            tool: tc.tool,
-                            origin: (tc.origin as ExecutionTraceStep['origin']) ?? undefined,
-                            status: tc.status,
-                            duration_ms: tc.duration_ms ?? undefined,
-                          }))
-                    const hasTrace = Boolean(m.reasoning) || steps.length > 0
+                    const toolCalls = m.tool_calls ?? []
+                    const traceSteps =
+                      toolCalls.length > 0
+                        ? toolCalls.map((tc) => mapToolToTraceStepV2(tc))
+                        : (m.trace_steps ?? []).map((raw, idx) =>
+                            mapToolToTraceStepV2({
+                              id:
+                                typeof raw.merge_id === 'string'
+                                  ? raw.merge_id
+                                  : `step-${m.id}-${idx}`,
+                              tool: typeof raw.tool === 'string' ? raw.tool : 'tool',
+                              status: typeof raw.status === 'string' ? raw.status : 'done',
+                              duration_ms:
+                                typeof raw.duration_ms === 'number' ? raw.duration_ms : undefined,
+                            }),
+                          )
+                    const approvalPills = toolCalls.filter((tc) => Boolean(tc.approval_required))
+                    const hasTrace = Boolean(m.reasoning) || traceSteps.length > 0
                     return (
                       <div
                         key={m.id}
                         data-turn-key={isUser ? String(m.id) : undefined}
                         className={
                           isUser
-                            ? 'salon-turn salon-turn-user'
+                            ? 'salon-turn salon-turn-user ak-msg--user'
                             : 'salon-turn salon-turn-agent partner-seat'
                         }
                       >
@@ -3966,46 +4208,41 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                                   }
                                   onClick={() => handleOpenTrace(traceId)}
                                 >
-                                  {c.v2ExecutionTrace} · {steps.length} {c.traceToolsUnit} ▸
+                                  {c.v2ExecutionTrace} · {traceSteps.length} {c.traceToolsUnit} ▸
                                 </button>
                               )}
                             </div>
                           </header>
 
                           {!isUser && hasTrace && (
-                            <details className="ak-trace-box">
-                              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                                {c.v2ExecutionTrace} ({steps.length})
-                              </summary>
-                              {m.reasoning && <pre className="trace-reasoning-pre">{m.reasoning}</pre>}
-                              {steps.map((st, idx) => {
-                                const originTag =
-                                  st.origin === 'builtin'
-                                    ? c.v2TraceBuiltin
-                                    : st.origin === 'app_domain' || st.origin === 'app_v4s'
-                                      ? c.v2TraceApp
-                                      : c.v2TraceMcp
-                                return (
-                                  <div key={st.merge_id ?? `${st.tool}-${idx}`} className="ak-trace-row">
-                                    <span>
-                                      <span className="ak-origin-pill">{originTag}</span>{' '}
-                                      <code>{st.tool}</code>
-                                    </span>
-                                    <span className="muted-sub">
-                                      {typeof st.duration_ms === 'number' ? `${st.duration_ms}ms · ` : ''}
-                                      {st.status ?? 'ok'}
-                                    </span>
-                                  </div>
-                                )
+                            <AgentExecutionTrace
+                              phase={deriveAgentStreamPhaseV2({
+                                isLive: false,
+                                hasReasoning: Boolean(m.reasoning),
+                                hasText: Boolean(m.content),
+                                doneToolCount: traceSteps.length,
                               })}
-                            </details>
+                              thinkingText={m.reasoning ?? undefined}
+                              steps={traceSteps}
+                              responderLabel={ag?.display_name ?? m.sender_slug ?? undefined}
+                              responderAvatar={ag?.emoji}
+                              onCitationClick={onOpenArticle}
+                            />
+                          )}
+
+                          {approvalPills.length > 0 && (
+                            <div className="salon-tool-list">
+                              {approvalPills.map((tc) => (
+                                <ToolInvocationPill key={tc.merge_id} pill={tc} lang={uiLang} />
+                              ))}
+                            </div>
                           )}
 
                           <div
                             className="salon-turn-prose"
                             onMouseUp={!isUser ? () => handleProseMouseUp(m) : undefined}
                           >
-                            {renderMessageContent(m.content)}
+                            <AgentMarkdown content={m.content} onCitationClick={onOpenArticle} />
                           </div>
 
                           <footer className="seat-hover-actions">
@@ -4126,39 +4363,97 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     </div>
                   ))}
 
-                  {streamState.toolPills.length > 0 && (
-                    <div className="ak-trace-box">
-                      <strong>{c.v2ExecutionTrace} (live)</strong>
-                      {streamState.toolPills.map((pill) => (
-                        <div key={pill.merge_id} className="ak-trace-row">
-                          <span>
-                            <span className="ak-origin-pill">{pill.origin ?? c.v2TraceMcp}</span>{' '}
-                            <code>{pill.tool}</code>
-                          </span>
-                          <span className="muted-sub">
-                            {typeof pill.duration_ms === 'number' ? `${pill.duration_ms}ms` : pill.status}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {Object.values(streamState.drafts).map((draft) => {
-                    const ag = agentMap.get(draft.agent_slug)
-                    return (
-                      <div key={draft.agent_slug} className="salon-turn salon-turn-agent partner-seat streaming">
-                        <div className="salon-turn-card">
-                          <header className="salon-turn-meta">
-                            <b>
-                              {ag?.emoji ?? '📈'} {ag?.display_name ?? draft.agent_slug}
-                            </b>
-                            <span className="tier-badge running">{c.seatSpeaking}</span>
-                          </header>
-                          <div className="salon-turn-prose">{draft.text}</div>
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {(sending ||
+                    streamState.toolPills.length > 0 ||
+                    Object.keys(streamState.drafts).length > 0 ||
+                    Boolean(reconnectNotice)) &&
+                    (() => {
+                      const draftsList = Object.values(streamState.drafts)
+                      if (draftsList.length === 0) {
+                        const liveSteps = streamState.toolPills.map((pill) =>
+                          mapToolToTraceStepV2(pill),
+                        )
+                        const runningCount = liveSteps.filter((s) => s.state === 'running').length
+                        const doneCount = liveSteps.length - runningCount
+                        const liveApprovalPills = streamState.toolPills.filter((p) =>
+                          Boolean(p.approval_required),
+                        )
+                        return (
+                          <>
+                            <AgentExecutionTrace
+                              phase={deriveAgentStreamPhaseV2({
+                                isLive: sending,
+                                hasError: Boolean(streamState.lastError),
+                                runningToolCount: runningCount,
+                                doneToolCount: doneCount,
+                              })}
+                              steps={liveSteps}
+                              responderLabel={activeResponderAgent?.display_name}
+                              responderAvatar={activeResponderAgent?.emoji}
+                              reconnectNotice={reconnectNotice}
+                              onCitationClick={onOpenArticle}
+                            />
+                            {liveApprovalPills.length > 0 && (
+                              <div className="salon-tool-list">
+                                {liveApprovalPills.map((p) => (
+                                  <ToolInvocationPill key={p.merge_id} pill={p} lang={uiLang} />
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )
+                      }
+                      return draftsList.map((draft) => {
+                        const ag = agentMap.get(draft.agent_slug)
+                        const seatPills = streamState.toolPills.filter(
+                          (p) => !p.agent_slug || p.agent_slug === draft.agent_slug,
+                        )
+                        const liveSteps = seatPills.map((p) => mapToolToTraceStepV2(p))
+                        const runningCount = liveSteps.filter((s) => s.state === 'running').length
+                        const doneCount = liveSteps.length - runningCount
+                        return (
+                          <div
+                            key={draft.agent_slug}
+                            className="salon-turn salon-turn-agent partner-seat streaming"
+                          >
+                            <div className="salon-turn-card">
+                              <header className="salon-turn-meta">
+                                <b>
+                                  {ag?.emoji ?? '📈'} {ag?.display_name ?? draft.agent_slug}
+                                </b>
+                                <span className="tier-badge running">{c.seatSpeaking}</span>
+                              </header>
+                              <AgentExecutionTrace
+                                phase={deriveAgentStreamPhaseV2({
+                                  isLive: true,
+                                  hasError: Boolean(streamState.lastError),
+                                  hasText: Boolean(draft.text),
+                                  hasReasoning: Boolean(draft.reasoning),
+                                  runningToolCount: runningCount,
+                                  doneToolCount: doneCount,
+                                })}
+                                thinkingText={draft.reasoning || undefined}
+                                steps={liveSteps}
+                                responderLabel={
+                                  activeResponderAgent?.display_name ??
+                                  ag?.display_name ??
+                                  draft.agent_slug
+                                }
+                                responderAvatar={activeResponderAgent?.emoji ?? ag?.emoji}
+                                reconnectNotice={reconnectNotice}
+                                onCitationClick={onOpenArticle}
+                              />
+                              <div className="salon-turn-prose">
+                                <AgentMarkdown
+                                  content={draft.text}
+                                  onCitationClick={onOpenArticle}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })
+                    })()}
                   <div ref={listEndRef} />
                   </div>
                 </div>
@@ -4188,148 +4483,6 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                 />
 
                 <footer className="composer-tray">
-                  <div className="ak-composer-t1">
-                    {(
-                      [
-                        ['scope', c.v2ScopeBtn],
-                        ['mode', `${c.v2ModeBtn}: ${chatMode}`],
-                        ['mcp', c.v2McpBtn],
-                        ['style', `${c.v2StyleBtn}: ${personaStyle}`],
-                        ['customize', c.v2CustomizeBtn],
-                      ] as const
-                    ).map(([popId, popLabel]) => (
-                      <div key={popId} className="ak-popover-anchor">
-                        <button
-                          type="button"
-                          className={composerPopover === popId ? 'chip active' : 'chip'}
-                          onClick={() =>
-                            setComposerPopover((prev) => (prev === popId ? null : popId))
-                          }
-                        >
-                          {popLabel}
-                        </button>
-                        {composerPopover === popId && (
-                          <div className="ak-popover" role="dialog">
-                            {popId === 'scope' && (
-                              <>
-                                <input
-                                  value={turnScopeFilter.region}
-                                  placeholder="region (e.g. vn, us, eu)"
-                                  onChange={(e) =>
-                                    setTurnScopeFilter((p) => ({ ...p, region: e.target.value }))
-                                  }
-                                />
-                                <input
-                                  value={turnScopeFilter.series}
-                                  placeholder="series (e.g. cpi, policy_rate)"
-                                  onChange={(e) =>
-                                    setTurnScopeFilter((p) => ({ ...p, series: e.target.value }))
-                                  }
-                                />
-                                <input
-                                  value={turnScopeFilter.topic}
-                                  placeholder="topic (e.g. macro, tax)"
-                                  onChange={(e) =>
-                                    setTurnScopeFilter((p) => ({ ...p, topic: e.target.value }))
-                                  }
-                                />
-                              </>
-                            )}
-                            {popId === 'mode' && (
-                              <div className="chip-row">
-                                {(['chat', 'co_writer', 'research', 'brief'] as const).map((m) => (
-                                  <button
-                                    key={m}
-                                    type="button"
-                                    className={chatMode === m ? 'chip active' : 'chip'}
-                                    onClick={() => {
-                                      setChatMode(m)
-                                      if (activeThread) {
-                                        void updateThread(activeThread.id, { chat_mode: m })
-                                      }
-                                      setComposerPopover(null)
-                                    }}
-                                  >
-                                    {m}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {popId === 'mcp' && (
-                              <div className="chip-row">
-                                {mcpNamespaces.map((ns) => (
-                                  <span key={ns.namespace} className={ns.enabled ? 'chip active' : 'chip'}>
-                                    {ns.enabled ? '✓ ' : ''}
-                                    {ns.namespace}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {popId === 'style' && (
-                              <div className="chip-row">
-                                {(['analytical', 'concise', 'executive', 'neutral'] as const).map(
-                                  (st) => (
-                                    <button
-                                      key={st}
-                                      type="button"
-                                      className={personaStyle === st ? 'chip active' : 'chip'}
-                                      onClick={() => {
-                                        setPersonaStyle(st)
-                                        if (activeThread) {
-                                          void updateThread(activeThread.id, { persona_style: st })
-                                        }
-                                        setComposerPopover(null)
-                                      }}
-                                    >
-                                      {st}
-                                    </button>
-                                  ),
-                                )}
-                              </div>
-                            )}
-                            {popId === 'customize' && (
-                              <>
-                                <small className="muted-sub">
-                                  {c.v2SendKeyLabel}:{' '}
-                                  {bridgeStatus.send_key_mode === 'ctrl_enter'
-                                    ? 'Ctrl/Cmd+Enter'
-                                    : 'Enter'}
-                                </small>
-                                <div className="chip-row">
-                                  <button
-                                    type="button"
-                                    className="chip"
-                                    onClick={() =>
-                                      void saveBridgeConfig({
-                                        send_key_mode:
-                                          bridgeStatus.send_key_mode === 'ctrl_enter'
-                                            ? 'enter'
-                                            : 'ctrl_enter',
-                                      })
-                                    }
-                                  >
-                                    Toggle Send Key
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="chip"
-                                    onClick={() =>
-                                      void saveBridgeConfig({
-                                        interface_language: uiLang === 'vi' ? 'en' : 'vi',
-                                      })
-                                    }
-                                  >
-                                    UI: {uiLang.toUpperCase()}
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
                   {autocompleteItems.length > 0 && (
                     <div className="composer-autocomplete" role="listbox">
                       {autocompleteItems.map((item) => (
@@ -4347,9 +4500,15 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                   )}
 
                   <AgentComposerLead
-                    modeLabel={chatMode !== 'chat' ? chatMode : null}
+                    modeLabel={
+                      activeModeOption
+                        ? activeModeOption.title
+                        : chatMode && chatMode !== 'chat'
+                          ? chatMode
+                          : null
+                    }
                     onClearMode={() => {
-                      setChatMode('chat')
+                      setChatMode('')
                       if (activeThread) {
                         void updateThread(activeThread.id, { chat_mode: 'chat' })
                       }
@@ -4357,6 +4516,185 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     selectedSkills={selectedSkillOptionsV2}
                     onRemoveSkill={(slug) => toggleTurnSkill(slug)}
                     applyEveryTurn={applySkillEveryTurn}
+                  />
+
+                  <AgentFoldableComposerTray
+                    storageKey="lnc-ak-composer-tray:newsman"
+                    leftCluster={
+                      <>
+                        <AgentResourcesPopover
+                          items={resourceCategoriesV2}
+                          label={c.v23ResourcesBtn}
+                          selectedTotal={
+                            (turnScopeFilter.region.trim() ? 1 : 0) +
+                            (turnScopeFilter.series.trim() ? 1 : 0) +
+                            (turnScopeFilter.topic.trim() ? 1 : 0)
+                          }
+                          onSelectCategory={(categoryId: string) => {
+                            if (categoryId === 'regions' && onOpenRegions) {
+                              onOpenRegions()
+                            } else if (categoryId === 'desk_notes') {
+                              setSidePanelTab('context')
+                              dockStash.selectTab(dockThreadKey, 'notes')
+                              setSidePanelOpen(true)
+                            } else if (categoryId === 'history') {
+                              setRailOpen(true)
+                            } else {
+                              setComposerPopover((prev) => (prev === 'scope' ? null : 'scope'))
+                            }
+                          }}
+                        />
+
+                        {composerPopover === 'scope' && (
+                          <div className="ak-popover-anchor">
+                            <div className="ak-popover" role="dialog">
+                              <input
+                                value={turnScopeFilter.region}
+                                placeholder="region (e.g. vn, us, eu)"
+                                onChange={(e) =>
+                                  setTurnScopeFilter((p) => ({ ...p, region: e.target.value }))
+                                }
+                              />
+                              <input
+                                value={turnScopeFilter.series}
+                                placeholder="series (e.g. cpi, policy_rate)"
+                                onChange={(e) =>
+                                  setTurnScopeFilter((p) => ({ ...p, series: e.target.value }))
+                                }
+                              />
+                              <input
+                                value={turnScopeFilter.topic}
+                                placeholder="topic (e.g. macro, tax)"
+                                onChange={(e) =>
+                                  setTurnScopeFilter((p) => ({ ...p, topic: e.target.value }))
+                                }
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <AgentModePopover
+                          modes={composerModesV2}
+                          value={chatMode}
+                          label={c.v2ModeBtn}
+                          onChange={(nextMode: string) => {
+                            setChatMode(nextMode)
+                            if (activeThread) {
+                              void updateThread(activeThread.id, {
+                                chat_mode: nextMode || 'chat',
+                              })
+                            }
+                          }}
+                        />
+
+                        {controlsConfig.showSkills && (
+                          <AgentSkillPicker
+                            size="sm"
+                            label={c.v2SkillsBtn}
+                            searchPlaceholder={c.skillsSearchPlaceholder}
+                            skills={allSkillOptionsV2}
+                            selectedSlugs={turnSkillSlugs}
+                            onToggleSkill={toggleTurnSkill}
+                            applyEveryTurn={applySkillEveryTurn}
+                            onToggleApplyEveryTurn={setApplySkillEveryTurn}
+                            pinnedSlugs={pinnedSkillSlugs}
+                            onTogglePin={(slug) =>
+                              void toggleSkillPin(slug, !pinnedSkillSlugs.includes(slug))
+                            }
+                            onCreateSkill={() => setCreateSkillOpen(true)}
+                            onDeleteCustomSkill={(slug) => void deleteCustomSkill(slug)}
+                          />
+                        )}
+
+                        {controlsConfig.showMcp && (
+                          <div className="ak-popover-anchor">
+                            <button
+                              type="button"
+                              className={`ak-tray-pill${composerPopover === 'mcp' ? ' is-active' : ''}`}
+                              onClick={() =>
+                                setComposerPopover((prev) => (prev === 'mcp' ? null : 'mcp'))
+                              }
+                            >
+                              <span>{c.v2McpBtn}</span>
+                              <span className="ak-tray-chev">▾</span>
+                            </button>
+                            {composerPopover === 'mcp' && (
+                              <div className="ak-popover" role="dialog">
+                                <div className="chip-row">
+                                  {mcpNamespaces.map((ns) => (
+                                    <span
+                                      key={ns.namespace}
+                                      className={ns.enabled ? 'chip active' : 'chip'}
+                                    >
+                                      {ns.enabled ? '✓ ' : ''}
+                                      {ns.namespace}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    }
+                    rightCluster={
+                      <>
+                        {controlsConfig.showPartners && (
+                          <AgentPartnersConsultPopover
+                            agents={declaredAgentsV2}
+                            selectedIds={consultPartnerSlugs}
+                            everyTurn={partnersEveryTurn}
+                            onToggleAgent={(slug: string) =>
+                              setConsultPartnerSlugs((prev) =>
+                                prev.includes(slug)
+                                  ? prev.filter((s) => s !== slug)
+                                  : [...prev, slug],
+                              )
+                            }
+                            onEveryTurnChange={setPartnersEveryTurn}
+                            label={c.v23PartnersBtn}
+                            onCreateGroup={() => {
+                              setNewRoomKind('group')
+                              setNewRoomMembers(
+                                activeWorkspace?.default_agent_slugs?.length
+                                  ? activeWorkspace.default_agent_slugs
+                                  : agents.map((a) => a.slug),
+                              )
+                              setNewRoomOpen(true)
+                              setRailOpen(true)
+                            }}
+                            onManageAgents={() => {
+                              setSurface('studio')
+                              setStudioSubTab('agents')
+                            }}
+                          />
+                        )}
+
+                        {controlsConfig.showPreferences && (
+                          <AgentRoleplayPreferencesPopover
+                            styles={responseStylesV2}
+                            selectedStyleId={personaStyle}
+                            onSelectStyle={(nextStyle: string) => {
+                              const resolved = nextStyle || 'analytical'
+                              setPersonaStyle(resolved)
+                              if (activeThread) {
+                                void updateThread(activeThread.id, { persona_style: resolved })
+                              }
+                            }}
+                            declaredAgents={declaredAgentsV2}
+                            activeResponderId={activeResponderSlug}
+                            onSelectResponder={setActiveResponderSlug}
+                            everyTurn={prefsEveryTurn}
+                            onEveryTurnChange={setPrefsEveryTurn}
+                            label={c.v23PreferencesBtn}
+                            onOpenPersonalization={() => {
+                              setSurface('studio')
+                              setStudioSubTab('agents')
+                            }}
+                          />
+                        )}
+                      </>
+                    }
                   />
 
                   <textarea
@@ -4406,8 +4744,20 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                     </div>
                   )}
 
-                  <div className="composer-tray-bar">
-                    <div className="composer-tray-left">
+                  <div
+                    className="composer-tray-bar"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div
+                      className="composer-tray-left"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+                    >
                       <div className="composer-quick-triggers">
                         <button
                           type="button"
@@ -4426,22 +4776,7 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           {c.composerSkillBtn}
                         </button>
                       </div>
-                      <AgentSkillPicker
-                        size="sm"
-                        label={c.v2SkillsBtn}
-                        searchPlaceholder={c.skillsSearchPlaceholder}
-                        skills={allSkillOptionsV2}
-                        selectedSlugs={turnSkillSlugs}
-                        onToggleSkill={toggleTurnSkill}
-                        applyEveryTurn={applySkillEveryTurn}
-                        onToggleApplyEveryTurn={setApplySkillEveryTurn}
-                        pinnedSlugs={pinnedSkillSlugs}
-                        onTogglePin={(slug) =>
-                          void toggleSkillPin(slug, !pinnedSkillSlugs.includes(slug))
-                        }
-                        onCreateSkill={() => setCreateSkillOpen(true)}
-                        onDeleteCustomSkill={(slug) => void deleteCustomSkill(slug)}
-                      />
+
                       <AgentSelect
                         size="sm"
                         ariaLabel={c.composerModelLabel}
@@ -4460,289 +4795,312 @@ export function AgentsWorkspace({ lang, onOpenArticle, onOpenRegions }: AgentsWo
                           })),
                         ]}
                       />
-                      <AgentContextBudgetChip budget={contextBudget} />
+
+                      {controlsConfig.showContextRing && (
+                        <AgentContextBudgetChip budget={contextBudget} />
+                      )}
+
                       {composerBytes > 0 && (
                         <span className="context-budget-chip" title={c.composerBudgetLabel}>
                           {composerBytes < 1024 ? '<1' : (composerBytes / 1024).toFixed(1)} / 16 KB
                         </span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      disabled={!composerText.trim()}
-                      onClick={() => void handleSend()}
-                    >
-                      {sending ? `+ ${c.sendTurnBtn}` : c.sendTurnBtn}
-                    </button>
+
+                    <div className="composer-tray-right">
+                      <button
+                        type="button"
+                        className="pplx-submit-btn"
+                        aria-label={sending ? c.sendingTurnBtn : c.sendTurnBtn}
+                        title={sending ? c.sendingTurnBtn : c.sendTurnBtn}
+                        disabled={!composerText.trim()}
+                        onClick={() => void handleSend()}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <line x1="12" y1="19" x2="12" y2="5" />
+                          <polyline points="5 12 12 5 19 12" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 </footer>
               </section>
             }
-            right={
-              <AgentWorkspaceDock
-                embeddedInSplitPane
-                storageKey="newsman:chat-dock"
-                threadId={dockThreadKey}
-                open={sidePanelOpen}
-                onCloseDock={() => setSidePanelOpen(false)}
-                onBackToConversation={
-                  activeDockTab && activeDockTab.id !== 'activity' && activeDockTab.id !== 'notes'
-                    ? () => dockStash.selectTab(dockThreadKey, 'activity')
-                    : undefined
-                }
-                backLabel={c.v22DockBackBtn}
-                tabs={dockState.tabs}
-                activeTabId={dockState.activeId}
-                onSelectTab={(tabId) => {
-                  dockStash.selectTab(dockThreadKey, tabId)
-                  setSidePanelTab(tabId === 'notes' ? 'context' : 'trace')
-                }}
-                onCloseTab={(tabId) => dockStash.closeTab(dockThreadKey, tabId)}
-                launcherOptions={[
-                  {
-                    kind: 'activity',
-                    label: `📈 ${c.v2DrawerActivity}`,
-                    targetId: 'activity',
-                  },
-                  {
-                    kind: 'notes',
-                    label: `📝 ${c.v2DrawerNotes}`,
-                    targetId: 'notes',
-                  },
-                  {
-                    kind: 'custom',
-                    label: '✦ Summarize Round',
-                    targetId: 'prompt:summarize',
-                  },
-                ]}
-                onLaunchTab={(opt) => {
-                  if (opt.kind === 'activity') dockStash.selectTab(dockThreadKey, 'activity')
-                  else if (opt.kind === 'notes') dockStash.selectTab(dockThreadKey, 'notes')
-                  else if (opt.targetId === 'prompt:summarize') {
-                    setComposerText(
-                      uiLang === 'vi'
-                        ? 'Tóm tắt các điểm chính và rủi ro thuế/vĩ mô của phiên thảo luận này.'
-                        : 'Summarize the key macro and tax takeaways from this discussion round.',
-                    )
+            dock={
+              sidePanelOpen ? (
+                <AgentWorkspaceDock
+                  storageKey="newsman:chat-dock"
+                  threadId={dockThreadKey}
+                  open={sidePanelOpen}
+                  onCloseDock={() => setSidePanelOpen(false)}
+                  onBackToConversation={
+                    isCompactViewport ? () => setSidePanelOpen(false) : undefined
+                  }
+                  backLabel={c.v22DockBackBtn}
+                  tabs={dockState.tabs}
+                  activeTabId={dockState.activeId}
+                  onSelectTab={(tabId) => {
+                    dockStash.selectTab(dockThreadKey, tabId)
+                    setSidePanelTab(tabId === 'notes' ? 'context' : 'trace')
+                  }}
+                  onCloseTab={(tabId) => dockStash.closeTab(dockThreadKey, tabId)}
+                  launcherOptions={[
+                    {
+                      kind: 'activity',
+                      label: `📈 ${c.v2DrawerActivity}`,
+                      targetId: 'activity',
+                    },
+                    {
+                      kind: 'notes',
+                      label: `📝 ${c.v2DrawerNotes}`,
+                      targetId: 'notes',
+                    },
+                    {
+                      kind: 'custom',
+                      label: '✦ Summarize Round',
+                      targetId: 'prompt:summarize',
+                    },
+                  ]}
+                  onLaunchTab={(opt) => {
+                    if (opt.kind === 'activity') dockStash.selectTab(dockThreadKey, 'activity')
+                    else if (opt.kind === 'notes') dockStash.selectTab(dockThreadKey, 'notes')
+                    else if (opt.targetId === 'prompt:summarize') {
+                      setComposerText(
+                        uiLang === 'vi'
+                          ? 'Tóm tắt các điểm chính và rủi ro thuế/vĩ mô của phiên thảo luận này.'
+                          : 'Summarize the key macro and tax takeaways from this discussion round.',
+                      )
+                      composerRef.current?.focus()
+                    }
+                  }}
+                  recentlyClosed={dockState.closed}
+                  onReopenClosed={(tab) => dockStash.reopenClosed(dockThreadKey, tab)}
+                  onPromptTrigger={(prompt) => {
+                    setComposerText(prompt)
                     composerRef.current?.focus()
-                  }
-                }}
-                recentlyClosed={dockState.closed}
-                onReopenClosed={(tab) => dockStash.reopenClosed(dockThreadKey, tab)}
-                onPromptTrigger={(prompt) => {
-                  setComposerText(prompt)
-                  composerRef.current?.focus()
-                }}
-                renderTabBody={(tab) => {
-                  if (tab.id === 'activity' || tab.kind === 'activity') {
-                    return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        <AgentSessionActivity
-                          activity={sessionActivity}
-                          onOpenFile={(file) => {
-                            dockStash.openFileTab(dockThreadKey, file)
-                            setSidePanelOpen(true)
-                          }}
-                          onNavigateSpace={(href) => {
-                            if (href === '#regions' && onOpenRegions) {
-                              onOpenRegions()
-                            } else if (href === '#memory') {
-                              setSurface('memory')
-                            } else if (href === '#studio') {
-                              setSurface('studio')
-                            }
-                          }}
-                          configSection={
-                            traceEntries.length > 0 ? (
-                              <div className="side-panel-trace-list">
-                                {traceEntries.map(({ traceId, message, agent }) => (
-                                  <article
-                                    key={traceId}
-                                    data-trace-id={traceId}
-                                    className={
-                                      selectedTraceId === traceId ? 'trace-card active' : 'trace-card'
-                                    }
-                                  >
-                                    <header className="trace-card-head">
-                                      <strong>
-                                        {agent?.emoji ?? '📈'}{' '}
-                                        {agent?.display_name ?? message.sender_slug ?? 'Agent'}
-                                      </strong>
-                                      {message.round_idx && (
-                                        <span className="round-tag">R{message.round_idx}</span>
-                                      )}
-                                    </header>
-                                    {message.reasoning && (
-                                      <pre className="trace-reasoning-pre">{message.reasoning}</pre>
-                                    )}
-                                    {message.tool_calls && message.tool_calls.length > 0 && (
-                                      <div className="salon-tool-list">
-                                        {message.tool_calls.map((tc) => (
-                                          <ToolInvocationPill
-                                            key={tc.merge_id}
-                                            pill={tc}
-                                            lang={uiLang}
-                                          />
-                                        ))}
-                                      </div>
-                                    )}
-                                  </article>
-                                ))}
-                              </div>
-                            ) : undefined
-                          }
-                        />
-                      </div>
-                    )
-                  }
-
-                  if (tab.id === 'notes' || tab.kind === 'notes') {
-                    return (
-                      <div className="side-panel-context-pane">
-                        {activeWorkspace && (
-                          <div className="workspace-ctx-summary">
-                            <strong>
-                              {activeWorkspace.emoji} {activeWorkspace.name}
-                            </strong>
-                            <p className="muted-sub">{activeWorkspace.description}</p>
-                            <div className="chip-row">
-                              <span className="scope-badge">
-                                ⌖{' '}
-                                {activeWorkspace.resource_ctx.regions?.length
-                                  ? activeWorkspace.resource_ctx.regions.join(', ')
-                                  : c.salonScopeRegionsAll}
-                              </span>
-                              <span className="scope-badge">
-                                #{' '}
-                                {activeWorkspace.resource_ctx.topics?.length
-                                  ? activeWorkspace.resource_ctx.topics.join(', ')
-                                  : c.salonScopeTopicsAll}
-                              </span>
-                            </div>
-                          </div>
-                        )}
-
-                        {activeThread && (
-                          <div className="studio-scope-box" style={{ marginBottom: 10 }}>
-                            <div className="ak-toolbar">
-                              <strong>{c.v2L1ScratchpadLabel}</strong>
-                              <button
-                                type="button"
-                                className="btn secondary btn-sm"
-                                disabled={notesSaving}
-                                onClick={() => {
-                                  setNotesSaving(true)
-                                  void updateThread(activeThread.id, {
-                                    scratchpad_md: notesDraft,
-                                  }).finally(() => setNotesSaving(false))
-                                }}
-                              >
-                                {c.v2SaveNotesBtn}
-                              </button>
-                            </div>
-                            <textarea
-                              className="ak-notes-editor"
-                              value={notesDraft}
-                              onChange={(e) => setNotesDraft(e.target.value)}
-                            />
-                          </div>
-                        )}
-
-                        <div className="wb-head">
-                          <div>
-                            <strong>{c.whiteboardTitle}</strong>
-                            <p>{c.whiteboardSub}</p>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn small secondary"
-                            disabled={summarizing || !selectedThreadId}
-                            onClick={() => {
-                              setSummarizing(true)
-                              void summarizeRound().finally(() => setSummarizing(false))
+                  }}
+                  renderTabBody={(tab) => {
+                    if (tab.id === 'activity' || tab.kind === 'activity') {
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          <AgentSessionActivity
+                            activity={sessionActivity}
+                            onOpenFile={(file) => {
+                              dockStash.openFileTab(dockThreadKey, file)
+                              setSidePanelOpen(true)
                             }}
-                          >
-                            {summarizing ? c.whiteboardSummarizing : c.whiteboardSummarizeBtn}
-                          </button>
+                            onNavigateSpace={(href) => {
+                              if (href === '#regions' && onOpenRegions) {
+                                onOpenRegions()
+                              } else if (href === '#memory') {
+                                setSurface('memory')
+                              } else if (href === '#studio') {
+                                setSurface('studio')
+                              }
+                            }}
+                            configSection={
+                              traceEntries.length > 0 ? (
+                                <div className="side-panel-trace-list">
+                                  {traceEntries.map(({ traceId, message, agent }) => (
+                                    <article
+                                      key={traceId}
+                                      data-trace-id={traceId}
+                                      className={
+                                        selectedTraceId === traceId ? 'trace-card active' : 'trace-card'
+                                      }
+                                    >
+                                      <header className="trace-card-head">
+                                        <strong>
+                                          {agent?.emoji ?? '📈'}{' '}
+                                          {agent?.display_name ?? message.sender_slug ?? 'Agent'}
+                                        </strong>
+                                        {message.round_idx && (
+                                          <span className="round-tag">R{message.round_idx}</span>
+                                        )}
+                                      </header>
+                                      <AgentExecutionTrace
+                                        phase="settled"
+                                        thinkingText={message.reasoning ?? undefined}
+                                        steps={(message.tool_calls ?? []).map((tc) =>
+                                          mapToolToTraceStepV2(tc),
+                                        )}
+                                        responderLabel={
+                                          agent?.display_name ?? message.sender_slug ?? undefined
+                                        }
+                                        responderAvatar={agent?.emoji}
+                                        onCitationClick={onOpenArticle}
+                                      />
+                                    </article>
+                                  ))}
+                                </div>
+                              ) : undefined
+                            }
+                          />
                         </div>
-                        <div className="wb-list">
-                          {whiteboard.length === 0 && <p className="empty-hint">{c.whiteboardEmpty}</p>}
-                          {whiteboard.map((note) => (
-                            <div key={note.id} className="wb-note">
-                              <div className="wb-note-head">
-                                <span>
-                                  {note.pinned && (
-                                    <span className="tier-badge">{c.whiteboardPinnedBadge}</span>
-                                  )}{' '}
-                                  <b>@{note.author_slug ?? 'owner'}</b>
+                      )
+                    }
+
+                    if (tab.id === 'notes' || tab.kind === 'notes') {
+                      return (
+                        <div className="side-panel-context-pane">
+                          {activeWorkspace && (
+                            <div className="workspace-ctx-summary">
+                              <strong>
+                                {activeWorkspace.emoji} {activeWorkspace.name}
+                              </strong>
+                              <p className="muted-sub">{activeWorkspace.description}</p>
+                              <div className="chip-row">
+                                <span className="scope-badge">
+                                  ⌖{' '}
+                                  {activeWorkspace.resource_ctx.regions?.length
+                                    ? activeWorkspace.resource_ctx.regions.join(', ')
+                                    : c.salonScopeRegionsAll}
                                 </span>
+                                <span className="scope-badge">
+                                  #{' '}
+                                  {activeWorkspace.resource_ctx.topics?.length
+                                    ? activeWorkspace.resource_ctx.topics.join(', ')
+                                    : c.salonScopeTopicsAll}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {activeThread && (
+                            <div className="studio-scope-box" style={{ marginBottom: 10 }}>
+                              <div className="ak-toolbar">
+                                <strong>{c.v2L1ScratchpadLabel}</strong>
                                 <button
                                   type="button"
-                                  className="icon-del"
-                                  aria-label={c.cancelBtn}
-                                  title={c.cancelBtn}
-                                  onClick={() => void deleteWhiteboardNote(note.id)}
+                                  className="btn secondary btn-sm"
+                                  disabled={notesSaving}
+                                  onClick={() => {
+                                    setNotesSaving(true)
+                                    void updateThread(activeThread.id, {
+                                      scratchpad_md: notesDraft,
+                                    }).finally(() => setNotesSaving(false))
+                                  }}
                                 >
-                                  🗑
+                                  {c.v2SaveNotesBtn}
                                 </button>
                               </div>
-                              <p>{note.content}</p>
+                              <textarea
+                                className="ak-notes-editor"
+                                value={notesDraft}
+                                onChange={(e) => setNotesDraft(e.target.value)}
+                              />
+                              {notesDraft.trim() && (
+                                <div style={{ marginTop: 8 }}>
+                                  <AgentMarkdown
+                                    content={notesDraft}
+                                    onCitationClick={onOpenArticle}
+                                  />
+                                </div>
+                              )}
                             </div>
-                          ))}
+                          )}
+
+                          <div className="wb-head">
+                            <div>
+                              <strong>{c.whiteboardTitle}</strong>
+                              <p>{c.whiteboardSub}</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn small secondary"
+                              disabled={summarizing || !selectedThreadId}
+                              onClick={() => {
+                                setSummarizing(true)
+                                void summarizeRound().finally(() => setSummarizing(false))
+                              }}
+                            >
+                              {summarizing ? c.whiteboardSummarizing : c.whiteboardSummarizeBtn}
+                            </button>
+                          </div>
+                          <div className="wb-list">
+                            {whiteboard.length === 0 && <p className="empty-hint">{c.whiteboardEmpty}</p>}
+                            {whiteboard.map((note) => (
+                              <div key={note.id} className="wb-note">
+                                <div className="wb-note-head">
+                                  <span>
+                                    {note.pinned && (
+                                      <span className="tier-badge">{c.whiteboardPinnedBadge}</span>
+                                    )}{' '}
+                                    <b>@{note.author_slug ?? 'owner'}</b>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="icon-del"
+                                    aria-label={c.cancelBtn}
+                                    title={c.cancelBtn}
+                                    onClick={() => void deleteWhiteboardNote(note.id)}
+                                  >
+                                    🗑
+                                  </button>
+                                </div>
+                                <AgentMarkdown
+                                  content={note.content}
+                                  onCitationClick={onOpenArticle}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="wb-add">
+                            <textarea
+                              rows={2}
+                              value={wbInput}
+                              placeholder={c.whiteboardPlaceholder}
+                              onChange={(e) => setWbInput(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="btn small primary"
+                              disabled={!wbInput.trim() || !selectedThreadId}
+                              onClick={() => {
+                                const txt = wbInput.trim()
+                                setWbInput('')
+                                void addWhiteboardNote(txt)
+                              }}
+                            >
+                              {c.whiteboardAddBtn}
+                            </button>
+                          </div>
                         </div>
-                        <div className="wb-add">
-                          <textarea
-                            rows={2}
-                            value={wbInput}
-                            placeholder={c.whiteboardPlaceholder}
-                            onChange={(e) => setWbInput(e.target.value)}
-                          />
-                          <button
-                            type="button"
-                            className="btn small primary"
-                            disabled={!wbInput.trim() || !selectedThreadId}
-                            onClick={() => {
-                              const txt = wbInput.trim()
-                              setWbInput('')
-                              void addWhiteboardNote(txt)
-                            }}
-                          >
-                            {c.whiteboardAddBtn}
-                          </button>
-                        </div>
+                      )
+                    }
+
+                    const artMatch = /^file:(?:scoped-art-|article-)(\d+)$/.exec(tab.id)
+                    const metaFile = tab.meta?.file as SessionArtifactFileV2 | undefined
+                    const previewBody = String(metaFile?.previewText ?? '')
+                    return (
+                      <div
+                        className="studio-section"
+                        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+                      >
+                        <strong>{tab.title}</strong>
+                        {previewBody ? (
+                          <div className="skill-playbook-body">
+                            <AgentMarkdown content={previewBody} onCitationClick={onOpenArticle} />
+                          </div>
+                        ) : (
+                          <p className="muted-sub">—</p>
+                        )}
+                        {artMatch && onOpenArticle && (
+                          <div className="btn-row">
+                            <button
+                              type="button"
+                              className="btn primary btn-sm"
+                              onClick={() => onOpenArticle(Number(artMatch[1]))}
+                            >
+                              📰 {c.companionJumpArticle} #{artMatch[1]}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )
-                  }
-
-                  const artMatch = /^file:(?:scoped-art-|article-)(\d+)$/.exec(tab.id)
-                  const metaFile = tab.meta?.file as SessionArtifactFileV2 | undefined
-                  const previewBody = String(metaFile?.previewText ?? '')
-                  return (
-                    <div className="studio-section" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <strong>{tab.title}</strong>
-                      {previewBody ? (
-                        <pre className="skill-playbook-body" style={{ whiteSpace: 'pre-wrap' }}>
-                          {previewBody}
-                        </pre>
-                      ) : (
-                        <p className="muted-sub">—</p>
-                      )}
-                      {artMatch && onOpenArticle && (
-                        <div className="btn-row">
-                          <button
-                            type="button"
-                            className="btn primary btn-sm"
-                            onClick={() => onOpenArticle(Number(artMatch[1]))}
-                          >
-                            📰 {c.companionJumpArticle} #{artMatch[1]}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )
-                }}
-              />
+                  }}
+                />
+              ) : undefined
             }
           />
         </div>

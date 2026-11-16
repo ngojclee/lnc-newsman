@@ -326,7 +326,7 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `PATCH /api/app-agents/threads/{id}` | Session + CSRF | Update thread title, members, lead, `discussion_mode`, `workspace_id`, `pinned_skills`, or `model_override` |
 | `DELETE /api/app-agents/threads/{id}` | Session + CSRF | Delete a thread and cascade its messages and whiteboard notes |
 | `GET /api/app-agents/threads/{id}/messages` | Session | List persisted thread messages, reasoning, merged tool pills, and context snapshots |
-| `POST /api/app-agents/threads/{id}/turns` | Session + CSRF | Execute a direct or multi-agent turn (`text`, `idempotency_key`, `mentions`, optional `skill_slugs`, `model_override`, and 16 KiB-bounded `active_view_context`) |
+| `POST /api/app-agents/threads/{id}/turns` | Session + CSRF | Execute a direct, role-play, or multi-agent turn (`text`, `idempotency_key`, `mentions`, optional `skill_slugs`, `model_override`, `chat_mode`, `persona_style`, `responder_agent_slug` for Direct Role-Play takeover, `consult_partner_slugs` for behind-the-scenes specialist consultation, and 16 KiB-bounded `active_view_context`) |
 | `GET /api/app-agents/threads/{id}/stream` | Session | Subscribe to SSE turn events with `Last-Event-ID` / `?since_seq=` replay |
 | `GET /api/app-agents/threads/{id}/whiteboard` | Session | List pinned whiteboard notes for a thread |
 | `POST /api/app-agents/threads/{id}/whiteboard` | Session + CSRF | Pin a note onto the thread whiteboard |
@@ -345,7 +345,7 @@ App-scoped newsroom agents (`macro-argus`, `tax-linh`, `editor-minh`, plus owner
 | `DELETE /api/app-agents/telegram/routes/{id}` | Session + CSRF | Delete a conversational Telegram route |
 | `POST /api/app-agents/telegram/webhook/direct` | `X-Telegram-Bot-Api-Secret-Token` | Receive inbound Telegram Bot API webhook updates (constant-time secret check; separate from `src/telegram.rs` alert outbox) |
 | `POST /api/app-agents/telegram/webhook/cygnus` | `x-gateway-key` | Receive inbound Cygnus gateway webhook envelopes (constant-time key check; preserves `message_thread_id`) |
-| `GET /api/app-agents/manifest` | Session | Read `lnc-app-agents` `protocol_version: "2.2"` manifest (`capabilities`, `features`, `workspace_tabs`, `skills`, `scope_kinds: ["region", "series", "topic"]`, `ui_defaults`, `surfaces`, Newsroom `quick_actions`) |
+| `GET /api/app-agents/manifest` | Session | Read `lnc-app-agents` `protocol_version: "2.3"` manifest (`capabilities`, `features`, `workspace_tabs`, `skills`, `scope_kinds: ["region", "series", "topic"]`, `ui_defaults`, `surfaces`, Newsroom `quick_actions`) |
 | `GET /api/app-agents/models/catalog` | Session | List persisted model catalog entries (`enabled`, `source`, `capabilities`, `capability_overrides`, `last_test_fingerprint`, `detected_context_window`, default roles) |
 | `PATCH /api/app-agents/models/catalog` | Session + CSRF | Toggle per-model `enabled` flags in the catalog |
 | `POST /api/app-agents/models/fetch` | Session + CSRF | Discover models from Hub `/v1/models` and enabled custom providers via `fetch::Fetcher` (auto-enabling newly imported Hub models if catalog had zero enabled rows) |

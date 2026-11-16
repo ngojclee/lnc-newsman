@@ -1156,6 +1156,8 @@ pub struct TurnOptions {
     pub skip_insert_user_message: bool,
     pub chat_mode_override: Option<String>,
     pub persona_style_override: Option<String>,
+    pub responder_agent_slug: Option<String>,
+    pub consult_partner_slugs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3769,6 +3771,201 @@ fn execute_local_agent_tool(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn consult_partner_behind_scenes(
+    state: SharedState,
+    turn_id: String,
+    thread: AgentThread,
+    partner: AppAgentConfig,
+    history_snapshot: Vec<AgentMessage>,
+    active_ctx: Option<ActiveViewContext>,
+    options: TurnOptions,
+) -> Result<(String, MergedToolInvocation, Value)> {
+    let call_id = format!("consult_{}", partner.slug);
+    let merge_id = format!("{turn_id}:consult:{}", partner.slug);
+    let args_val = json!({
+        "partner_slug": partner.slug,
+        "partner_name": partner.display_name,
+    });
+    state.agent_bridge.emit_event(
+        &thread.id,
+        "tool",
+        &turn_id,
+        json!({
+            "thread_id": thread.id,
+            "agent_slug": partner.slug,
+            "round_idx": 0,
+            "merge_id": merge_id,
+            "call_id": call_id,
+            "tool": "consult_partner",
+            "origin": "builtin",
+            "arguments": args_val,
+        }),
+    );
+
+    let t0 = std::time::Instant::now();
+    let (pinned_notes, workspace, active_skills, canon_memory) = {
+        let db = state.db.lock().expect("database lock poisoned");
+        let notes = list_whiteboard_db(&db.conn, &thread.id)?
+            .into_iter()
+            .filter(|n| n.pinned)
+            .collect::<Vec<_>>();
+        let ws = if let Some(ref wid) = thread.workspace_id {
+            get_workspace_db(&db.conn, wid)?
+        } else {
+            None
+        };
+        let skills = resolve_active_granted_skills(
+            &db.conn,
+            ws.as_ref(),
+            &partner,
+            &thread,
+            &options.skill_slugs,
+        )?;
+        let mem_lines = crate::agent_v2::load_relevant_memory_for_prompt(&db.conn, 6);
+        (notes, ws, skills, mem_lines)
+    };
+
+    let cfg = state.agent_bridge.config();
+    let sys_prompt = build_system_prompt(
+        &partner,
+        &thread,
+        &cfg,
+        workspace.as_ref(),
+        &active_skills,
+        &pinned_notes,
+        &canon_memory,
+        active_ctx.as_ref(),
+        "Mode: Behind-the-scenes Partner Consultation (`v2.3`). Provide a concise, high-signal specialist memo (3–5 bullet points) for the lead responder to synthesize. Do not greet the user directly.",
+        options.chat_mode_override.as_deref(),
+        options.persona_style_override.as_deref(),
+    );
+
+    let mut conv_messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": sys_prompt,
+    })];
+    let start_idx = history_snapshot.len().saturating_sub(12);
+    for m in &history_snapshot[start_idx..] {
+        if m.role == "user" {
+            conv_messages.push(json!({ "role": "user", "content": m.content }));
+        } else {
+            let sp = m.sender_slug.as_deref().unwrap_or("peer");
+            conv_messages.push(json!({
+                "role": "user",
+                "content": format!("[Prior @{sp}]: {}", m.content),
+            }));
+        }
+    }
+
+    let model_override = options
+        .model_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            thread
+                .model_override
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        });
+    let smart_fallback = resolve_smart_model(&cfg);
+    let effective_target_model = model_override
+        .as_deref()
+        .or_else(|| {
+            let pm = partner.primary_model.trim();
+            (!pm.is_empty()).then_some(pm)
+        })
+        .or_else(|| (!smart_fallback.is_empty()).then_some(smart_fallback.as_str()));
+
+    let note_text = if let Some(endpoint) =
+        resolve_llm_endpoint_for_model(&state, &partner, &cfg, effective_target_model)
+    {
+        let fetcher = bridge_fetcher(&state, &cfg);
+        let completion = call_chat_completion_with_backup(
+            &fetcher,
+            &endpoint,
+            &partner,
+            &smart_fallback,
+            model_override.as_deref(),
+            &conv_messages,
+            &[],
+        )
+        .await?;
+        completion
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    } else {
+        let latest_user = history_snapshot
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        format!(
+            "[Specialist consult · @{} ({})] Prepared domain perspective ({}) on \"{}\".",
+            partner.slug,
+            partner.display_name,
+            partner.description,
+            latest_user.chars().take(90).collect::<String>()
+        )
+    };
+
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    let res_json = json!({
+        "partner_slug": partner.slug,
+        "partner_name": partner.display_name,
+        "note": note_text,
+    });
+    state.agent_bridge.emit_event(
+        &thread.id,
+        "tool_result",
+        &turn_id,
+        json!({
+            "thread_id": thread.id,
+            "agent_slug": partner.slug,
+            "round_idx": 0,
+            "merge_id": merge_id,
+            "call_id": call_id,
+            "tool": "consult_partner",
+            "origin": "builtin",
+            "duration_ms": elapsed_ms,
+            "result": res_json,
+            "is_error": false,
+        }),
+    );
+
+    let inv = MergedToolInvocation {
+        merge_id,
+        call_id: Some(call_id),
+        tool: "consult_partner".to_string(),
+        agent_slug: Some(partner.slug.clone()),
+        origin: "builtin".to_string(),
+        duration_ms: Some(elapsed_ms),
+        arguments: Some(args_val),
+        status: "done".to_string(),
+        result_text: Some(res_json.to_string()),
+        is_error: false,
+        approval_required: None,
+        resource_ctx: None,
+    };
+    let trace = json!({
+        "step": 0,
+        "tool": "consult_partner",
+        "origin": "builtin",
+        "status": "done",
+        "duration_ms": elapsed_ms,
+        "summary": format!("Consulted @{}", partner.slug),
+    });
+    Ok((note_text, inv, trace))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn execute_single_agent_seat(
     state: SharedState,
     turn_id: String,
@@ -3776,6 +3973,7 @@ async fn execute_single_agent_seat(
     agent: AppAgentConfig,
     history_snapshot: Vec<AgentMessage>,
     extra_round_notes: Vec<(String, String)>,
+    pre_consult_steps: Vec<(MergedToolInvocation, Value)>,
     active_ctx: Option<ActiveViewContext>,
     round_idx: i64,
     mode_instruction: String,
@@ -3895,19 +4093,44 @@ async fn execute_single_agent_seat(
             .find(|m| m.role == "user")
             .map(|m| m.content.as_str())
             .unwrap_or("");
+        let consulted_suffix_en = if extra_round_notes.is_empty() {
+            String::new()
+        } else {
+            let names = extra_round_notes
+                .iter()
+                .map(|(slug, _)| format!("@{slug}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" Consulted partners: {names}.")
+        };
+        let consulted_suffix_vi = if extra_round_notes.is_empty() {
+            String::new()
+        } else {
+            let names = extra_round_notes
+                .iter()
+                .map(|(slug, _)| format!("@{slug}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" Đã tham vấn cộng sự: {names}.")
+        };
         let fallback_text = if agent.reply_language == "en" {
             format!(
-                "[{} · Hub Standby] Ready to assist with \"{}\". Configure LNC Agent Hub URL or LLM endpoint in Bridge Settings to enable live model synthesis.",
+                "[{} · Hub Standby] Ready to assist with \"{}\".{} Configure LNC Agent Hub URL or LLM endpoint in Bridge Settings to enable live model synthesis.",
                 agent.display_name,
-                latest_user.chars().take(120).collect::<String>()
+                latest_user.chars().take(120).collect::<String>(),
+                consulted_suffix_en
             )
         } else {
             format!(
-                "[{} · Chế độ Dự phòng] Đã ghi nhận yêu cầu \"{}\". Hãy cấu hình địa chỉ LNC Agent Hub trong Cài đặt Cầu nối để bật tổng hợp mô hình trực tiếp.",
+                "[{} · Chế độ Dự phòng] Đã ghi nhận yêu cầu \"{}\".{} Hãy cấu hình địa chỉ LNC Agent Hub trong Cài đặt Cầu nối để bật tổng hợp mô hình trực tiếp.",
                 agent.display_name,
-                latest_user.chars().take(120).collect::<String>()
+                latest_user.chars().take(120).collect::<String>(),
+                consulted_suffix_vi
             )
         };
+        let pre_tools: Vec<MergedToolInvocation> =
+            pre_consult_steps.iter().map(|(inv, _)| inv.clone()).collect();
+        let pre_traces: Vec<Value> = pre_consult_steps.into_iter().map(|(_, tr)| tr).collect();
         state.agent_bridge.emit_event(
             &thread.id,
             "seat_state",
@@ -3933,19 +4156,25 @@ async fn execute_single_agent_seat(
         let now_iso = Utc::now().to_rfc3339();
         let saved = {
             let db = state.db.lock().expect("database lock poisoned");
-            insert_message_db(
+            let mut msg = insert_message_db(
                 &db.conn,
                 &thread.id,
                 "assistant",
                 Some(&agent.slug),
                 &fallback_text,
                 None,
-                &[],
+                &pre_tools,
                 None,
                 Some(round_idx),
                 None,
                 &now_iso,
-            )?
+            )?;
+            if !pre_traces.is_empty() {
+                let empty_usage = json!({});
+                let _ = update_message_v2_meta_db(&db.conn, &msg.id, &pre_traces, &[], &empty_usage);
+                msg.trace_steps = pre_traces;
+            }
+            msg
         };
         state.agent_bridge.emit_event(
             &thread.id,
@@ -3981,8 +4210,9 @@ async fn execute_single_agent_seat(
         cfg.max_tool_rounds
     }
     .clamp(1, 24) as usize;
-    let mut recorded_tools: Vec<MergedToolInvocation> = Vec::new();
-    let mut trace_steps: Vec<Value> = Vec::new();
+    let mut recorded_tools: Vec<MergedToolInvocation> =
+        pre_consult_steps.iter().map(|(inv, _)| inv.clone()).collect();
+    let mut trace_steps: Vec<Value> = pre_consult_steps.into_iter().map(|(_, tr)| tr).collect();
     let mut last_usage: Value = json!({});
     let mut accumulated_reasoning = String::new();
     let mut final_content = String::new();
@@ -4327,6 +4557,7 @@ async fn try_forward_turn_to_astraea(
     user_msg: &AgentMessage,
     mentions: &[String],
     active_ctx: Option<&ActiveViewContext>,
+    options: &TurnOptions,
 ) -> Option<Vec<AgentMessage>> {
     let direct_base = cfg.astraea_url.trim().trim_end_matches('/');
     let direct_tok = resolve_astraea_token(state);
@@ -4348,14 +4579,34 @@ async fn try_forward_turn_to_astraea(
             return None;
         };
     let fetcher = bridge_fetcher(state, cfg);
-    let payload = json!({
-        "turn_id": turn_id,
-        "text": user_msg.content,
-        "mentions": mentions,
-        "active_view_context": active_ctx,
-        "thread": thread,
-    })
-    .to_string();
+    let mut payload_obj = serde_json::Map::new();
+    payload_obj.insert("turn_id".into(), json!(turn_id));
+    payload_obj.insert("text".into(), json!(user_msg.content));
+    payload_obj.insert("mentions".into(), json!(mentions));
+    payload_obj.insert("active_view_context".into(), json!(active_ctx));
+    payload_obj.insert("thread".into(), json!(thread));
+    if let Some(ref responder) = options.responder_agent_slug {
+        if !responder.trim().is_empty() {
+            payload_obj.insert("responder_agent_slug".into(), json!(responder.trim()));
+        }
+    }
+    if !options.consult_partner_slugs.is_empty() {
+        payload_obj.insert(
+            "consult_partner_slugs".into(),
+            json!(options.consult_partner_slugs),
+        );
+    }
+    if let Some(ref cm) = options.chat_mode_override {
+        if !cm.trim().is_empty() {
+            payload_obj.insert("chat_mode".into(), json!(cm.trim()));
+        }
+    }
+    if let Some(ref ps) = options.persona_style_override {
+        if !ps.trim().is_empty() {
+            payload_obj.insert("persona_style".into(), json!(ps.trim()));
+        }
+    }
+    let payload = Value::Object(payload_obj).to_string();
     let auth_header = format!("Bearer {token}");
     let headers: Vec<(&str, &str)> = if token.is_empty() {
         vec![("X-LNC-App-Id", APP_ID)]
@@ -4592,7 +4843,7 @@ pub async fn execute_turn_orchestrator_with_options(
         }
     }
 
-    let (thread, members, user_msg, history_snapshot) = {
+    let (thread, members, direct_responder, consult_partners, user_msg, history_snapshot) = {
         let db = state.db.lock().expect("database lock poisoned");
         let thread = get_thread_db(&db.conn, thread_id)?
             .ok_or_else(|| anyhow!("thread not found: {thread_id}"))?;
@@ -4601,6 +4852,26 @@ pub async fn execute_turn_orchestrator_with_options(
             members.retain(|m| m.slug == *seat_slug);
             if members.is_empty() {
                 bail!("seat agent not found in thread: {seat_slug}");
+            }
+        }
+        let direct_responder = if let Some(ref r_slug) = options.responder_agent_slug {
+            let trimmed = r_slug.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                get_agent_db(&db.conn, trimmed)?
+            }
+        } else {
+            None
+        };
+        let mut consult_partners: Vec<AppAgentConfig> = Vec::new();
+        for p_slug in &options.consult_partner_slugs {
+            let trimmed = p_slug.trim();
+            if trimmed.is_empty() || consult_partners.iter().any(|p| p.slug == trimmed) {
+                continue;
+            }
+            if let Some(p_agent) = get_agent_db(&db.conn, trimmed)? {
+                consult_partners.push(p_agent);
             }
         }
         let now_iso = Utc::now().to_rfc3339();
@@ -4641,7 +4912,7 @@ pub async fn execute_turn_orchestrator_with_options(
             )?
         };
         let history = list_messages_db(&db.conn, thread_id)?;
-        (thread, members, user_msg, history)
+        (thread, members, direct_responder, consult_partners, user_msg, history)
     };
 
     let turn_id = new_id("turn");
@@ -4658,6 +4929,7 @@ pub async fn execute_turn_orchestrator_with_options(
         &user_msg,
         &explicit_mentions,
         active_view_context.as_ref(),
+        &options,
     )
     .await
     {
@@ -4672,6 +4944,8 @@ pub async fn execute_turn_orchestrator_with_options(
 
     let mode = if options.retry_seat_slug.is_some() {
         "parallel_panel"
+    } else if direct_responder.is_some() {
+        "direct_roleplay"
     } else if thread.kind == "direct" && explicit_mentions.is_empty() {
         "mention_or_lead"
     } else {
@@ -4682,6 +4956,62 @@ pub async fn execute_turn_orchestrator_with_options(
     let mut first_err: Option<anyhow::Error> = None;
 
     match mode {
+        "direct_roleplay" => {
+            if let Some(responder) = direct_responder {
+                let mut prior_turn_notes: Vec<(String, String)> = Vec::new();
+                let mut pre_consult_steps: Vec<(MergedToolInvocation, Value)> = Vec::new();
+                for partner in &consult_partners {
+                    if partner.slug == responder.slug {
+                        continue;
+                    }
+                    if let Ok((note, inv, tr)) = consult_partner_behind_scenes(
+                        state.clone(),
+                        turn_id.clone(),
+                        thread.clone(),
+                        partner.clone(),
+                        history_snapshot.clone(),
+                        active_view_context.clone(),
+                        options.clone(),
+                    )
+                    .await
+                    {
+                        if !note.is_empty() {
+                            prior_turn_notes.push((partner.slug.clone(), note));
+                        }
+                        pre_consult_steps.push((inv, tr));
+                    }
+                }
+                let roleplay_instruction = format!(
+                    "Mode: Direct Role-Play (`Who answers` — v2.3). The user routed this message directly to you. Answer in first person in character as @{} ({} — {}).{}",
+                    responder.slug,
+                    responder.display_name,
+                    responder.description,
+                    if prior_turn_notes.is_empty() {
+                        ""
+                    } else {
+                        " Behind-the-scenes partner consultation notes are attached in this turn; synthesize their specialist insights seamlessly into your unified answer."
+                    }
+                );
+                match execute_single_agent_seat(
+                    state.clone(),
+                    turn_id.clone(),
+                    thread.clone(),
+                    responder,
+                    history_snapshot.clone(),
+                    prior_turn_notes,
+                    pre_consult_steps,
+                    active_view_context.clone(),
+                    1,
+                    roleplay_instruction,
+                    options.clone(),
+                )
+                .await
+                {
+                    Ok(m) => assistant_messages.push(m),
+                    Err(e) => first_err = Some(e),
+                }
+            }
+        }
         "parallel_panel" => {
             let futs = members.iter().map(|agent| {
                 execute_single_agent_seat(
@@ -4690,6 +5020,7 @@ pub async fn execute_turn_orchestrator_with_options(
                     thread.clone(),
                     agent.clone(),
                     history_snapshot.clone(),
+                    Vec::new(),
                     Vec::new(),
                     active_view_context.clone(),
                     1,
@@ -4725,6 +5056,7 @@ pub async fn execute_turn_orchestrator_with_options(
                     agent.clone(),
                     history_snapshot.clone(),
                     prior_turn_notes.clone(),
+                    Vec::new(),
                     active_view_context.clone(),
                     round_idx,
                     instruction,
@@ -4753,6 +5085,7 @@ pub async fn execute_turn_orchestrator_with_options(
                     thread.clone(),
                     agent.clone(),
                     history_snapshot.clone(),
+                    Vec::new(),
                     Vec::new(),
                     active_view_context.clone(),
                     1,
@@ -4793,6 +5126,7 @@ pub async fn execute_turn_orchestrator_with_options(
                         agent.clone(),
                         history_snapshot.clone(),
                         peer_theses,
+                        Vec::new(),
                         active_view_context.clone(),
                         2,
                         "Mode: `cross_debate` — Round 2 (Cross-Rebuttal & Synthesis). Address your peers' Round 1 theses directly: sharpen agreements, rebut weak assumptions, and offer a refined takeaway.".to_string(),
@@ -4832,6 +5166,31 @@ pub async fn execute_turn_orchestrator_with_options(
 
             let max_hops = cfg.max_group_hops.clamp(1, 8) as usize;
             let mut running_notes: Vec<(String, String)> = Vec::new();
+            let mut initial_consult_steps: Vec<(MergedToolInvocation, Value)> = Vec::new();
+            if !consult_partners.is_empty() {
+                for partner in &consult_partners {
+                    if target_slugs.iter().any(|ts| ts == &partner.slug) {
+                        continue;
+                    }
+                    if let Ok((note, inv, tr)) = consult_partner_behind_scenes(
+                        state.clone(),
+                        turn_id.clone(),
+                        thread.clone(),
+                        partner.clone(),
+                        history_snapshot.clone(),
+                        active_view_context.clone(),
+                        options.clone(),
+                    )
+                    .await
+                    {
+                        if !note.is_empty() {
+                            running_notes.push((partner.slug.clone(), note));
+                        }
+                        initial_consult_steps.push((inv, tr));
+                    }
+                }
+            }
+
             for hop in 0..=max_hops {
                 if target_slugs.is_empty() {
                     break;
@@ -4846,20 +5205,30 @@ pub async fn execute_turn_orchestrator_with_options(
                 }
 
                 let mut hop_replies: Vec<AgentMessage> = Vec::new();
-                for agent in hop_agents {
+                for (agent_idx, agent) in hop_agents.into_iter().enumerate() {
                     let instruction = if hop == 0 {
                         format!(
-                            "Mode: `mention_or_lead` (Initial responder). Available peers in this room: {}. You may mention `@slug` ONLY if you genuinely need a peer specialist to weigh in.",
+                            "Mode: `mention_or_lead` (Initial responder). Available peers in this room: {}. You may mention `@slug` ONLY if you genuinely need a peer specialist to weigh in.{}",
                             member_slug_list
                                 .iter()
                                 .map(|s| format!("@{s}"))
                                 .collect::<Vec<_>>()
-                                .join(", ")
+                                .join(", "),
+                            if initial_consult_steps.is_empty() {
+                                ""
+                            } else {
+                                " Behind-the-scenes partner consultation notes are attached in this turn; synthesize their specialist insights into your answer."
+                            }
                         )
                     } else {
                         format!(
                             "Mode: `mention_or_lead` (Peer consult hop {hop} of {max_hops}). Add your specialist answer concisely."
                         )
+                    };
+                    let pre_steps = if hop == 0 && agent_idx == 0 {
+                        std::mem::take(&mut initial_consult_steps)
+                    } else {
+                        Vec::new()
                     };
                     match execute_single_agent_seat(
                         state.clone(),
@@ -4868,6 +5237,7 @@ pub async fn execute_turn_orchestrator_with_options(
                         agent.clone(),
                         history_snapshot.clone(),
                         running_notes.clone(),
+                        pre_steps,
                         active_view_context.clone(),
                         round_idx,
                         instruction,
@@ -5891,7 +6261,7 @@ pub(crate) fn bridge_config_response(state: &SharedState, cfg: &BridgeConfigRow)
     let fast_model = resolve_fast_model(cfg);
     json!({
         "ok": true,
-        "protocol_version": "2.2",
+        "protocol_version": "2.3",
         "mode": mode,
         "relay_connected": relay_connected,
         "astraea_reachable": astraea_reachable,
@@ -6725,6 +7095,10 @@ pub(crate) struct PostTurnInput {
     model_override: Option<String>,
     chat_mode: Option<String>,
     persona_style: Option<String>,
+    #[serde(default)]
+    responder_agent_slug: Option<String>,
+    #[serde(default)]
+    consult_partner_slugs: Vec<String>,
 }
 
 pub(crate) async fn post_thread_turn(
@@ -6778,6 +7152,13 @@ pub(crate) async fn post_thread_turn(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        responder_agent_slug: input
+            .responder_agent_slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        consult_partner_slugs: dedup_non_empty(&input.consult_partner_slugs),
         ..Default::default()
     };
 

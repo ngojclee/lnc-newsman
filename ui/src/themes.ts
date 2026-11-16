@@ -17,12 +17,12 @@ export type ThemeSpec = {
 }
 
 export const THEMES: ThemeSpec[] = [
-  { id: 'paper', vi: 'Giấy', en: 'Paper', bg: '#f6f1e8', dark: false },
-  { id: 'sepia', vi: 'Sepia', en: 'Sepia', bg: '#eadcc6', dark: false },
-  { id: 'gray', vi: 'Xám dịu', en: 'Soft grey', bg: '#e6e6e3', dark: false },
-  { id: 'green', vi: 'Xanh dịu', en: 'Soft green', bg: '#dfe9dc', dark: false },
-  { id: 'night', vi: 'Đêm', en: 'Night', bg: '#211f1c', dark: true },
-  { id: 'black', vi: 'Đen', en: 'Black', bg: '#000000', dark: true },
+  { id: 'paper', vi: 'Giấy', en: 'Paper', bg: '#faf8f5', dark: false },
+  { id: 'sepia', vi: 'Sepia', en: 'Sepia', bg: '#f3ead8', dark: false },
+  { id: 'gray', vi: 'Xám dịu', en: 'Soft grey', bg: '#ededeb', dark: false },
+  { id: 'green', vi: 'Xanh dịu', en: 'Soft green', bg: '#e4ede1', dark: false },
+  { id: 'night', vi: 'Đêm', en: 'Night', bg: '#15171a', dark: true },
+  { id: 'black', vi: 'Đen', en: 'Black', bg: '#090909', dark: true },
 ]
 
 export const MODE_IDS = THEMES.map((theme) => theme.id)

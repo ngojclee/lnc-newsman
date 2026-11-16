@@ -1,6 +1,6 @@
 /**
- * Canonical TypeScript Contract for `lnc-app-agents v2.2` adapted for `lnc-newsman`.
- * Preserves all Newsman domain shapes while exporting the full `v2.1` + `v2.2` kit contract.
+ * Canonical TypeScript Contract for `lnc-app-agents v2.3` adapted for `lnc-newsman`.
+ * Preserves all Newsman domain shapes while exporting the full `v2.1` + `v2.2` + `v2.3` kit contract.
  */
 
 export interface AppFeatureFlags {
@@ -68,7 +68,7 @@ export interface AppCapabilitiesManifest {
   app_id: string;
   app_name?: string;
   display_name: string;
-  protocol_version: '2.2' | '2.1' | '2.0';
+  protocol_version: '2.3' | '2.2' | '2.1' | '2.0';
   app_version?: string;
   ui_defaults: {
     interface_language: 'en' | 'vi';
@@ -86,7 +86,7 @@ export interface AppCapabilitiesManifest {
 
 export interface AppCapabilitiesManifestV21
   extends Omit<AppCapabilitiesManifest, 'protocol_version'> {
-  protocol_version: '2.2' | '2.1';
+  protocol_version: '2.3' | '2.2' | '2.1';
   skills?: SkillOptionV2[];
   workspace_tabs?: WorkspaceTabKindV2[];
 }
@@ -511,4 +511,87 @@ export function buildSessionActivityV2(input: BuildSessionActivityInputV2): Sess
     generatedFiles: input.generatedFiles ?? [],
     attachments: input.attachments ?? [],
   };
+}
+
+// ============================================================================
+// lnc-app-agents v2.3 Additions (Markdown, Semantic Thinking Trace, Role-Play & Header)
+// ============================================================================
+
+export type AgentStreamPhaseV2 =
+  | 'idle'
+  | 'planning'
+  | 'reasoning'
+  | 'searching'
+  | 'weaving'
+  | 'responding'
+  | 'settled'
+  | 'error';
+
+export interface TraceStepV2 {
+  id: string;
+  kind: 'thinking' | 'tool' | 'mcp' | 'subagent';
+  /** Human-readable verb, e.g. "Scanning latest articles", "Reading article" */
+  verb: string;
+  /** Compact target chip, e.g. "#article-108" or "VN" */
+  chip?: string | null;
+  chipMono?: boolean;
+  state: 'running' | 'done' | 'error';
+  durationMs?: number;
+  detail?: string;
+  provider?: string;
+}
+
+export interface ResponseStyleOptionV2 {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface DeclaredAppAgentV2 {
+  id: string;
+  name: string;
+  kind: 'partner' | 'subagent';
+  description?: string;
+  avatarUrl?: string;
+  emoji?: string;
+  color?: string;
+}
+
+export interface ResourceCategoryItemV2 {
+  key: string;
+  label: string;
+  group: 'reference' | 'linked';
+  selectedCount?: number;
+  summary?: string;
+  fullRow?: boolean;
+}
+
+export interface ComposerModeOptionV2 {
+  value: string;
+  title: string;
+  description: string;
+  icon?: string;
+  requiresOutlineGate?: boolean;
+}
+
+export interface ChatHeaderControlsConfigV2 {
+  showSkills: boolean;
+  showMcp: boolean;
+  showPartners: boolean;
+  showPreferences: boolean;
+  showContextRing: boolean;
+}
+
+/** Flatten markdown symbols for a clean 1-line collapsed teaser (`plainPreview`). */
+export function plainPreview(value: string, max = 110): string {
+  const flat = (value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}[-*+]\s+/gm, '')
+    .replace(/\*\*([^*]*)\*\*/g, '$1')
+    .replace(/[*_]{1,2}([^*_]*)[*_]{1,2}/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }

@@ -68,8 +68,8 @@ const copy = {
     region: 'Vùng', allRegions: 'Mọi vùng đang bật', regionsTitle: 'Vùng và region pack', regionsSub: 'Bật vùng để job quét và trang đọc dùng vùng đó cùng các vùng cha. Vùng mới phát hiện từ thư mục pack luôn ở trạng thái tắt.',
     reloadRegions: 'Nạp lại vùng', reloading: 'Đang nạp…', packIssues: 'Lỗi pack', packClean: 'Không có lỗi pack.', packSummary: (r: number, s: number) => `${r} vùng, ${s} nguồn từ pack`, packNever: 'Chưa nạp pack', packLast: 'Lần nạp gần nhất',
     regionTree: 'Cây vùng', regionEnable: 'Bật hoặc tắt vùng', regionInherit: 'gồm vùng cha', noRegions: 'Chưa có vùng nào.', regionError: 'Không đổi được vùng. Kiểm tra vùng cha trước.',
-    regions: 'Vùng',
-    regionsPage: 'Vùng', regionsPageSub: 'Tin, văn bản chính thức và lịch thuế theo vùng đang bật (gồm vùng cha).', regionNews: 'Tin theo vùng', regionDocs: 'Văn bản chính thức', regionTax: 'Lịch thuế', noDocs: 'Chưa có văn bản nào cho vùng này.', noTax: 'Chưa có hạn nộp nào được khai báo cho vùng này.',
+    regions: 'Vùng & Thuế',
+    regionsPage: 'Vùng & Thuế', regionsPageSub: 'Tin, văn bản chính thức và lịch thuế theo vùng đang bật (gồm vùng cha).', regionNews: 'Tin theo vùng', regionDocs: 'Văn bản chính thức', regionTax: 'Lịch thuế', noDocs: 'Chưa có văn bản nào cho vùng này.', noTax: 'Chưa có hạn nộp nào được khai báo cho vùng này.',
     dueIn: (n: number) => n === 0 ? 'hôm nay' : `còn ${n} ngày`, dueSoon: 'Sắp tới hạn', unverified: 'Chưa xác minh với cơ quan thuế', verified: 'Đã xác minh', taxNotice: 'Không phải tư vấn pháp lý/thuế. Hạn nộp do region pack khai báo, chưa gọi mạng; hãy kiểm tra lại với cơ quan thuế.', holidaysNote: 'Chưa tính ngày lễ công cộng; chỉ dời theo cuối tuần khi pack khai báo.', docSummary: 'Tóm tắt tự viết', docNoSummary: 'Chưa có tóm tắt tự viết cho văn bản này.', effectiveOn: 'Hiệu lực', publishedOn: 'Ban hành', searchDocs: 'Tìm văn bản', searchHint: 'Gõ không dấu cũng tìm được (vd: thue).', allTopicsDoc: 'Tất cả chủ đề',
     market: 'Thị trường', marketTitle: 'Chuỗi số liệu', marketSub: 'Dữ liệu số theo vùng. Chưa kết nối nhà cung cấp nào: danh sách này chỉ có khi một connector thật được duyệt và chạy.', noSeries: 'Chưa có chuỗi số liệu', noSeriesSub: 'P2 mới có kho chuỗi và khung connector. Dữ liệu thật cần chọn nhà cung cấp (plan mục 8).',
     seriesPoints: (n: number) => `${n} điểm`, observing: 'Lấy dữ liệu', latestValue: 'Giá trị mới nhất', asOf: 'Ghi nhận lúc', observedAt: 'Kỳ dữ liệu', revision: (n: number) => `bản ${n}`, noAttribution: 'Chưa có dòng ghi nguồn cho chuỗi này.',
@@ -114,6 +114,28 @@ const copy = {
     reportsSalonTitle: 'Hội thảo Đa Trợ lý & Không gian Tòa soạn',
     reportsSalonSub: 'Mở Bàn tròn đa trợ lý có trí nhớ vùng/chủ đề, Bảng trắng tóm tắt vòng thảo luận và kỹ năng được cấp từ Hub.',
     reportsSalonBtn: 'Mở Hội thảo Đa Trợ lý',
+    workspaceNavGroup: 'Quản trị',
+    heroHeading: 'Nghiên cứu & Đọc tin Tòa soạn',
+    heroSub: 'Tìm kiếm toàn văn bài báo đã lưu (FTS5) hoặc đặt câu hỏi phân tích vĩ mô, thuế và chính sách.',
+    heroSearchPlaceholder: 'Tìm tiêu đề hoặc nội dung bài báo đã lưu (vd: lai suat, thue, fed)…',
+    heroAskPlaceholder: 'Đặt câu hỏi cho Bàn Trợ lý dựa trên nguồn tin đã lưu…',
+    heroModeSearch: 'Tìm bài báo',
+    heroModeAsk: 'Hỏi Trợ lý',
+    heroSubmitLabel: 'Thực hiện',
+    liveDesk24h: '24h qua',
+    liveDeskSources: 'nguồn bật',
+    liveDeskCollectorOn: 'Thu thập tự động',
+    liveDeskCollectorOff: 'Thu thập tắt',
+    liveDeskQuickFetch: 'Mở Chủ đề & Nguồn',
+    storyAskAnalyst: 'Hỏi Trợ lý',
+    regionTabAll: 'Tổng quan',
+    regionTabNews: 'Tin theo vùng',
+    regionTabDocs: 'Văn bản chính thức',
+    regionTabTax: 'Lịch thuế',
+    taxVerifiedPill: 'Đã xác minh',
+    taxUnverifiedPill: 'Chưa xác minh · Quy tắc khai báo',
+    readerSynthesisTitle: 'Phân tích đối chiếu cùng Trợ lý',
+    readerSynthesisSub: 'Đặt câu hỏi, trích dẫn đoạn văn hoặc đối chiếu chuỗi số liệu & lịch thuế ngay trên bài viết này.',
     ...AGENT_COPY.vi,
   },
   en: {
@@ -129,8 +151,8 @@ const copy = {
     region: 'Region', allRegions: 'All enabled regions', regionsTitle: 'Regions and region packs', regionsSub: 'Enable a region so jobs and the reader use it together with its parent regions. Regions discovered from the pack directory always start disabled.',
     reloadRegions: 'Reload regions', reloading: 'Reloading…', packIssues: 'Pack issues', packClean: 'No pack issues.', packSummary: (r: number, s: number) => `${r} regions, ${s} sources from packs`, packNever: 'Pack not loaded yet', packLast: 'Last load',
     regionTree: 'Region tree', regionEnable: 'Turn the region on or off', regionInherit: 'includes parents', noRegions: 'No regions yet.', regionError: 'Could not change the region. Check the parent region first.',
-    regions: 'Regions',
-    regionsPage: 'Regions', regionsPageSub: 'News, official documents and tax deadlines for the enabled regions (parents included).', regionNews: 'News by region', regionDocs: 'Official documents', regionTax: 'Tax calendar', noDocs: 'No documents for this region yet.', noTax: 'No deadline is declared for this region.',
+    regions: 'Regions & Tax',
+    regionsPage: 'Regions & Tax', regionsPageSub: 'News, official documents and tax deadlines for the enabled regions (parents included).', regionNews: 'News by region', regionDocs: 'Official documents', regionTax: 'Tax calendar', noDocs: 'No documents for this region yet.', noTax: 'No deadline is declared for this region.',
     dueIn: (n: number) => n === 0 ? 'today' : `in ${n} days`, dueSoon: 'Due soon', unverified: 'Not checked with the tax authority', verified: 'Verified', taxNotice: 'Not legal or tax advice. Deadlines come from a declared region pack rule and no network call was made; verify them with the tax authority.', holidaysNote: 'Public holidays are not modelled; a date is only shifted by a declared weekend rule.', docSummary: 'Written summary', docNoSummary: 'No written summary for this document yet.', effectiveOn: 'Effective', publishedOn: 'Published', searchDocs: 'Search documents', searchHint: 'Accents are optional (e.g. thue).', allTopicsDoc: 'All topics',
     market: 'Markets', marketTitle: 'Time series', marketSub: 'Numeric data by region. No provider is connected yet: this list only fills once a real connector is approved and running.', noSeries: 'No series yet', noSeriesSub: 'P2 provides only the series store and the connector framework. Real data needs a chosen provider (plan section 8).',
     seriesPoints: (n: number) => `${n} points`, observing: 'Fetch data', latestValue: 'Latest value', asOf: 'Known as of', observedAt: 'Period', revision: (n: number) => `revision ${n}`, noAttribution: 'This series has no credit line yet.',
@@ -174,6 +196,28 @@ const copy = {
     reportsSalonTitle: 'Multi-Agent Salon & Newsroom Workspaces',
     reportsSalonSub: 'Open the multi-agent roundtable with region/topic scoping, whiteboard synthesis, and Hub-granted skills.',
     reportsSalonBtn: 'Open Multi-Agent Salon',
+    workspaceNavGroup: 'Workspace',
+    heroHeading: 'Editorial Research & Briefing',
+    heroSub: 'Search stored full-text articles (FTS5) or ask the newsroom desk for grounded macro, tax and policy analysis.',
+    heroSearchPlaceholder: 'Search stored headlines & clean full text (e.g. fed rates, vat, fx)…',
+    heroAskPlaceholder: 'Ask the Newsroom Analyst Desk grounded in stored sources…',
+    heroModeSearch: 'Search Feed',
+    heroModeAsk: 'Ask Analyst',
+    heroSubmitLabel: 'Submit',
+    liveDesk24h: '24h items',
+    liveDeskSources: 'enabled sources',
+    liveDeskCollectorOn: 'Auto-collect on',
+    liveDeskCollectorOff: 'Collector paused',
+    liveDeskQuickFetch: 'Browse Feed',
+    storyAskAnalyst: 'Ask Analyst',
+    regionTabAll: 'Overview',
+    regionTabNews: 'Regional News',
+    regionTabDocs: 'Official Docs',
+    regionTabTax: 'Tax Calendar',
+    taxVerifiedPill: 'Verified',
+    taxUnverifiedPill: 'Unverified · Declared Rule',
+    readerSynthesisTitle: 'Grounded Analyst Synthesis',
+    readerSynthesisSub: 'Ask follow-up questions, verify claims, or cross-check macro series and declared tax rules against this article.',
     ...AGENT_COPY.en,
   },
 } as const
@@ -200,7 +244,9 @@ const isLocal = () => location.hostname === '127.0.0.1' || location.hostname ===
  * Pages the app can actually route to. Canonical admin tabs sit at the bottom
  * of the sidebar in fixed order ending with `settings`.
  */
-const ROUTABLE_PAGES: Page[] = ['today', 'topics', 'regions', 'market', 'reports', 'agents', 'alerts', 'api-keys', 'llm-providers', 'mcp-connectors', 'settings']
+const EDITORIAL_PAGES: Page[] = ['today', 'reports', 'topics', 'regions', 'market', 'alerts', 'agents']
+const OPERATOR_PAGES: Page[] = ['api-keys', 'llm-providers', 'mcp-connectors', 'settings']
+const ROUTABLE_PAGES: Page[] = [...EDITORIAL_PAGES, ...OPERATOR_PAGES]
 const pages: Page[] = ['today', 'topics', 'regions', 'market', 'stories', 'reports', 'agents', 'alerts', 'timeline', 'saved', 'api-keys', 'llm-providers', 'mcp-connectors', 'settings']
 const HASH_ALIASES: Record<string, Page> = {
   keys: 'api-keys',
@@ -341,24 +387,61 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
   const [filter, setFilter] = useState<Filter>({ topic: null, source: null })
   const [railFilter, setRailFilter] = useState('')
   const [readingId, setReadingId] = useState<number | null>(null)
+  const isOperatorPage = OPERATOR_PAGES.includes(page)
+  const [adminGroupOpen, setAdminGroupOpen] = useState<boolean>(() => OPERATOR_PAGES.includes(page))
+  const [pendingAgentPrompt, setPendingAgentPrompt] = useState<string | null>(null)
   const cycleMode = () => setMode(THEMES[(THEMES.findIndex((theme) => theme.id === mode) + 1) % THEMES.length].id)
   const signOut = async () => { try { await api('/api/auth/logout', { method: 'POST' }); onSignOut() } catch { setError('logout') } }
   const openFilter = (next: Filter) => { setFilter(next); if (page !== 'topics') setRoute('topics') }
+  const askAnalyst = (prompt: string) => {
+    setPendingAgentPrompt(prompt)
+    setRoute('agents')
+  }
+  const regionOptions = [
+    { value: '', label: t.allRegions },
+    ...(regions?.data ?? [])
+      .filter((item) => item.enabled)
+      .map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code })),
+  ]
+  const workspaceExpanded = adminGroupOpen || isOperatorPage
   return <div className={`app-shell page-${page}`}>
     <aside className="sidebar">
-      <div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>INTELLIGENCE READER</span></div></div>
+      <div className="brand"><img src="/favicon.svg" alt="" /><div><strong>LNC Newsman</strong><span>RESEARCH TERMINAL</span></div></div>
       <div className="app-switch" aria-label="Chuyển ứng dụng / Switch app">{appLinks('newsman', isLocal()).map((link) => <a key={link.id} className={link.id === 'newsman' ? 'app-switch-link active' : 'app-switch-link'} href={link.href} aria-current={link.id === 'newsman' ? 'page' : undefined}><span aria-hidden="true">{link.icon}</span>{link.label}</a>)}</div>
-      <nav className="nav" aria-label="Primary navigation">{ROUTABLE_PAGES.map((id) => <button key={id} aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+      <nav className="nav" aria-label="Primary navigation">{EDITORIAL_PAGES.map((id) => <button key={id} type="button" aria-label={t[id]} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => setRoute(id)}><span className="nav-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
       <BrowseSidebar t={t} lang={lang} dashboard={dashboard} regions={regions} region={region} filter={filter} query={railFilter} setQuery={setRailFilter} onPick={openFilter} />
-      <div className="side-divider" />
+      <div className="sidebar-workspace-group">
+        <button
+          type="button"
+          className="sidebar-group-toggle"
+          aria-expanded={workspaceExpanded}
+          onClick={() => setAdminGroupOpen((v) => !v)}
+        >
+          <span>{t.workspaceNavGroup}</span>
+          <span className={workspaceExpanded ? 'sidebar-group-chevron open' : 'sidebar-group-chevron'} aria-hidden="true">▸</span>
+        </button>
+        {workspaceExpanded && (
+          <nav className="nav" aria-label={t.workspaceNavGroup}>
+            {OPERATOR_PAGES.map((id) => (
+              <button
+                key={id}
+                type="button"
+                aria-label={t[id]}
+                aria-current={page === id ? 'page' : undefined}
+                className={page === id ? 'nav-item active' : 'nav-item'}
+                onClick={() => setRoute(id)}
+              >
+                <span className="nav-icon" aria-hidden="true">{icons[id]}</span>
+                <span>{t[id]}</span>
+              </button>
+            ))}
+          </nav>
+        )}
+      </div>
       <div className="sidebar-footer">
         <div className="footer-row-identity">
           <div className="footer-user-badge"><strong>{username || 'admin'}</strong><span className="tier-badge">{authMethod === 'oidc' ? 'SSO' : 'Key'}</span></div>
           <div className="version">v{__APP_VERSION__}</div>
-        </div>
-        <div className="footer-row-controls">
-          <button type="button" className="footer-action" onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')} aria-label={t.changeLanguage}>{lang.toUpperCase()}</button>
-          <button type="button" className="footer-action" onClick={cycleMode} aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}><span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>{themeName(mode, lang)}</button>
         </div>
         <div className="footer-row-signout">
           <button type="button" className="footer-action signout" onClick={signOut}><span aria-hidden="true">↪</span>{t.signOut}</button>
@@ -367,22 +450,43 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
     </aside>
     <main className="page-shell">
       <header className="page-header">
-        <div><div className="breadcrumb">LNC / NEWSMAN</div><h1>{t[page]}</h1></div>
+        <h1>{t[page]}</h1>
         <div className="header-actions">
-          <div className="region-picker">{regions && <Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} />}</div>
-          <button className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button>
-          <button className="icon-button" aria-label={t.refresh} onClick={() => location.reload()}>↻</button>
+          {regions && (
+            <div className="region-picker">
+              <Select
+                variant="pill"
+                ariaLabel={t.region}
+                leadingIcon="⌖"
+                value={region}
+                options={regionOptions}
+                onChange={setRegion}
+              />
+            </div>
+          )}
+          <button
+            type="button"
+            className="header-pill-btn"
+            onClick={cycleMode}
+            aria-label={`${t.changeTheme}: ${themeName(mode, lang)}`}
+            title={`${t.changeTheme}: ${themeName(mode, lang)}`}
+          >
+            <span aria-hidden="true">{THEMES.find((theme) => theme.id === mode)?.dark ? '☾' : '☼'}</span>
+            <span>{themeName(mode, lang)}</span>
+          </button>
+          <button type="button" className="language-toggle" aria-label={t.changeLanguage} onClick={() => setLang(lang === 'vi' ? 'en' : 'vi')}>{lang.toUpperCase()}</button>
+          <button type="button" className="icon-button" aria-label={t.refresh} title={t.refresh} onClick={() => location.reload()}>↻</button>
         </div>
       </header>
-      {regions && <div className="mobile-region-bar"><Select label={t.region} value={region} options={[{ value: '', label: t.allRegions }, ...regions.data.filter((item) => item.enabled).map((item) => ({ value: item.code, label: lang === 'vi' ? item.label_vi : item.label_en, hint: item.code }))]} onChange={setRegion} /></div>}
+      {regions && <div className="mobile-region-bar"><Select variant="pill" ariaLabel={t.region} leadingIcon="⌖" value={region} options={regionOptions} onChange={setRegion} /></div>}
       <FloatingToast error={error ? (error === 'logout' ? t.failedLogout : t.loadError) : ''} onDismissError={() => setError('')} />
       <div className="page-content">
-        {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} onOpenArticle={setReadingId} />}
-        {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} onOpenArticle={setReadingId} />}
-        {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} onOpenArticle={setReadingId} />}
+        {page === 'today' && <Today t={t} lang={lang} dashboard={dashboard} region={region} setPage={setRoute} onPick={openFilter} onOpenArticle={setReadingId} onAskAnalyst={askAnalyst} />}
+        {page === 'topics' && <Topics t={t} lang={lang} dashboard={dashboard} region={region} filter={filter} setFilter={setFilter} onOpenArticle={setReadingId} onAskAnalyst={askAnalyst} />}
+        {page === 'regions' && <RegionsPage t={t} lang={lang} region={region} onOpenArticle={setReadingId} onAskAnalyst={askAnalyst} />}
         {page === 'market' && <Market t={t} lang={lang} region={region} />}
         {page === 'reports' && <ReportsPage t={t} lang={lang} region={region} dashboard={dashboard} onOpenArticle={setReadingId} onOpenAgents={() => setRoute('agents')} />}
-        {page === 'agents' && <AgentsWorkspace lang={lang} onOpenArticle={setReadingId} onOpenRegions={() => setRoute('regions')} />}
+        {page === 'agents' && <AgentsWorkspace lang={lang} onOpenArticle={setReadingId} onOpenRegions={() => setRoute('regions')} initialPrompt={pendingAgentPrompt} onConsumeInitialPrompt={() => setPendingAgentPrompt(null)} />}
         {page === 'alerts' && <AlertsPage t={t} lang={lang} />}
         {page === 'api-keys' && <ApiKeysPanel lang={lang} api={api} />}
         {page === 'llm-providers' && <ProvidersPanel lang={lang} api={api} />}
@@ -391,7 +495,7 @@ function Shell({ lang, setLang, mode, setMode, page, setPage, dashboard, regions
         {!ROUTABLE_PAGES.includes(page) && <EmptyPage t={t} />}
       </div>
     </main>
-    <nav className="tabbar" aria-label={t.tabbarLabel}>{ROUTABLE_PAGES.filter((id) => id !== 'market' && id !== 'regions').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
+    <nav className="tabbar" aria-label={t.tabbarLabel}>{EDITORIAL_PAGES.filter((id) => id !== 'market' && id !== 'regions').map((id) => <button key={id} type="button" className={page === id ? 'tab active' : 'tab'} aria-current={page === id ? 'page' : undefined} onClick={() => setRoute(id)}><span className="tab-icon" aria-hidden="true">{icons[id]}</span><span>{t[id]}</span></button>)}</nav>
     {readingId !== null && <ArticleReaderModal t={t} lang={lang} articleId={readingId} topics={dashboard?.topics} onClose={() => setReadingId(null)} onUpdated={onCatalogChanged} />}
   </div>
   function setRoute(next: Page) { location.hash = next; setPage(next) }
@@ -525,7 +629,7 @@ function useArticles(topic: string | null, region: string, source: string | null
   useEffect(() => { setItems(null); void load(0) }, [topic, region, source, query])
   return { items, error, more, busy, load }
 }
-function ArticleList({ t, lang, topic, topics, region, source, query, limit, onOpenArticle }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; query?: string; limit?: number; onOpenArticle?: (id: number) => void }) {
+function ArticleList({ t, lang, topic, topics, region, source, query, limit, onOpenArticle, onAskAnalyst }: { t: Copy; lang: Lang; topic: string | null; topics?: Topic[]; region?: string; source?: string | null; query?: string; limit?: number; onOpenArticle?: (id: number) => void; onAskAnalyst?: (prompt: string) => void }) {
   const { items, error, more, busy, load } = useArticles(topic, region ?? '', source ?? null, query ?? '', limit)
   // A capped list (a home rail) has nothing more to load, so it never gets a sentinel.
   const paged = !limit
@@ -545,17 +649,41 @@ function ArticleList({ t, lang, topic, topics, region, source, query, limit, onO
     const entities = item.labels?.entities ?? []
     const hasFull = item.content_source === 'web' || (item.content_source === 'feed' && (item.word_count ?? 0) > 0)
     return <article className="article-row" key={item.id}>
+      <div className="article-meta">
+        <span className="tier-badge">{item.source_tier}</span>
+        <strong>{item.source_name}</strong>
+        {item.region_code && <span className="label-chip">{item.region_code}</span>}
+        {label && <span className="label-chip">{label}</span>}
+        {hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}{item.word_count ? ` · ${item.word_count} ${t.wordsUnit}` : ''}</span>}
+        <span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span>
+      </div>
       <div className="article-row-top">
         {onOpenArticle
           ? <button type="button" className="article-open-title" onClick={() => onOpenArticle(item.id)}>{item.title}</button>
           : <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title}</a>}
-        <div className="article-row-actions">
-          {onOpenArticle && <button type="button" className="reader-pill" onClick={() => onOpenArticle(item.id)}>{t.readInApp}</button>}
-          <a className="ext-pill" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>
-        </div>
       </div>
       {item.summary && <p className="article-excerpt" onClick={() => onOpenArticle?.(item.id)}>{item.summary}</p>}
-      <div className="article-meta"><span className="tier-badge">{item.source_tier}</span><span>{item.source_name}</span>{hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}{item.word_count ? ` · ${item.word_count} ${t.wordsUnit}` : ''}</span>}{label && <span>· {label}</span>}{extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}{entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 5).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}<span>· {published ?? `${t.fetchedAt} ${formatDate(lang, item.fetched_at) ?? ''}`}</span></div>
+      <div className="article-row-actions">
+        {onOpenArticle && <button type="button" className="reader-pill" onClick={() => onOpenArticle(item.id)}>{t.readInApp}</button>}
+        {onAskAnalyst && (
+          <button
+            type="button"
+            className="ext-pill"
+            onClick={() =>
+              onAskAnalyst(
+                lang === 'vi'
+                  ? `@macro-argus Phân tích bài báo #article-${item.id} (${item.title}) và nêu tác động chính.`
+                  : `@macro-argus Analyze #article-${item.id} (${item.title}) and summarize key implications.`,
+              )
+            }
+          >
+            ✦ {t.storyAskAnalyst}
+          </button>
+        )}
+        <a className="ext-pill" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>
+        {extraTopics.map((slug) => <span key={slug} className="label-chip">{topicLabel(lang, topics, slug) ?? slug}</span>)}
+        {entities.length > 0 && <span className="label-chips" aria-label={t.entities}>{entities.slice(0, 4).map((value) => <span key={value} className="label-chip entity">{value}</span>)}</span>}
+      </div>
     </article>
   })}</div>{error && <p className="form-error" role="alert">{t.loadError}</p>}
     {paged && more && !failed && <div ref={sentinel} className="scroll-sentinel" aria-hidden="true">{busy ? t.loading : ''}</div>}
@@ -570,18 +698,37 @@ function Rail({ title, action, children }: { title: string; action?: React.React
   return <section className="rail"><div className="rail-head"><h2 className="section-title">{title}</h2>{action}</div><div className="rail-strip">{children}</div></section>
 }
 
-function MiniArticle({ t, lang, item, topics, onOpen }: { t: Copy; lang: Lang; item: Article; topics?: Topic[]; onOpen: (id: number) => void }) {
+function MiniArticle({ t, lang, item, topics, onOpen, onAskAnalyst }: { t: Copy; lang: Lang; item: Article; topics?: Topic[]; onOpen: (id: number) => void; onAskAnalyst?: (prompt: string) => void }) {
   const hasFull = item.content_source === 'web' || (item.content_source === 'feed' && (item.word_count ?? 0) > 0)
   return <article className="mini-card">
-    <div className="mini-head"><span className="mini-tier">{item.source_tier}</span>{hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}</span>}</div>
+    <div className="mini-head"><span className="mini-tier">{item.source_tier}</span>{item.region_code && <span className="label-chip">{item.region_code}</span>}{hasFull && <span className="content-badge">{item.content_source === 'web' ? t.contentWeb : t.contentFeed}</span>}</div>
     <button type="button" className="mini-open-title" onClick={() => onOpen(item.id)}>{item.title}</button>
     {item.summary && <p className="mini-excerpt" onClick={() => onOpen(item.id)}>{item.summary}</p>}
-    <div className="article-meta"><span>{item.source_name}</span>{topicLabel(lang, topics, item.topic_slug) && <span>· {topicLabel(lang, topics, item.topic_slug)}</span>}<span>· {formatDate(lang, item.published_at) ?? formatDate(lang, item.fetched_at) ?? t_none(lang)}</span><a className="mini-ext" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a></div>
+    <div className="article-meta"><span>{item.source_name}</span>{topicLabel(lang, topics, item.topic_slug) && <span>· {topicLabel(lang, topics, item.topic_slug)}</span>}<span>· {formatDate(lang, item.published_at) ?? formatDate(lang, item.fetched_at) ?? t_none(lang)}</span></div>
+    <div className="article-row-actions" style={{ marginTop: 2 }}>
+      <button type="button" className="reader-pill" onClick={() => onOpen(item.id)}>{t.readInApp}</button>
+      {onAskAnalyst && (
+        <button
+          type="button"
+          className="ext-pill"
+          onClick={() =>
+            onAskAnalyst(
+              lang === 'vi'
+                ? `@macro-argus Phân tích bài báo #article-${item.id} (${item.title}).`
+                : `@macro-argus Analyze #article-${item.id} (${item.title}).`,
+            )
+          }
+        >
+          ✦ {t.storyAskAnalyst}
+        </button>
+      )}
+      <a className="ext-pill" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>
+    </div>
   </article>
 }
 function t_none(lang: Lang) { return lang === 'vi' ? 'không rõ ngày' : 'no date' }
 
-function HomeRails({ t, lang, dashboard, region, onPick, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
+function HomeRails({ t, lang, dashboard, region, onPick, onOpenArticle, onAskAnalyst }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void; onAskAnalyst?: (prompt: string) => void }) {
   const topics = dashboard?.topics ?? []
   const sources = dashboard?.sources ?? []
   const [latest, setLatest] = useState<Article[] | null>(null)
@@ -601,41 +748,118 @@ function HomeRails({ t, lang, dashboard, region, onPick, onOpenArticle }: { t: C
     api<{ data: Article[] }>(`/api/articles?limit=6&source=${encodeURIComponent(top.slug)}${suffix}`).then((payload) => setWatched(payload.data)).catch(() => setWatched([]))
   }, [sources, region])
   return <>
-    <Rail title={t.railBriefs} action={<button type="button" className="text-button" onClick={() => { location.hash = 'reports' }}>{t.openReports} →</button>}>
+    <Rail title={t.railBriefs} action={<button type="button" className="btn secondary btn-sm" onClick={() => { location.hash = 'reports' }}>{t.openReports} →</button>}>
       {!briefs ? <p className="muted">{t.loading}</p> : briefs.length === 0 ? <p className="rail-empty">{t.noBriefsRail}</p> : briefs.map((item) => <article className="mini-card" key={item.id}><span className="mini-tier">{item.stable_key ?? `analysis-${item.id}`}</span><a href="#reports">{item.title}</a><div className="article-meta"><span>{item.author ?? t.mcpOwner}</span>{item.region_code && <span>· {item.region_code}</span>}<span>· {formatDate(lang, new Date(item.updated_at * 1000).toISOString())}</span></div></article>)}
     </Rail>
-    <Rail title={t.railLatest} action={<button type="button" className="text-button" onClick={() => onPick({ topic: null, source: null })}>{t.seeAll}</button>}>
-      {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} />)}
+    <Rail title={t.railLatest} action={<button type="button" className="btn secondary btn-sm" onClick={() => onPick({ topic: null, source: null })}>{t.seeAll}</button>}>
+      {!latest ? <p className="muted">{t.loading}</p> : latest.length === 0 ? <div className="empty-card compact"><div className="empty-art">✦</div><h3>{t.noStories}</h3><p>{t.noStoriesSub}</p></div> : latest.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} onAskAnalyst={onAskAnalyst} />)}
     </Rail>
-    <Rail title={t.railAlerts} action={<button type="button" className="text-button" onClick={() => { location.hash = 'alerts' }}>{t.seeAll}</button>}>
+    <Rail title={t.railAlerts} action={<button type="button" className="btn secondary btn-sm" onClick={() => { location.hash = 'alerts' }}>{t.seeAll}</button>}>
       {!alerts ? <p className="muted">{t.loading}</p> : alerts.length === 0 ? <p className="rail-empty">{t.alertsEmpty} — {t.alertsEmptySub}</p> : alerts.map((item) => <article className="mini-card" key={item.id}><span className={`alert-level ${item.level}`}>{item.level}</span><button type="button" className="mini-open-title" onClick={() => onOpenArticle(item.article_id)}>{item.article_title}</button><div className="article-meta"><span>{lang === 'vi' ? item.rule_label_vi : item.rule_label_en}</span><span>· {formatDate(lang, new Date(item.created_at * 1000).toISOString())}</span></div></article>)}
     </Rail>
-    <Rail title={t.railWatch} action={sources.length > 0 ? <button type="button" className="text-button" onClick={() => onPick({ topic: null, source: sources[0].slug })}>{sources[0].name}</button> : undefined}>
-      {!watched ? <p className="muted">{t.loading}</p> : watched.length === 0 ? <p className="rail-empty">{t.emptyRail}</p> : watched.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} />)}
+    <Rail title={t.railWatch} action={sources.length > 0 ? <button type="button" className="btn secondary btn-sm" onClick={() => onPick({ topic: null, source: sources[0].slug })}>{sources[0].name}</button> : undefined}>
+      {!watched ? <p className="muted">{t.loading}</p> : watched.length === 0 ? <p className="rail-empty">{t.emptyRail}</p> : watched.map((item) => <MiniArticle key={item.id} t={t} lang={lang} item={item} topics={topics} onOpen={onOpenArticle} onAskAnalyst={onAskAnalyst} />)}
     </Rail>
   </>
 }
 
-function Today({ t, lang, dashboard, region, setPage, onPick, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
+function Today({ t, lang, dashboard, region, setPage, onPick, onOpenArticle, onAskAnalyst }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; setPage: (v: Page) => void; onPick: (v: Filter) => void; onOpenArticle: (id: number) => void; onAskAnalyst: (prompt: string) => void }) {
   const stats = dashboard?.stats
-  const [quickSearch, setQuickSearch] = useState('')
-  const onSearch = (event: FormEvent) => {
+  const topics = (dashboard?.topics ?? []).filter((tp) => tp.enabled).slice(0, 4)
+  const [heroQuery, setHeroQuery] = useState('')
+  const [heroMode, setHeroMode] = useState<'search' | 'ask'>('search')
+  const onHeroSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (!quickSearch.trim()) return
-    onPick({ topic: null, source: null, q: quickSearch.trim() })
+    const trimmed = heroQuery.trim()
+    if (!trimmed) return
+    if (heroMode === 'ask') {
+      onAskAnalyst(trimmed)
+      setHeroQuery('')
+      return
+    }
+    onPick({ topic: null, source: null, q: trimmed })
   }
   return <div className="content-stack">
-    <section className="welcome-grid"><div className="welcome-card"><div className="eyebrow">{new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</div><h2>{t.briefing}</h2><p>{t.briefingSub}</p>
-      <form className="quick-search-bar" onSubmit={onSearch}>
-        <input type="search" value={quickSearch} placeholder={t.searchArticlesPlaceholder} onChange={(e) => setQuickSearch(e.target.value)} aria-label={t.searchArticles} />
-        <button className="btn secondary" disabled={!quickSearch.trim()}>{t.searchGo}</button>
+    <section className="pplx-hero-shell">
+      <div className="pplx-hero-heading">
+        <h2>{t.heroHeading}</h2>
+        <p>{t.heroSub}</p>
+      </div>
+      <form className="pplx-hero-card" onSubmit={onHeroSubmit}>
+        <div className="pplx-hero-input-wrap">
+          <input
+            className="pplx-hero-input"
+            type="text"
+            value={heroQuery}
+            placeholder={heroMode === 'ask' ? t.heroAskPlaceholder : t.heroSearchPlaceholder}
+            onChange={(e) => setHeroQuery(e.target.value)}
+            aria-label={heroMode === 'ask' ? t.heroModeAsk : t.searchArticles}
+          />
+        </div>
+        <div className="pplx-hero-footer">
+          <div className="pplx-hero-pills">
+            <button
+              type="button"
+              className={heroMode === 'search' ? 'chip active' : 'chip'}
+              onClick={() => setHeroMode('search')}
+            >
+              ⌕ {t.heroModeSearch}
+            </button>
+            <button
+              type="button"
+              className={heroMode === 'ask' ? 'chip active' : 'chip'}
+              onClick={() => setHeroMode('ask')}
+            >
+              ✦ {t.heroModeAsk}
+            </button>
+            {topics.map((tp) => (
+              <button
+                key={tp.slug}
+                type="button"
+                className="chip"
+                onClick={() => onPick({ topic: tp.slug, source: null })}
+              >
+                #{lang === 'vi' ? tp.label_vi : tp.label_en}
+              </button>
+            ))}
+          </div>
+          <button
+            type="submit"
+            className="pplx-submit-btn"
+            disabled={!heroQuery.trim()}
+            aria-label={t.heroSubmitLabel}
+            title={t.heroSubmitLabel}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </button>
+        </div>
       </form>
-      <div className="welcome-actions"><button className="btn primary" onClick={() => setPage('topics')}>{t.topics} <span>→</span></button><span className="quiet-note">{stats ? (stats.collector_enabled ? t.collectorOn : t.collectorOff) : ''}</span></div></div><div className="signal-card"><span className="signal-ring">◎</span><div><strong>{stats ? stats.articles_24h : '—'}</strong><span>{t.articles24h}</span></div><div className="signal-line" /><span className="muted">{stats ? `${stats.articles_with_content ?? 0}/${stats.articles_total} ${t.articlesArchived.toLowerCase()} · ${stats.sources_enabled} ${t.sourcesEnabled.toLowerCase()}` : '—'}</span></div></section>
-    <HomeRails t={t} lang={lang} dashboard={dashboard} region={region} onPick={onPick} onOpenArticle={onOpenArticle} />
+      <div className="pplx-live-strip">
+        <div className="pplx-live-metrics">
+          <span className="pplx-live-pill">
+            <span className={stats?.collector_enabled ? 'pplx-live-dot live' : 'pplx-live-dot'} />
+            {stats ? (stats.collector_enabled ? t.liveDeskCollectorOn : t.liveDeskCollectorOff) : '…'}
+          </span>
+          <span className="pplx-live-pill">
+            <strong>{stats ? stats.articles_24h : '—'}</strong> {t.liveDesk24h}
+          </span>
+          <span className="pplx-live-pill">
+            <strong>{stats ? stats.sources_enabled : '—'}</strong> {t.liveDeskSources}
+          </span>
+        </div>
+        <button type="button" className="chip" onClick={() => setPage('topics')}>
+          {t.liveDeskQuickFetch} →
+        </button>
+      </div>
+    </section>
+    <HomeRails t={t} lang={lang} dashboard={dashboard} region={region} onPick={onPick} onOpenArticle={onOpenArticle} onAskAnalyst={onAskAnalyst} />
   </div>
 }
 
-function Topics({ t, lang, dashboard, region, filter, setFilter, onOpenArticle }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; filter: Filter; setFilter: (v: Filter) => void; onOpenArticle: (id: number) => void }) {
+function Topics({ t, lang, dashboard, region, filter, setFilter, onOpenArticle, onAskAnalyst }: { t: Copy; lang: Lang; dashboard: Dashboard | null; region: string; filter: Filter; setFilter: (v: Filter) => void; onOpenArticle: (id: number) => void; onAskAnalyst?: (prompt: string) => void }) {
   const topics = dashboard?.topics ?? []
   const sources = dashboard?.sources ?? []
   const [searchInput, setSearchInput] = useState(filter.q ?? '')
@@ -676,7 +900,7 @@ function Topics({ t, lang, dashboard, region, filter, setFilter, onOpenArticle }
     <label className="field article-search-field"><span>{t.searchArticles}</span><input type="search" value={searchInput} placeholder={t.searchArticlesPlaceholder} onChange={(e) => setSearchInput(e.target.value)} /></label>
     {!filter.source && !filter.q && <div className="topic-grid">{topics.map((topic) => <button type="button" className="topic-card" key={topic.slug} aria-pressed={filter.topic === topic.slug} onClick={() => setFilter({ topic: filter.topic === topic.slug ? null : topic.slug, source: null, q: filter.q })}><span className="topic-dot" />{parentTrail(topic) && <p>{parentTrail(topic)} →</p>}<h3>{lang === 'vi' ? topic.label_vi : topic.label_en}</h3><p>{lang === 'vi' ? topic.label_en : topic.label_vi}</p><span className="topic-count">{total(topic.slug)} {t.topicArticles}</span></button>)}</div>}
     <section className="section-heading"><div><span className="eyebrow">{t.stories}</span><h2>{filter.q ? `${t.searchArticles}: “${filter.q}”` : filter.source ? activeSource?.name ?? t.bySource : filter.topic ? topicLabel(lang, topics, filter.topic) : t.latest}</h2></div></section>
-    <ArticleList t={t} lang={lang} topic={filter.topic} topics={topics} region={region} source={filter.source} query={filter.q ?? ''} onOpenArticle={onOpenArticle} />
+    <ArticleList t={t} lang={lang} topic={filter.topic} topics={topics} region={region} source={filter.source} query={filter.q ?? ''} onOpenArticle={onOpenArticle} onAskAnalyst={onAskAnalyst} />
   </div>
 }
 
@@ -813,7 +1037,7 @@ function SettingsPage({ t, lang, mode, setMode, setLang, onCatalogChanged, onReg
     <div className="settings-grid"><section className="settings-card"><div className="card-heading"><span className="card-icon">Aa</span><div><h3>{t.settingsTitle}</h3><p>{t.settingsSub}</p></div></div>
       <Select label={t.language} value={settings.language} options={[{ value: 'vi', label: 'Tiếng Việt' }, { value: 'en', label: 'English' }]} onChange={(value) => { setSaved(false); setSettings({ ...settings, language: value as Lang }) }} />
       <Select label={t.readerMode} value={settings.default_reader_mode} options={themeOptions} onChange={(value) => { setSaved(false); setSettings({ ...settings, default_reader_mode: value as ReaderMode }) }} />
-      <div className="theme-grid" role="group" aria-label={t.themeLabel}>{THEMES.map((theme) => <button key={theme.id} type="button" className={mode === theme.id ? 'theme-swatch active' : 'theme-swatch'} style={{ background: theme.bg, color: theme.dark ? '#e8e0d4' : '#332f2a' }} aria-pressed={mode === theme.id} onClick={() => setMode(theme.id)}><span className="swatch-sample" aria-hidden="true">Aa</span><span className="swatch-name">{lang === 'vi' ? theme.vi : theme.en}</span></button>)}</div>
+      <div className="theme-grid" role="group" aria-label={t.themeLabel}>{THEMES.map((theme) => <button key={theme.id} type="button" className={mode === theme.id ? 'theme-swatch active' : 'theme-swatch'} style={{ background: theme.bg, color: theme.dark ? '#e6e2d8' : '#27251e' }} aria-pressed={mode === theme.id} onClick={() => setMode(theme.id)}><span className="swatch-sample" aria-hidden="true">Aa</span><span className="swatch-name">{lang === 'vi' ? theme.vi : theme.en}</span></button>)}</div>
     </section><section className="settings-card"><div className="card-heading"><span className="card-icon">◷</span><div><h3>{t.nextPhase}</h3><p>{t.collectorHelp}</p></div></div>
       <div className="switch-row"><div><strong>{settings.collector_enabled ? t.collectorOn : t.collectorOff}</strong></div><button type="button" role="switch" className="switch" aria-checked={settings.collector_enabled} aria-label={t.collectorToggle} disabled={busy} onClick={() => void toggleCollector()} /></div>
       <div className="switch-row"><div><strong>{settings.fulltext_auto_enabled ? t.fulltextAutoOn : t.fulltextAutoOff}</strong><span>{t.fulltextAutoHelp}</span></div><button type="button" role="switch" className="switch" aria-checked={settings.fulltext_auto_enabled} disabled={busy} onClick={() => void toggleFulltext()} /></div>
@@ -1084,8 +1308,8 @@ function ConnectorsPanel({ t }: { t: Copy }) {
         <span className="catalog-health">{item.last_run_at ? `${t.asOf}: ${when(item.last_run_at)}` : t.neverRan}{item.last_error ? ` · ${item.last_error}` : ''} · {t.quota}: {item.requests_today}/{item.daily_quota}</span>
       </div>
       <div className="catalog-entry-actions">
-        <button type="button" className="text-button" disabled={busyId !== '' || !item.enabled} onClick={() => void runNow(item)}>{busyId === `run:${item.id}` ? t.connectorRunning : t.connectorRunNow}</button>
-        <button type="button" className="text-button" disabled={busyId !== ''} onClick={() => void toggleConnector(item)}>{item.enabled ? t.connectorDisable : t.connectorEnable}</button>
+        <button type="button" className="btn secondary btn-sm" disabled={busyId !== '' || !item.enabled} onClick={() => void runNow(item)}>{busyId === `run:${item.id}` ? t.connectorRunning : t.connectorRunNow}</button>
+        <button type="button" className="btn secondary btn-sm" disabled={busyId !== ''} onClick={() => void toggleConnector(item)}>{item.enabled ? t.connectorDisable : t.connectorEnable}</button>
       </div>
     </article>)}</div>}
   </section>
@@ -1268,11 +1492,12 @@ function ReportsPage({ t, lang, region, dashboard, onOpenArticle, onOpenAgents }
   </div>
 }
 
-function RegionsPage({ t, lang, region, onOpenArticle }: { t: Copy; lang: Lang; region: string; onOpenArticle: (id: number) => void }) {
+function RegionsPage({ t, lang, region, onOpenArticle, onAskAnalyst }: { t: Copy; lang: Lang; region: string; onOpenArticle: (id: number) => void; onAskAnalyst?: (prompt: string) => void }) {
   const [docs, setDocs] = useState<DocsPayload | null>(null)
   const [tax, setTax] = useState<TaxPayload | null>(null)
   const [query, setQuery] = useState('')
   const [topic, setTopic] = useState('')
+  const [activeTab, setActiveTab] = useState<'all' | 'news' | 'docs' | 'tax'>('all')
   const [error, setError] = useState(false)
   const suffix = region ? `&region=${encodeURIComponent(region)}` : ''
   useEffect(() => {
@@ -1283,28 +1508,57 @@ function RegionsPage({ t, lang, region, onOpenArticle }: { t: Copy; lang: Lang; 
     api<TaxPayload>(`/api/v1/tax-calendar?horizon_days=180${suffix}`).then(setTax).catch(() => setError(true))
   }, [region, query, topic])
   const date = (value: string | null) => value ? new Intl.DateTimeFormat(lang === 'vi' ? 'vi-VN' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${value}T00:00:00`)) : null
+  const regionTabs: { id: 'all' | 'news' | 'docs' | 'tax'; label: string }[] = [
+    { id: 'all', label: t.regionTabAll },
+    { id: 'news', label: t.regionTabNews },
+    { id: 'docs', label: `${t.regionTabDocs}${docs ? ` (${docs.data.length})` : ''}` },
+    { id: 'tax', label: `${t.regionTabTax}${tax ? ` (${tax.data.length})` : ''}` },
+  ]
   return <div className="content-stack">
     <section className="section-heading"><div><span className="eyebrow">{t.regionsPage}</span><h2>{t.regionsPage}</h2><p>{t.regionsPageSub}</p></div></section>
+    <div className="pplx-tabs" role="tablist" aria-label={t.regionsPage}>
+      {regionTabs.map((rt) => (
+        <button
+          key={rt.id}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === rt.id}
+          className={activeTab === rt.id ? 'pplx-tab active' : 'pplx-tab'}
+          onClick={() => setActiveTab(rt.id)}
+        >
+          {rt.label}
+        </button>
+      ))}
+    </div>
     {error && <div className="form-error" role="alert">{t.loadError}</div>}
-    <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionNews}</span><h3>{t.latest}</h3></div></div><ArticleList t={t} lang={lang} topic={null} region={region} onOpenArticle={onOpenArticle} /></section>
-    <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionDocs}</span><h3>{t.regionDocs}</h3></div></div>
-      <div className="doc-filters">
-        <label className="field"><span>{t.searchDocs}</span><input type="search" value={query} placeholder={t.searchHint} onChange={(e) => setQuery(e.target.value)} /><small>{t.searchHint}</small></label>
-        <Select label={t.allTopicsDoc} value={topic} options={[{ value: '', label: t.allTopicsDoc }, { value: 'tax', label: lang === 'vi' ? 'Thuế' : 'Tax' }]} onChange={setTopic} />
-      </div>
-      {!docs ? <p className="muted" role="status">{t.loading}</p> : docs.data.length === 0 ? <p className="muted">{t.noDocs}</p> : <div className="doc-list">{docs.data.map((doc) => <article className="doc-row" key={`${doc.provider}-${doc.number}`}>
-        <a href={doc.url} target="_blank" rel="noopener noreferrer">{doc.title}</a>
-        <div className="article-meta"><span className="tier-badge">{doc.region}</span><span>{doc.agency || doc.provider}</span><span>· {doc.number}</span>{doc.effective_on && <span>· {t.effectiveOn} {date(doc.effective_on)}</span>}{doc.published_on && <span>· {t.publishedOn} {date(doc.published_on)}</span>}</div>
-        {doc.summary && <div className="doc-summary"><strong>{t.docSummary}</strong><p>{doc.summary}</p><small>{doc.disclaimer}</small></div>}
-      </article>)}</div>}
-    </section>
-    <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionTax}</span><h3>{t.regionTax}</h3></div></div>
-      <p className="catalog-notice">{t.taxNotice} {t.holidaysNote}</p>
-      {!tax ? <p className="muted" role="status">{t.loading}</p> : tax.data.length === 0 ? <p className="muted">{t.noTax}</p> : <ul className="tax-list">{tax.data.map((item) => <li key={item.code} className={item.due_soon ? 'tax-row due' : 'tax-row'}>
-        <div><strong>{lang === 'vi' ? item.name_vi : item.name_en}</strong><span>{item.region} · {item.cadence} · {date(item.due_on)}</span>{item.note && <small>{item.note}</small>}</div>
-        <div className="tax-side"><span className={item.due_soon ? 'tax-days due' : 'tax-days'}>{item.due_soon ? t.dueSoon : t.dueIn(item.days_until)}</span><span className={item.verified ? 'catalog-status' : 'catalog-status inactive'}>{item.verified ? t.verified : t.unverified}</span></div>
-      </li>)}</ul>}
-    </section>
+    {(activeTab === 'all' || activeTab === 'news') && (
+      <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionNews}</span><h3>{t.latest}</h3></div></div><ArticleList t={t} lang={lang} topic={null} region={region} onOpenArticle={onOpenArticle} onAskAnalyst={onAskAnalyst} /></section>
+    )}
+    {(activeTab === 'all' || activeTab === 'docs') && (
+      <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionDocs}</span><h3>{t.regionDocs}</h3></div></div>
+        <div className="doc-filters">
+          <label className="field"><span>{t.searchDocs}</span><input type="search" value={query} placeholder={t.searchHint} onChange={(e) => setQuery(e.target.value)} /></label>
+          <Select label={t.allTopicsDoc} value={topic} options={[{ value: '', label: t.allTopicsDoc }, { value: 'tax', label: lang === 'vi' ? 'Thuế' : 'Tax' }]} onChange={setTopic} />
+        </div>
+        {!docs ? <p className="muted" role="status">{t.loading}</p> : docs.data.length === 0 ? <p className="muted">{t.noDocs}</p> : <div className="doc-list">{docs.data.map((doc) => <article className="doc-row" key={`${doc.provider}-${doc.number}`}>
+          <a href={doc.url} target="_blank" rel="noopener noreferrer">{doc.title}</a>
+          <div className="article-meta"><span className="tier-badge">{doc.region}</span><span>{doc.agency || doc.provider}</span><span>· {doc.number}</span>{doc.effective_on && <span>· {t.effectiveOn} {date(doc.effective_on)}</span>}{doc.published_on && <span>· {t.publishedOn} {date(doc.published_on)}</span>}</div>
+          {doc.summary && <div className="doc-summary"><strong>{t.docSummary}</strong><p>{doc.summary}</p><small>{doc.disclaimer}</small></div>}
+        </article>)}</div>}
+      </section>
+    )}
+    {(activeTab === 'all' || activeTab === 'tax') && (
+      <section className="region-block"><div className="section-heading"><div><span className="eyebrow">{t.regionTax}</span><h3>{t.regionTax}</h3></div></div>
+        <div className="tax-disclaimer-banner" role="note">
+          <span>⚖</span>
+          <span>{t.taxNotice} {t.holidaysNote} {tax ? (lang === 'vi' ? tax.disclaimer_vi : tax.disclaimer_en) : ''}</span>
+        </div>
+        {!tax ? <p className="muted" role="status">{t.loading}</p> : tax.data.length === 0 ? <p className="muted">{t.noTax}</p> : <ul className="tax-list">{tax.data.map((item) => <li key={item.code} className={item.due_soon ? 'tax-row due' : 'tax-row'}>
+          <div><strong>{lang === 'vi' ? item.name_vi : item.name_en}</strong><span>{item.region} · {item.cadence} · {date(item.due_on)}</span>{item.note && <small>{item.note}</small>}</div>
+          <div className="tax-side"><span className={item.due_soon ? 'tax-days due' : 'tax-days'}>{item.due_soon ? t.dueSoon : t.dueIn(item.days_until)}</span><span className={item.verified ? 'tax-verify-pill verified' : 'tax-verify-pill unverified'}>{item.verified ? `✓ ${t.taxVerifiedPill}` : t.taxUnverifiedPill}</span></div>
+        </li>)}</ul>}
+      </section>
+    )}
   </div>
 }
 
@@ -1391,10 +1645,10 @@ function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: 
           {words > 0 && <span className="content-badge">{words} {t.wordsUnit} · {t.readMinutes(minutes)}</span>}
         </div>
         <div className="reader-toolbar-actions">
-          {item && <button type="button" className={companionOpen ? 'btn primary compact-btn' : 'btn secondary compact-btn'} onClick={() => setCompanionOpen((v) => !v)}>{t.companionToggleBtn}</button>}
-          {item && <button type="button" className="btn secondary compact-btn" disabled={extracting} onClick={() => void triggerExtract()}>{extracting ? t.loading : item.content_text ? t.reExtract : t.extractNow}</button>}
-          {item && <a className="btn secondary compact-btn" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>}
-          <button type="button" className="btn primary compact-btn" onClick={onClose}>{t.closeReader}</button>
+          {item && <button type="button" className="btn secondary" disabled={extracting} onClick={() => void triggerExtract()}>{extracting ? t.loading : item.content_text ? t.reExtract : t.extractNow}</button>}
+          {item && <button type="button" className={companionOpen ? 'btn primary' : 'btn secondary'} onClick={() => setCompanionOpen((v) => !v)}>{t.companionToggleBtn}</button>}
+          {item && <a className="btn secondary" href={item.url} target="_blank" rel="noopener noreferrer">{t.openOriginal}</a>}
+          <button type="button" className="btn primary" onClick={onClose}>{t.closeReader}</button>
         </div>
       </div>
 
@@ -1432,6 +1686,18 @@ function ArticleReaderModal({ t, lang, articleId, topics, onClose, onUpdated }: 
 
         {item.summary && (!item.content_text || !item.content_text.startsWith(item.summary.slice(0, 80))) && (
           <blockquote className="reader-lead">{item.summary}</blockquote>
+        )}
+
+        {!companionOpen && (
+          <div className="reader-synthesis-card">
+            <div>
+              <strong>✦ {t.readerSynthesisTitle}</strong>
+              <p>{t.readerSynthesisSub}</p>
+            </div>
+            <button type="button" className="btn secondary" onClick={() => setCompanionOpen(true)}>
+              {t.companionToggleBtn}
+            </button>
+          </div>
         )}
 
         {paragraphs.length > 0 ? (

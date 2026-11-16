@@ -8,6 +8,7 @@ import {
   formatDiscussionModeShort,
   NEWSMAN_APP_TOOLS,
   omitBlankSecrets,
+  plainPreview,
   type HubSkillGroupSummary,
   type HubSkillSummary,
   type SkillAccessRequest,
@@ -19,10 +20,12 @@ import {
   buildSeatTraceId,
   computeEffectiveScope,
   createInitialStreamTurnState,
+  deriveAgentStreamPhaseV2,
   emptyHubEffectiveBundle,
   extractMentions,
   filterSurfacesByManifest,
   intersectScopeLists,
+  mapToolToTraceStepV2,
   MAX_ACTIVE_VIEW_CONTEXT_BYTES,
   normalizeBridgeRouting,
   normalizeHubEffectiveBundle,
@@ -511,7 +514,7 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   const gate = filterSurfacesByManifest({
     app_id: 'lnc-newsman',
     display_name: 'LNC Newsman',
-    protocol_version: '2.2',
+    protocol_version: '2.3',
     capabilities: {
       voice_tts: false,
       voice_stt: false,
@@ -667,11 +670,16 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
     'AgentContextBudgetChip.tsx',
     'AgentSelectionToolbar.tsx',
     'AgentSplitPane.tsx',
+    'AgentMarkdown.tsx',
+    'AgentExecutionTrace.tsx',
+    'AgentPersonaRoleplayMenus.tsx',
+    'AgentChatHeaderBar.tsx',
     'agent-kit-hygiene.css',
   ]
+  assertEqual(requiredKitFiles.length, 15, 'Must check all 15 v2.3 agent-kit files')
   for (const fileName of requiredKitFiles) {
     const fileUrl = new URL(`./agent-kit/${fileName}`, import.meta.url)
-    assertOk(fsMod.existsSync(fileUrl), `Missing v2.2 agent-kit file: ${fileName}`)
+    assertOk(fsMod.existsSync(fileUrl), `Missing v2.3 agent-kit file: ${fileName}`)
   }
 
   const hygieneCss = fsMod.readFileSync(
@@ -716,4 +724,159 @@ function assertDeepEqual<T>(actual: T, expected: T, message = ''): void {
   }
 }
 
-console.log('12/12 agentBridge tests passed')
+// 13. lnc-app-agents v2.3 parity: plainPreview, mapToolToTraceStepV2, deriveAgentStreamPhaseV2, Single-Frame dock & header wiring
+{
+  const preview = plainPreview(
+    '### Macro Digest\n**SBV** held `refinancing_rate` steady — see [Report](https://example.com)!\n```sql\nSELECT 1;\n```',
+    120,
+  )
+  assertEqual(preview.includes('**'), false, 'plainPreview must strip bold markers')
+  assertEqual(preview.includes('```'), false, 'plainPreview must strip code fences')
+  assertOk(preview.includes('Macro Digest') && preview.includes('SBV'), 'plainPreview preserves readable prose')
+
+  assertEqual(
+    mapToolToTraceStepV2({ tool: 'newsman__latest_articles', arguments: { region: 'vn', topic: 'macro' } })
+      .verb,
+    'Scanning latest articles',
+  )
+  const artStep = mapToolToTraceStepV2({
+    tool: 'article_get',
+    arguments: { article_id: 108 },
+    status: 'done',
+  })
+  assertEqual(artStep.verb, 'Reading article')
+  assertEqual(artStep.chip, '#article-108')
+  assertEqual(artStep.chipMono, true)
+
+  const taxStep = mapToolToTraceStepV2({
+    tool: 'tax_calendar',
+    arguments: { region: 'vn' },
+    resource_ctx: { regions: ['vn'], topics: ['tax'] },
+    status: 'done',
+  })
+  assertEqual(taxStep.verb, 'Checking tax calendar')
+  assertEqual(taxStep.chip, 'vn · #tax')
+
+  assertEqual(mapToolToTraceStepV2({ tool: 'series' }).verb, 'Querying macro series')
+  assertEqual(mapToolToTraceStepV2({ tool: 'observations' }).verb, 'Querying macro series')
+  assertEqual(mapToolToTraceStepV2({ tool: 'documents' }).verb, 'Searching documents')
+  assertEqual(mapToolToTraceStepV2({ tool: 'analyses' }).verb, 'Reviewing desk notes')
+  assertEqual(mapToolToTraceStepV2({ tool: 'notes' }).verb, 'Reviewing desk notes')
+  assertEqual(mapToolToTraceStepV2({ tool: 'brief_propose' }).verb, 'Drafting editorial brief')
+  assertEqual(mapToolToTraceStepV2({ tool: 'cortex__memory_search' }).verb, 'Searching memory')
+  assertEqual(mapToolToTraceStepV2({ tool: 'search__search' }).verb, 'Searching web')
+  assertEqual(mapToolToTraceStepV2({ tool: 'obsidian__vault_search' }).verb, 'Checking Obsidian vault')
+  assertEqual(mapToolToTraceStepV2({ tool: 'ask_user' }).verb, 'Clarifying with editor')
+
+  const consultStep = mapToolToTraceStepV2({
+    tool: 'consult_partner',
+    arguments: { partner_slug: 'tax-linh' },
+    status: 'running',
+  })
+  assertEqual(consultStep.verb, 'Consulting partner')
+  assertEqual(consultStep.kind, 'subagent')
+  assertEqual(consultStep.state, 'running')
+  assertEqual(consultStep.chip, '@tax-linh')
+
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: false }), 'idle')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: false, hasText: true }), 'settled')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true }), 'planning')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true, hasReasoning: true }), 'reasoning')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true, runningToolCount: 1 }), 'searching')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true, doneToolCount: 2 }), 'weaving')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true, hasText: true, doneToolCount: 2 }), 'responding')
+  assertEqual(deriveAgentStreamPhaseV2({ isLive: true, hasError: true }), 'error')
+
+  const seqEv = parseSseFrame('id: 17\nevent: seat_state\ndata: {"agent_slug":"tax-linh","state":"thinking"}')
+  assertEqual(seqEv?.seq, 17, 'parseSseFrame must capture SSE id sequence cursor')
+
+  const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+    readFileSync: (p: URL | string, enc: string) => string
+  }
+  const workspaceSrc = fsMod.readFileSync(new URL('./AgentsWorkspace.tsx', import.meta.url), 'utf8')
+  const companionSrc = fsMod.readFileSync(new URL('./CompanionDrawer.tsx', import.meta.url), 'utf8')
+  const cssSrc = fsMod.readFileSync(new URL('./agent-kit/agent-kit-hygiene.css', import.meta.url), 'utf8')
+
+  for (const requiredToken of [
+    '<AgentMarkdown',
+    '<AgentExecutionTrace',
+    '<AgentChatHeaderBar',
+    '<AgentResourcesPopover',
+    '<AgentModePopover',
+    '<AgentPartnersConsultPopover',
+    '<AgentRoleplayPreferencesPopover',
+    '<AgentFoldableComposerTray',
+    'dock={',
+    'responderAgentSlug',
+    'consultPartnerSlugs',
+  ]) {
+    assertOk(
+      workspaceSrc.includes(requiredToken),
+      `AgentsWorkspace.tsx must wire v2.3 token: ${requiredToken}`,
+    )
+  }
+  assertEqual(
+    workspaceSrc.includes('embeddedInSplitPane'),
+    false,
+    'AgentsWorkspace.tsx must mount AgentWorkspaceDock via Single-Frame dock= prop without embeddedInSplitPane',
+  )
+  assertEqual(
+    workspaceSrc.includes('<header className="stage-head">'),
+    false,
+    'AgentsWorkspace.tsx must replace legacy stage-head with AgentChatHeaderBar',
+  )
+  assertEqual(
+    workspaceSrc.includes('ttsSpeed='),
+    false,
+    'AgentsWorkspace.tsx must omit ttsSpeed when voice_tts capability is false',
+  )
+  assertOk(
+    companionSrc.includes('<AgentMarkdown') && companionSrc.includes('<AgentExecutionTrace'),
+    'CompanionDrawer.tsx must wire AgentMarkdown and AgentExecutionTrace',
+  )
+  assertOk(
+    cssSrc.includes('border-left: none;') && cssSrc.includes('min-height: 49px;'),
+    'agent-kit-hygiene.css must enforce Single-Frame border-left: none and 49px dock tabbar alignment',
+  )
+}
+
+// 14. Perplexity Warm Research Terminal design contract parity (themes.ts + style.css + shell UX)
+{
+  const fsMod = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+    readFileSync: (p: URL | string, enc: string) => string
+  }
+  const themesSrc = fsMod.readFileSync(new URL('./themes.ts', import.meta.url), 'utf8')
+  const styleSrc = fsMod.readFileSync(new URL('./style.css', import.meta.url), 'utf8')
+  const mainSrc = fsMod.readFileSync(new URL('./main.tsx', import.meta.url), 'utf8')
+
+  assertOk(
+    themesSrc.includes("id: 'paper'") && themesSrc.includes("bg: '#faf8f5'"),
+    'themes.ts paper mode must use #faf8f5 Aged Paper canvas',
+  )
+  for (const modeId of ['paper', 'sepia', 'gray', 'green', 'night', 'black']) {
+    assertOk(themesSrc.includes(`id: '${modeId}'`), `themes.ts must preserve reading mode '${modeId}'`)
+  }
+  for (const token of [
+    '--paper: #faf8f5;',
+    '--paper-card: #ffffff;',
+    '--paper-soft: #e8e6e1;',
+    '--ink: #27251e;',
+    '--muted: #72706b;',
+    '--line: #d1d1cd;',
+    '--accent: #016a71;',
+    '--charcoal-cta: #27251e;',
+    '--control-h: 36px;',
+    '--control-sm-h: 28px;',
+    'height: 56px;',
+    '.pplx-tabs',
+    '.pplx-submit-btn',
+  ]) {
+    assertOk(styleSrc.includes(token), `style.css must define Perplexity token/rule: ${token}`)
+  }
+  assertOk(
+    mainSrc.includes('sidebar-workspace-group') && mainSrc.includes('pplx-hero-card'),
+    'main.tsx must render collapsible Workspace nav group and Perplexity Editorial Hero card',
+  )
+}
+
+console.log('14/14 agentBridge tests passed')

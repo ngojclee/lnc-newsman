@@ -6,6 +6,7 @@ import {
   type ActiveViewContext,
   type AgentMessage,
   type AgentSchedule,
+  type AgentStreamPhaseV2,
   type AgentThread,
   type AgentWorkspace,
   type AppAgentConfig,
@@ -38,6 +39,7 @@ import {
   type TelegramRouteConfig,
   type ThreadStreamEvent,
   type ThreadStreamEventKind,
+  type TraceStepV2,
   type WhiteboardNote,
 } from './agentTypes.ts'
 
@@ -229,12 +231,16 @@ export function parseSseFrame(rawBlock: string): ThreadStreamEvent | null {
   if (!trimmed) return null
 
   let eventHeader = ''
+  let seqHeader: number | undefined
   const dataLines: string[] = []
 
   for (const rawLine of trimmed.split(/\r?\n/)) {
     const line = rawLine.trimEnd()
     if (!line || line.startsWith(':')) continue
-    if (line.startsWith('event:')) {
+    if (line.startsWith('id:')) {
+      const n = Number(line.slice(3).trim())
+      if (Number.isFinite(n) && n >= 0) seqHeader = n
+    } else if (line.startsWith('event:')) {
       eventHeader = line.slice(6).trim()
     } else if (line.startsWith('data:')) {
       dataLines.push(line.slice(5).trimStart())
@@ -298,6 +304,7 @@ export function parseSseFrame(rawBlock: string): ThreadStreamEvent | null {
             : undefined
 
   return {
+    ...(seqHeader !== undefined ? { seq: seqHeader } : {}),
     kind: rawKind,
     type: rawKind,
     thread_id: (parsed.thread_id as number | string | undefined) ?? undefined,
@@ -355,6 +362,153 @@ export function parseSseStreamChunk(
     if (ev) events.push(ev)
   }
   return { events, remainder }
+}
+
+/**
+ * Pure v2.3 helper mapping a Newsman or Business MCP tool call into a human-verb
+ * `TraceStepV2` row with target chips (preserving v4s region/topic chips).
+ */
+export function mapToolToTraceStepV2(input: {
+  id?: string
+  merge_id?: string
+  call_id?: string
+  tool?: string
+  status?: string
+  is_error?: boolean
+  duration_ms?: number | null
+  arguments?: Record<string, unknown> | string
+  result_text?: string
+  resource_ctx?: ResourceCtx | null
+}): TraceStepV2 {
+  const rawTool = (input.tool ?? 'tool').trim()
+  const normalized = rawTool.toLowerCase().replace(/^newsman__/, '')
+  let parsedArgs: Record<string, unknown> | null = null
+  if (input.arguments && typeof input.arguments === 'object') {
+    parsedArgs = input.arguments
+  } else if (typeof input.arguments === 'string' && input.arguments.trim().startsWith('{')) {
+    try {
+      const obj = JSON.parse(input.arguments)
+      if (obj && typeof obj === 'object') parsedArgs = obj as Record<string, unknown>
+    } catch {
+      parsedArgs = null
+    }
+  }
+
+  let humanVerb = 'Running tool'
+  const chips: string[] = []
+
+  if (normalized === 'latest_articles') {
+    humanVerb = 'Scanning latest articles'
+    if (typeof parsedArgs?.region === 'string' && parsedArgs.region) chips.push(parsedArgs.region)
+    if (typeof parsedArgs?.topic === 'string' && parsedArgs.topic) chips.push(`#${parsedArgs.topic}`)
+  } else if (normalized === 'article_get') {
+    humanVerb = 'Reading article'
+    const artId = parsedArgs?.article_id ?? parsedArgs?.id
+    if (artId !== undefined && artId !== null && String(artId).trim()) {
+      chips.push(`#article-${String(artId).trim()}`)
+    }
+  } else if (normalized === 'tax_calendar') {
+    humanVerb = 'Checking tax calendar'
+    if (typeof parsedArgs?.region === 'string' && parsedArgs.region) chips.push(parsedArgs.region)
+  } else if (normalized === 'series' || normalized === 'observations') {
+    humanVerb = 'Querying macro series'
+    const code = parsedArgs?.series ?? parsedArgs?.code ?? parsedArgs?.series_code
+    if (typeof code === 'string' && code) chips.push(code)
+  } else if (normalized === 'documents') {
+    humanVerb = 'Searching documents'
+    if (typeof parsedArgs?.query === 'string' && parsedArgs.query) {
+      chips.push(parsedArgs.query.slice(0, 28))
+    }
+  } else if (normalized === 'analyses' || normalized === 'notes') {
+    humanVerb = 'Reviewing desk notes'
+  } else if (normalized === 'brief_propose') {
+    humanVerb = 'Drafting editorial brief'
+    if (typeof parsedArgs?.period === 'string' && parsedArgs.period) chips.push(parsedArgs.period)
+  } else if (normalized === 'consult_partner') {
+    humanVerb = 'Consulting partner'
+    const pSlug = parsedArgs?.partner_slug ?? parsedArgs?.slug
+    if (typeof pSlug === 'string' && pSlug) chips.push(`@${pSlug}`)
+  } else if (
+    normalized === 'memory_recall' ||
+    normalized === 'memory_remember' ||
+    normalized.startsWith('cortex__')
+  ) {
+    humanVerb = 'Searching memory'
+  } else if (normalized.startsWith('search__') || normalized === 'web_search') {
+    humanVerb = 'Searching web'
+    if (typeof parsedArgs?.query === 'string' && parsedArgs.query) {
+      chips.push(parsedArgs.query.slice(0, 28))
+    }
+  } else if (normalized.startsWith('obsidian__')) {
+    humanVerb = 'Checking Obsidian vault'
+  } else if (normalized === 'ask_user') {
+    humanVerb = 'Clarifying with editor'
+  } else {
+    const cleanName = normalized.replace(/[_-]+/g, ' ').trim()
+    humanVerb = cleanName
+      ? `Running ${cleanName}`
+      : 'Running tool'
+    chips.push(rawTool)
+  }
+
+  for (const reg of input.resource_ctx?.regions ?? []) {
+    if (reg && !chips.includes(reg)) chips.push(reg)
+  }
+  for (const top of input.resource_ctx?.topics ?? []) {
+    const tag = `#${top}`
+    if (top && !chips.includes(tag)) chips.push(tag)
+  }
+
+  const rawStatus = (input.status ?? '').toLowerCase()
+  const state: TraceStepV2['state'] =
+    input.is_error || rawStatus === 'error'
+      ? 'error'
+      : rawStatus === 'running'
+        ? 'running'
+        : 'done'
+
+  const kind: TraceStepV2['kind'] =
+    normalized === 'consult_partner'
+      ? 'subagent'
+      : normalized.startsWith('cortex__') ||
+          normalized.startsWith('search__') ||
+          normalized.startsWith('obsidian__')
+        ? 'mcp'
+        : 'tool'
+
+  return {
+    id: input.id ?? input.merge_id ?? input.call_id ?? `${rawTool}-0`,
+    kind,
+    verb: humanVerb,
+    chip: chips.length > 0 ? chips.slice(0, 3).join(' · ') : null,
+    chipMono: chips.some((ch) => ch.startsWith('#') || ch.startsWith('@')),
+    state,
+    durationMs: typeof input.duration_ms === 'number' ? input.duration_ms : undefined,
+    detail: input.result_text ? input.result_text.slice(0, 120) : undefined,
+  }
+}
+
+/**
+ * Pure v2.3 helper deriving the semantic stream phase for `<AgentExecutionTrace />`.
+ */
+export function deriveAgentStreamPhaseV2(params: {
+  isLive: boolean
+  hasError?: boolean
+  hasText?: boolean
+  hasReasoning?: boolean
+  runningToolCount?: number
+  doneToolCount?: number
+}): AgentStreamPhaseV2 {
+  if (params.hasError) return 'error'
+  const totalTools = (params.runningToolCount ?? 0) + (params.doneToolCount ?? 0)
+  if (!params.isLive) {
+    return params.hasReasoning || totalTools > 0 || params.hasText ? 'settled' : 'idle'
+  }
+  if (params.hasText) return 'responding'
+  if ((params.runningToolCount ?? 0) > 0) return 'searching'
+  if ((params.doneToolCount ?? 0) > 0) return 'weaving'
+  if (params.hasReasoning) return 'reasoning'
+  return 'planning'
 }
 
 export interface AgentDraftState {
@@ -2189,9 +2343,11 @@ export function useThreadStream(threadId: number | string | null) {
   const [askUserPrompts, setAskUserPrompts] = useState<AskUserPrompt[]>([])
   const [streamState, setStreamState] = useState<StreamTurnState>(() => createInitialStreamTurnState())
   const [streamConnected, setStreamConnected] = useState(false)
+  const [reconnectNotice, setReconnectNotice] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const lastSeqRef = useRef<number>(0)
 
   const reloadMessages = useCallback(async (id: number | string) => {
     try {
@@ -2250,8 +2406,10 @@ export function useThreadStream(threadId: number | string | null) {
   useEffect(() => {
     abortRef.current?.abort()
     abortRef.current = null
+    lastSeqRef.current = 0
     setStreamState(createInitialStreamTurnState())
     setStreamConnected(false)
+    setReconnectNotice(null)
     setError(null)
 
     if (threadId === null || threadId === '') {
@@ -2273,17 +2431,35 @@ export function useThreadStream(threadId: number | string | null) {
     const connectStream = async (attempt: number) => {
       if (cancelled) return
       try {
-        const res = await fetch(`/api/app-agents/threads/${encodeURIComponent(String(threadId))}/stream`, {
-          method: 'GET',
-          credentials: 'same-origin',
-          headers: { Accept: 'text/event-stream' },
-          signal: controller.signal,
-        })
+        const sinceQuery =
+          attempt > 0 && lastSeqRef.current > 0 ? `?since_seq=${lastSeqRef.current}` : ''
+        if (attempt > 0) {
+          setReconnectNotice(
+            lastSeqRef.current > 0
+              ? `Reconnecting stream (replaying after #${lastSeqRef.current})…`
+              : 'Reconnecting live stream…',
+          )
+        }
+        const res = await fetch(
+          `/api/app-agents/threads/${encodeURIComponent(String(threadId))}/stream${sinceQuery}`,
+          {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {
+              Accept: 'text/event-stream',
+              ...(attempt > 0 && lastSeqRef.current > 0
+                ? { 'Last-Event-ID': String(lastSeqRef.current) }
+                : {}),
+            },
+            signal: controller.signal,
+          },
+        )
         if (!res.ok || !res.body) {
           setStreamConnected(false)
           return
         }
         setStreamConnected(true)
+        setReconnectNotice(null)
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -2295,6 +2471,11 @@ export function useThreadStream(threadId: number | string | null) {
           const parsed = parseSseStreamChunk(buffer, chunk)
           buffer = parsed.remainder
           if (parsed.events.length > 0) {
+            for (const ev of parsed.events) {
+              if (typeof ev.seq === 'number' && ev.seq > lastSeqRef.current) {
+                lastSeqRef.current = ev.seq
+              }
+            }
             setStreamState((prev) => {
               let next = prev
               for (const ev of parsed.events) {
@@ -2307,6 +2488,7 @@ export function useThreadStream(threadId: number | string | null) {
       } catch {
         if (!cancelled) {
           setStreamConnected(false)
+          setReconnectNotice('Reconnecting live stream…')
           const delay = Math.min(8000, 1000 * Math.pow(1.6, attempt))
           retryTimer = window.setTimeout(() => void connectStream(attempt + 1), delay)
         }
@@ -2332,6 +2514,8 @@ export function useThreadStream(threadId: number | string | null) {
         modelOverride?: string | null
         chatMode?: string | null
         personaStyle?: string | null
+        responderAgentSlug?: string | null
+        consultPartnerSlugs?: string[]
       },
     ) => {
       const trimmed = text.trim()
@@ -2363,6 +2547,12 @@ export function useThreadStream(threadId: number | string | null) {
             ...(opts?.chatMode && opts.chatMode.trim() ? { chat_mode: opts.chatMode.trim() } : {}),
             ...(opts?.personaStyle && opts.personaStyle.trim()
               ? { persona_style: opts.personaStyle.trim() }
+              : {}),
+            ...(opts?.responderAgentSlug && opts.responderAgentSlug.trim()
+              ? { responder_agent_slug: opts.responderAgentSlug.trim() }
+              : {}),
+            ...(opts?.consultPartnerSlugs && opts.consultPartnerSlugs.length > 0
+              ? { consult_partner_slugs: opts.consultPartnerSlugs }
               : {}),
             ...(boundedCtx ? { active_view_context: boundedCtx } : {}),
           }),
@@ -2558,6 +2748,7 @@ export function useThreadStream(threadId: number | string | null) {
     askUserPrompts,
     streamState,
     streamConnected,
+    reconnectNotice,
     sending,
     error,
     reloadMessages,

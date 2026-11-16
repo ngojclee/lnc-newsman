@@ -173,6 +173,30 @@ export function AgentWorkspaceDock({
   const startXRef = useRef(0);
   const startWidthRef = useRef(defaultWidth);
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const launcherRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!launcherOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (launcherRef.current && !launcherRef.current.contains(e.target as Node)) {
+        setLauncherOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLauncherOpen(false);
+    };
+    const onRoute = () => setLauncherOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("hashchange", onRoute);
+    window.addEventListener("popstate", onRoute);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("hashchange", onRoute);
+      window.removeEventListener("popstate", onRoute);
+    };
+  }, [launcherOpen]);
 
   const clampWidth = (w: number) => Math.max(minWidth, Math.min(maxWidth, Math.round(w)));
 
@@ -295,7 +319,9 @@ export function AgentWorkspaceDock({
               }
             }
           }}
-        />
+        >
+          <span className="ak-resizer-grip" />
+        </div>
       ) : null}
 
       <div className="ak-dock-main">
@@ -332,7 +358,7 @@ export function AgentWorkspaceDock({
           </div>
 
           {(launcherOptions.length > 0 && onLaunchTab) || (recentlyClosed.length > 0 && onReopenClosed) ? (
-            <div className="ak-dock-launcher-wrap">
+            <div ref={launcherRef} className="ak-dock-launcher-wrap">
               <button
                 type="button"
                 className="ak-btn ak-btn-sm"
